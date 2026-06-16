@@ -36,7 +36,7 @@ export default function Login() {
       <div className="login-card">
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
-            <CompanyLogo logoUrl={company.logo_url} name={company.name} size={60} fontSize={26}
+            <CompanyLogo logoUrl={company.logo_url} variant="dark" name={company.name} size={60} fontSize={26}
               style={{ boxShadow: '0 8px 24px rgba(37,99,235,0.3)' }} />
           </div>
           <div style={{ fontSize: 26, fontWeight: 800, color: '#0f1f3d', letterSpacing: '-0.5px' }}>

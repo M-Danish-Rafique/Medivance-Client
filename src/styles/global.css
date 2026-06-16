@@ -367,6 +367,14 @@ body {
 .btn-ghost { background: transparent; color: var(--gray-600); }
 .btn-ghost:hover { background: var(--gray-100); }
 
+.sidebar-signout-btn {
+  color: rgba(255,255,255,0.55);
+}
+
+.sidebar-signout-btn:hover {
+  color: var(--gray-900);
+}
+
 .btn-sm { padding: 5px 12px; font-size: 12px; }
 .btn-lg { padding: 11px 22px; font-size: 15px; }
 .btn-icon { padding: 7px; border-radius: 8px; }

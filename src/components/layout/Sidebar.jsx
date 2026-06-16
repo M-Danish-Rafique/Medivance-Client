@@ -118,8 +118,8 @@ export default function Sidebar() {
         </NavLink>
 
         {!collapsed && (
-          <button className="btn btn-ghost w-full" onClick={handleLogout}
-            style={{ color: 'rgba(255,255,255,0.5)', justifyContent: 'center', fontSize: 12, padding: '6px' }}>
+          <button className="btn btn-ghost w-full sidebar-signout-btn" onClick={handleLogout}
+            style={{ justifyContent: 'center', fontSize: 12, padding: '6px' }}>
             <span className="material-symbols-outlined" style={{ fontSize: 16, marginRight: 6 }}>logout</span>
             Sign Out
           </button>
