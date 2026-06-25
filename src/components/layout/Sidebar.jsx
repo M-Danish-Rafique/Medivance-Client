@@ -27,7 +27,7 @@ const navItems = [
   { path: '/manufacturing/yields',        icon: 'inventory_2',label: 'Yield (End Product)',perm: 'perm_mfg_yields' },
   { section: 'Finance & Reports' },
   { path: '/finance',                 icon: 'account_balance', label: 'Finance',          perm: 'perm_finance' },
-  { path: '/reports',                 icon: 'bar_chart',       label: 'Ledger Reports',   perm: 'perm_reports' },
+  { path: '/reports',                 icon: 'bar_chart',       label: 'Reports',          perm: 'perm_reports' },
   { path: '/manufacturing/tax-ledger',icon: 'receipt_long',   label: 'FBR Tax Ledger',   perm: 'perm_tax_ledger' },
 ];
 

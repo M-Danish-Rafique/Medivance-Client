@@ -32,6 +32,8 @@ export default function Recovery() {
   const [recoveryLines, setRecoveryLines] = useState([]);
   const [returnLines, setReturnLines] = useState([]);
   const [recHeader, setRecHeader] = useState({ date: today(), salesman_id: '', notes: '' });
+  const [amountRecovered, setAmountRecovered] = useState('');
+  const [amountRecoveredTouched, setAmountRecoveredTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState('recovery');
 
@@ -115,6 +117,8 @@ export default function Recovery() {
       setSelectedReturnInvoiceId('');
       setReturnInvoiceDetail(null);
       setRecHeader({ date: today(), salesman_id: sale.salesman_id || '', notes: '' });
+      setAmountRecovered('');
+      setAmountRecoveredTouched(false);
       setActiveTab('recovery');
       setModal(true);
     } catch { toast.error('Error loading invoice'); }
@@ -164,7 +168,11 @@ export default function Recovery() {
   const crossReturnAmt = crossReturnLines.reduce((s, l) => s + parseFloat(l.return_amount || 0), 0);
   const totalReturnAmt = currentReturnAmt + crossReturnAmt;
   const invoiceTotal = saleDetail ? parseFloat(saleDetail.total_amount) : 0;
-  const netCollected = invoiceTotal - totalDiscount - currentReturnAmt - crossReturnAmt;
+  const netCollectible = Math.max(0, invoiceTotal - totalDiscount - totalReturnAmt);
+  const recoveredValue = amountRecoveredTouched
+    ? parseFloat(amountRecovered || 0)
+    : netCollectible;
+  const pendingAmount = Math.max(0, netCollectible - (Number.isNaN(recoveredValue) ? 0 : recoveredValue));
 
   const handleSave = async () => {
     if (!recHeader.date) return toast.error('Date required');
@@ -183,8 +191,15 @@ export default function Recovery() {
       return_amount: parseInt(l.qty_returned) * parseFloat(l.return_rate)
     }));
     const allReturns = [...validCurrentReturns, ...validCrossReturns];
-    if (!validRecovery.length && !allReturns.length) {
-      return toast.error('Enter at least one discount or return');
+    const recovered = amountRecoveredTouched ? parseFloat(amountRecovered || 0) : netCollectible;
+    if (Number.isNaN(recovered) || recovered < 0) {
+      return toast.error('Enter a valid recovered amount');
+    }
+    if (recovered > netCollectible) {
+      return toast.error(`Recovered amount cannot exceed net collectible (${fmt(netCollectible)})`);
+    }
+    if (!validRecovery.length && !allReturns.length && recovered <= 0) {
+      return toast.error('Enter at least one discount, return, or recovered amount');
     }
 
     // Front-end expiry check: block if batch expiry is within 5 months
@@ -210,8 +225,11 @@ export default function Recovery() {
         date: recHeader.date, notes: recHeader.notes,
         recovery_items: validRecovery,
         return_items: allReturns,
+        amount_recovered: recovered,
       });
-      toast.success('Recovery saved! Invoice locked. Payment recorded in ledger.');
+      toast.success(pendingAmount > 0
+        ? `Recovery saved! ${fmt(recovered)} collected, ${fmt(pendingAmount)} pending in ledger.`
+        : 'Recovery saved! Invoice locked. Payment recorded in ledger.');
       setModal(false); load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Error saving recovery');
@@ -390,10 +408,12 @@ export default function Recovery() {
               <div>Discount: <strong style={{ color: 'var(--amber)' }}>−{fmt(totalDiscount)}</strong></div>
               <div>Returns: <strong style={{ color: 'var(--amber)' }}>−{fmt(totalReturnAmt)}</strong></div>
               <div style={{ paddingLeft: 12, borderLeft: '2px solid var(--gray-200)' }}>
-                Net Collectible: <strong style={{ fontSize: 15, color: netCollected >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                  {fmt(Math.max(0, netCollected))}
-                </strong>
+                Net Collectible: <strong style={{ fontSize: 15, color: 'var(--green)' }}>{fmt(netCollectible)}</strong>
               </div>
+              <div>Recovered: <strong style={{ color: 'var(--blue)' }}>{fmt(Number.isNaN(recoveredValue) ? 0 : recoveredValue)}</strong></div>
+              {pendingAmount > 0 && (
+                <div>Pending: <strong style={{ color: 'var(--amber)' }}>{fmt(pendingAmount)}</strong></div>
+              )}
             </div>
             <div className="flex gap-2">
               <button className="btn btn-outline" onClick={() => setModal(false)}>Cancel</button>
@@ -433,6 +453,32 @@ export default function Recovery() {
                 <label className="form-label">Notes</label>
                 <input className="form-control" placeholder="Optional notes" value={recHeader.notes}
                   onChange={e => setRecHeader(p => ({ ...p, notes: e.target.value }))} />
+              </div>
+            </div>
+
+            {/* Recovered amount */}
+            <div className="form-grid form-grid-2" style={{ marginBottom: 16 }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Amount Recovered (Cash)</label>
+                <input
+                  className="form-control"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max={netCollectible}
+                  placeholder={netCollectible.toFixed(2)}
+                  value={amountRecoveredTouched ? amountRecovered : (netCollectible ? String(netCollectible) : '')}
+                  onChange={e => { setAmountRecoveredTouched(true); setAmountRecovered(e.target.value); }}
+                />
+                <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 4 }}>
+                  May be less than net collectible if customer pays partially. Pending balance stays on ledger.
+                </div>
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Pending Amount</label>
+                <div style={{ padding: '10px 12px', background: 'var(--gray-50)', borderRadius: 8, fontWeight: 700, fontSize: 16, color: pendingAmount > 0 ? 'var(--amber)' : 'var(--green)' }}>
+                  {fmt(pendingAmount)}
+                </div>
               </div>
             </div>
 
@@ -517,25 +563,31 @@ export default function Recovery() {
             {/* Net summary */}
             <div style={{
               marginTop: 18, padding: '12px 16px',
-              background: netCollected >= 0 ? '#f0fdf4' : '#fef2f2',
-              border: `1.5px solid ${netCollected >= 0 ? '#bbf7d0' : '#fecaca'}`,
+              background: '#f0fdf4',
+              border: '1.5px solid #bbf7d0',
               borderRadius: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center'
             }}>
               <div>
-                <div style={{ fontSize: 12, color: 'var(--gray-500)', marginBottom: 3 }}>Net Amount to Collect + record in ledger</div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: netCollected >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                  {fmt(Math.max(0, netCollected))}
+                <div style={{ fontSize: 12, color: 'var(--gray-500)', marginBottom: 3 }}>Amount to record in ledger as payment</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--green)' }}>
+                  {fmt(Number.isNaN(recoveredValue) ? 0 : recoveredValue)}
                 </div>
+                {pendingAmount > 0 && (
+                  <div style={{ fontSize: 12, color: 'var(--amber)', marginTop: 4, fontWeight: 600 }}>
+                    Pending balance: {fmt(pendingAmount)}
+                  </div>
+                )}
               </div>
               <div style={{ textAlign: 'right', fontSize: 12, color: 'var(--gray-500)' }}>
                 <div>Invoice: <strong>{fmt(invoiceTotal)}</strong></div>
                 <div>− Discounts: <strong style={{ color: 'var(--amber)' }}>{fmt(totalDiscount)}</strong></div>
                 <div>− Returns: <strong style={{ color: 'var(--amber)' }}>{fmt(totalReturnAmt)}</strong></div>
+                <div>Net Collectible: <strong>{fmt(netCollectible)}</strong></div>
               </div>
             </div>
             <div className="alert alert-warning" style={{ marginTop: 12 }}>
-              <span style={{ fontWeight: 700, marginRight: 8 }}>Warning:</span>
-              <span>After saving, this invoice will be <strong>locked</strong>. The net collectible amount will be recorded as payment received in the customer ledger.</span>
+              <span style={{ fontWeight: 700, marginRight: 8 }}>Note:</span>
+              <span>After saving, this invoice will be <strong>locked</strong>. Only the recovered amount is credited in the customer ledger; any pending balance remains receivable.</span>
             </div>
           </div>
         )}
