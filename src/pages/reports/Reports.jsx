@@ -6,6 +6,25 @@ import { formatCurrency } from '../../utils/formatters';
 
 const fmt = formatCurrency;
 
+function ReportFilterLayout({ fields, loading, onGenerate, onDownload, hasData, generateDisabled }) {
+  return (
+    <div className="report-filter-layout">
+      <div className="report-filter-fields">{fields}</div>
+      <div className="report-filter-actions">
+        <button className="btn btn-primary" onClick={onGenerate} disabled={loading || generateDisabled}>
+          {loading ? 'Loading...' : 'Generate'}
+        </button>
+        {hasData && (
+          <button className="btn btn-outline" onClick={onDownload}>
+            <span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: 'middle', marginRight: 6 }}>download</span>
+            Download PDF
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function downloadBlob(res, filename) {
   const blob = new Blob([res.data], { type: 'application/pdf' });
   const url = window.URL.createObjectURL(blob);
@@ -309,34 +328,31 @@ export default function Reports() {
           <div className="card" style={{ marginBottom: 20 }}>
             <div className="card-header"><div className="card-title">Sales Report</div></div>
             <div className="card-body">
-              <div className="form-grid form-grid-4" style={{ alignItems: 'flex-end' }}>
-                <div className="form-group" style={{ margin: 0 }}>
-                  <label className="form-label">From Date</label>
-                  <input className="form-control" type="date" value={salesFrom} onChange={e => setSalesFrom(e.target.value)} />
-                </div>
-                <div className="form-group" style={{ margin: 0 }}>
-                  <label className="form-label">To Date</label>
-                  <input className="form-control" type="date" value={salesTo} onChange={e => setSalesTo(e.target.value)} />
-                </div>
-                <div className="form-group" style={{ margin: 0 }}>
-                  <label className="form-label">Salesman</label>
-                  <select className="form-control" value={salesSalesman} onChange={e => setSalesSalesman(e.target.value)}>
-                    <option value="">All</option>
-                    {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-                  </select>
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button className="btn btn-primary" onClick={fetchSalesReport} disabled={salesLoading}>
-                    {salesLoading ? 'Loading...' : 'Generate'}
-                  </button>
-                  {salesRows && (
-                    <button className="btn btn-outline" onClick={downloadSalesPDF}>
-                      <span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: 'middle', marginRight: 6 }}>download</span>
-                      Download PDF
-                    </button>
-                  )}
-                </div>
-              </div>
+              <ReportFilterLayout
+                loading={salesLoading}
+                onGenerate={fetchSalesReport}
+                onDownload={downloadSalesPDF}
+                hasData={!!salesRows}
+                fields={
+                  <>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">From Date</label>
+                      <input className="form-control" type="date" value={salesFrom} onChange={e => setSalesFrom(e.target.value)} />
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">To Date</label>
+                      <input className="form-control" type="date" value={salesTo} onChange={e => setSalesTo(e.target.value)} />
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Salesman</label>
+                      <select className="form-control" value={salesSalesman} onChange={e => setSalesSalesman(e.target.value)}>
+                        <option value="">All</option>
+                        {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                      </select>
+                    </div>
+                  </>
+                }
+              />
             </div>
           </div>
 
@@ -349,15 +365,18 @@ export default function Reports() {
                 {salesRows.length === 0 ? (
                   <div className="empty-state"><div className="empty-state-title">No sales in selected period</div></div>
                 ) : (
-                  <table>
+                  <table className="report-table">
                     <thead>
                       <tr>
-                        <th>Sr</th><th>Date</th><th>Invoice No</th><th>Customer</th>
-                        <th style={{ textAlign: 'right' }}>Gross</th>
-                        <th style={{ textAlign: 'right' }}>Return</th>
-                        <th style={{ textAlign: 'right' }}>Discount</th>
-                        <th style={{ textAlign: 'right' }}>Net</th>
-                        <th style={{ textAlign: 'right' }}>Recovered</th>
+                        <th style={{ width: '4%' }}>Sr</th>
+                        <th style={{ width: '10%' }}>Date</th>
+                        <th style={{ width: '10%' }}>Invoice No</th>
+                        <th>Customer</th>
+                        <th style={{ width: '11%', textAlign: 'right' }}>Gross</th>
+                        <th style={{ width: '10%', textAlign: 'right' }}>Return</th>
+                        <th style={{ width: '10%', textAlign: 'right' }}>Discount</th>
+                        <th style={{ width: '11%', textAlign: 'right' }}>Net</th>
+                        <th style={{ width: '11%', textAlign: 'right' }}>Recovered</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -376,13 +395,13 @@ export default function Reports() {
                       ))}
                     </tbody>
                     <tfoot>
-                      <tr style={{ background: 'var(--navy)', color: 'white' }}>
-                        <td colSpan={4} style={{ fontWeight: 700 }}>TOTAL</td>
-                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(salesTotals.gross)}</td>
-                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(salesTotals.ret)}</td>
-                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(salesTotals.disc)}</td>
-                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(salesTotals.net)}</td>
-                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(salesTotals.rec)}</td>
+                      <tr>
+                        <td colSpan={4} className="report-tfoot-label">Total</td>
+                        <td className="report-tfoot-num">{fmt(salesTotals.gross)}</td>
+                        <td className="report-tfoot-num">{fmt(salesTotals.ret)}</td>
+                        <td className="report-tfoot-num">{fmt(salesTotals.disc)}</td>
+                        <td className="report-tfoot-num">{fmt(salesTotals.net)}</td>
+                        <td className="report-tfoot-num">{fmt(salesTotals.rec)}</td>
                       </tr>
                     </tfoot>
                   </table>
@@ -399,41 +418,38 @@ export default function Reports() {
           <div className="card" style={{ marginBottom: 20 }}>
             <div className="card-header"><div className="card-title">Recovery Report</div></div>
             <div className="card-body">
-              <div className="form-grid form-grid-4" style={{ alignItems: 'flex-end', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
-                <div className="form-group" style={{ margin: 0 }}>
-                  <label className="form-label">From Date</label>
-                  <input className="form-control" type="date" value={recFrom} onChange={e => setRecFrom(e.target.value)} />
-                </div>
-                <div className="form-group" style={{ margin: 0 }}>
-                  <label className="form-label">To Date</label>
-                  <input className="form-control" type="date" value={recTo} onChange={e => setRecTo(e.target.value)} />
-                </div>
-                <div className="form-group" style={{ margin: 0 }}>
-                  <label className="form-label">Salesman</label>
-                  <select className="form-control" value={recSalesman} onChange={e => setRecSalesman(e.target.value)}>
-                    <option value="">All</option>
-                    {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-                  </select>
-                </div>
-                <div className="form-group" style={{ margin: 0 }}>
-                  <label className="form-label">Supplier</label>
-                  <select className="form-control" value={recSupplier} onChange={e => setRecSupplier(e.target.value)}>
-                    <option value="">All</option>
-                    {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button className="btn btn-primary" onClick={fetchRecoveryReport} disabled={recLoading}>
-                    {recLoading ? 'Loading...' : 'Generate'}
-                  </button>
-                  {recRows && (
-                    <button className="btn btn-outline" onClick={downloadRecoveryPDF}>
-                      <span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: 'middle', marginRight: 6 }}>download</span>
-                      Download PDF
-                    </button>
-                  )}
-                </div>
-              </div>
+              <ReportFilterLayout
+                loading={recLoading}
+                onGenerate={fetchRecoveryReport}
+                onDownload={downloadRecoveryPDF}
+                hasData={!!recRows}
+                fields={
+                  <>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">From Date</label>
+                      <input className="form-control" type="date" value={recFrom} onChange={e => setRecFrom(e.target.value)} />
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">To Date</label>
+                      <input className="form-control" type="date" value={recTo} onChange={e => setRecTo(e.target.value)} />
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Salesman</label>
+                      <select className="form-control" value={recSalesman} onChange={e => setRecSalesman(e.target.value)}>
+                        <option value="">All</option>
+                        {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Supplier</label>
+                      <select className="form-control" value={recSupplier} onChange={e => setRecSupplier(e.target.value)}>
+                        <option value="">All</option>
+                        {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                    </div>
+                  </>
+                }
+              />
             </div>
           </div>
 
@@ -446,14 +462,16 @@ export default function Reports() {
                 {recRows.length === 0 ? (
                   <div className="empty-state"><div className="empty-state-title">No recoveries in selected period</div></div>
                 ) : (
-                  <table>
+                  <table className="report-table">
                     <thead>
                       <tr>
-                        <th>Sr</th><th>Date</th><th>Customer</th>
-                        <th style={{ textAlign: 'right' }}>Gross</th>
-                        <th style={{ textAlign: 'right' }}>Recovered</th>
-                        <th style={{ textAlign: 'right' }}>Return / Discount</th>
-                        <th style={{ textAlign: 'right' }}>Net Pending</th>
+                        <th style={{ width: '5%' }}>Sr</th>
+                        <th style={{ width: '12%' }}>Date</th>
+                        <th>Customer</th>
+                        <th style={{ width: '14%', textAlign: 'right' }}>Gross</th>
+                        <th style={{ width: '14%', textAlign: 'right' }}>Recovered</th>
+                        <th style={{ width: '14%', textAlign: 'right' }}>Return / Discount</th>
+                        <th style={{ width: '14%', textAlign: 'right' }}>Net Pending</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -472,12 +490,12 @@ export default function Reports() {
                       ))}
                     </tbody>
                     <tfoot>
-                      <tr style={{ background: 'var(--navy)', color: 'white' }}>
-                        <td colSpan={3} style={{ fontWeight: 700 }}>TOTAL</td>
-                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(recTotals.gross)}</td>
-                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(recTotals.rec)}</td>
-                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(recTotals.rd)}</td>
-                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(recTotals.pending)}</td>
+                      <tr>
+                        <td colSpan={3} className="report-tfoot-label">Total</td>
+                        <td className="report-tfoot-num">{fmt(recTotals.gross)}</td>
+                        <td className="report-tfoot-num">{fmt(recTotals.rec)}</td>
+                        <td className="report-tfoot-num">{fmt(recTotals.rd)}</td>
+                        <td className="report-tfoot-num">{fmt(recTotals.pending)}</td>
                       </tr>
                     </tfoot>
                   </table>

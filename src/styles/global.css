@@ -411,6 +411,63 @@ tbody td {
 tbody tr:hover { background: var(--gray-50); }
 tbody tr:last-child td { border-bottom: none; }
 
+/* Report filters & totals */
+.report-filter-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.report-filter-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+}
+
+.report-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.report-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.report-table thead th:last-child,
+.report-table tbody td:last-child,
+.report-table tfoot td:last-child {
+  padding-right: 14px;
+}
+
+.report-table tfoot td {
+  background: var(--navy);
+  color: #fff;
+  padding: 12px 14px;
+  font-weight: 700;
+  font-size: 13px;
+  border: none;
+  vertical-align: middle;
+}
+
+.report-table tfoot tr td {
+  border-top: 2px solid rgba(255, 255, 255, 0.15);
+}
+
+.report-tfoot-label {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 11px;
+}
+
+.report-tfoot-num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Forms */
 .form-group { margin-bottom: 16px; }
 .form-label {
