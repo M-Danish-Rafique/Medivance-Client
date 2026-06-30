@@ -42,7 +42,8 @@ export default function Reports() {
 
   const [customers, setCustomers] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
-  const [employees, setEmployees] = useState([]);
+  const [employeesSalesman, setEmployeesSalesman] = useState([]);
+  const [employeesSupplier, setEmployeesSupplier] = useState([]);
   const [dataLoading, setDataLoading] = useState(true);
 
   // Ledger state
@@ -63,7 +64,6 @@ export default function Reports() {
   // Recovery report state
   const [recFrom, setRecFrom] = useState('');
   const [recTo, setRecTo] = useState('');
-  const [recSalesman, setRecSalesman] = useState('');
   const [recSupplier, setRecSupplier] = useState('');
   const [recRows, setRecRows] = useState(null);
   const [recLoading, setRecLoading] = useState(false);
@@ -73,11 +73,13 @@ export default function Reports() {
       api.get('/customers'),
       api.get('/suppliers'),
       api.get('/employees?role=Salesman'),
+      api.get('/employees?role=Supplier'),
     ])
-      .then(([c, s, e]) => {
+      .then(([c, s, e_sm, e_sp]) => {
         setCustomers(c.data);
         setSuppliers(s.data);
-        setEmployees(e.data);
+        setEmployeesSalesman(e_sm.data);
+        setEmployeesSupplier(e_sp.data);
         setDataLoading(false);
       })
       .catch(() => setDataLoading(false));
@@ -154,7 +156,6 @@ export default function Reports() {
       const params = new URLSearchParams();
       if (recFrom) params.append('from_date', recFrom);
       if (recTo) params.append('to_date', recTo);
-      if (recSalesman) params.append('salesman_id', recSalesman);
       if (recSupplier) params.append('supplier_id', recSupplier);
       const r = await api.get(`/reports/recovery-report?${params}`);
       setRecRows(r.data.rows || []);
@@ -169,7 +170,6 @@ export default function Reports() {
     const params = new URLSearchParams();
     if (recFrom) params.append('from_date', recFrom);
     if (recTo) params.append('to_date', recTo);
-    if (recSalesman) params.append('salesman_id', recSalesman);
     if (recSupplier) params.append('supplier_id', recSupplier);
     try {
       const res = await api.get(`/reports/recovery-report/pdf?${params}`, { responseType: 'blob' });
@@ -347,7 +347,7 @@ export default function Reports() {
                       <label className="form-label">Salesman</label>
                       <select className="form-control" value={salesSalesman} onChange={e => setSalesSalesman(e.target.value)}>
                         <option value="">All</option>
-                        {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                        {employeesSalesman.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                       </select>
                     </div>
                   </>
@@ -434,17 +434,10 @@ export default function Reports() {
                       <input className="form-control" type="date" value={recTo} onChange={e => setRecTo(e.target.value)} />
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
-                      <label className="form-label">Salesman</label>
-                      <select className="form-control" value={recSalesman} onChange={e => setRecSalesman(e.target.value)}>
-                        <option value="">All</option>
-                        {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-                      </select>
-                    </div>
-                    <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">Supplier</label>
                       <select className="form-control" value={recSupplier} onChange={e => setRecSupplier(e.target.value)}>
                         <option value="">All</option>
-                        {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                        {employeesSupplier.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                       </select>
                     </div>
                   </>
