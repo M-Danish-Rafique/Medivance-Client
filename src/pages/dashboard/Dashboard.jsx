@@ -39,24 +39,35 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="stat-card">
-          <div className="stat-icon" style={{ background: '#ccfbf1' }}><span className="material-symbols-outlined" style={{ fontSize: 20 }}>groups</span></div>
+          <div className="stat-icon" style={{ background: '#e0e7ff' }}><span className="material-symbols-outlined" style={{ fontSize: 20 }}>point_of_sale</span></div>
           <div>
-            <div className="stat-label">Total Customers</div>
-            <div className="stat-value">{stats?.total_customers}</div>
+            <div className="stat-label">Today's Sale</div>
+            <div className="stat-value" style={{ fontSize: 18 }}>{fmt(stats?.today_sale)}</div>
+            <div className="stat-sub">Today</div>
           </div>
         </div>
         <div className="stat-card">
-          <div className="stat-icon" style={{ background: '#fef3c7' }}><span className="material-symbols-outlined" style={{ fontSize: 20 }}>local_shipping</span></div>
+          <div className="stat-icon" style={{ background: '#dcfce7' }}><span className="material-symbols-outlined" style={{ fontSize: 20 }}>savings</span></div>
           <div>
-            <div className="stat-label">Total Suppliers</div>
-            <div className="stat-value">{stats?.total_suppliers}</div>
+            <div className="stat-label">Today's Recovery</div>
+            <div className="stat-value" style={{ fontSize: 18 }}>{fmt(stats?.today_recovery)}</div>
+            <div className="stat-sub">Today</div>
           </div>
         </div>
         <div className="stat-card">
-          <div className="stat-icon" style={{ background: '#fce7f3' }}><span className="material-symbols-outlined" style={{ fontSize: 20 }}>inventory_2</span></div>
+          <div className="stat-icon" style={{ background: '#fee2e2' }}><span className="material-symbols-outlined" style={{ fontSize: 20 }}>call_received</span></div>
           <div>
-            <div className="stat-label">Total Products</div>
-            <div className="stat-value">{stats?.total_products}</div>
+            <div className="stat-label">Total Receivable</div>
+            <div className="stat-value" style={{ fontSize: 18 }}>{fmt(stats?.total_receivable)}</div>
+            <div className="stat-sub">Outstanding from customers</div>
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{ background: '#fef3c7' }}><span className="material-symbols-outlined" style={{ fontSize: 20 }}>call_made</span></div>
+          <div>
+            <div className="stat-label">Total Payable</div>
+            <div className="stat-value" style={{ fontSize: 18 }}>{fmt(stats?.total_payable)}</div>
+            <div className="stat-sub">Outstanding to suppliers</div>
           </div>
         </div>
         {stats?.low_stock_count > 0 && (
