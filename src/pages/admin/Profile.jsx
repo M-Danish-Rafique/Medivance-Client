@@ -16,6 +16,7 @@ const ALL_PERMS = [
   { key: 'perm_customers',         label: 'Customers',            section: 'Master Data' },
   { key: 'perm_suppliers',         label: 'Suppliers',            section: 'Master Data' },
   { key: 'perm_purchase',          label: 'Purchase',             section: 'Distribution' },
+  { key: 'perm_view_purchase_rate', label: 'View Purchase Rate',   section: 'Distribution' },
   { key: 'perm_sale',              label: 'Sale',                 section: 'Distribution' },
   { key: 'perm_inventory',         label: 'Inventory',            section: 'Distribution' },
   { key: 'perm_recovery',          label: 'Recovery & Return',    section: 'Distribution' },

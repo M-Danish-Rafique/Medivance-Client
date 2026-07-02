@@ -6,6 +6,7 @@ import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
+import { useAuth } from '../../context/AuthContext';
 
 const emptyItem = {
   product_id: '', pack_size: '', purchase_rate: '', sale_rate: '',
@@ -37,6 +38,7 @@ function Spinner({ value, onChange, step = 1, min = 0, suffix = '', hideMinus = 
 }
 
 export default function Purchase() {
+  const { user, can } = useAuth();
   const [purchases, setPurchases] = useState([]);
   const { page, setPage, pageSize, setPageSize, totalPages, totalItems, pageItems: pagedPurchases } = usePagination(purchases, 25);
   const [suppliers, setSuppliers] = useState([]);
@@ -51,6 +53,7 @@ export default function Purchase() {
   const [deleting, setDeleting] = useState(false);
   const [header, setHeader] = useState({ supplier_id: '', invoice_no: '', date: today() });
   const [items, setItems] = useState([{ ...emptyItem }]);
+  const canViewPurchaseRates = user?.role === 'admin' || can('perm_view_purchase_rate');
 
   const load = () => {
     setLoading(true);
@@ -299,7 +302,7 @@ export default function Purchase() {
           fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase'
         }}>
           <span>Product *</span><span>Pack</span><span>Batch No *</span><span style={{ width: 80 }}>Exp Date *</span>
-          <span>Qty *</span><span>Purch.Rate *</span><span>Retail Price *</span>
+          <span>Qty *</span>{canViewPurchaseRates ? <span>Purch.Rate *</span> : <span style={{ color: 'var(--gray-400)' }}>Purch.Rate</span>}<span>Retail Price *</span>
           <span>Bonus</span><span>Disc %</span><span>Tax %</span>
           <span style={{ textAlign: 'right' }}>Total</span><span></span>
         </div>
@@ -342,9 +345,13 @@ export default function Purchase() {
                 placeholder="Qty *" value={item.qty}
                 onChange={e => updateItem(idx, 'qty', e.target.value)} />
 
-              <input className="form-control" type="number" style={{ ...inputSm, borderColor: !item.purchase_rate && item.product_id ? 'var(--red)' : undefined }}
-                placeholder="Rate *" value={item.purchase_rate}
-                onChange={e => updateItem(idx, 'purchase_rate', e.target.value)} />
+              {canViewPurchaseRates ? (
+                <input className="form-control" type="number" style={{ ...inputSm, borderColor: !item.purchase_rate && item.product_id ? 'var(--red)' : undefined }}
+                  placeholder="Rate *" value={item.purchase_rate}
+                  onChange={e => updateItem(idx, 'purchase_rate', e.target.value)} />
+              ) : (
+                <div style={{ fontSize: 11, color: 'var(--gray-400)', textAlign: 'center' }}>Hidden</div>
+              )}
 
               <input className="form-control" type="number" style={{ ...inputSm, borderColor: !item.retail_price && item.product_id ? 'var(--red)' : undefined }}
                 placeholder="Retail *" value={item.retail_price}
@@ -436,7 +443,7 @@ export default function Purchase() {
                     <td style={{ fontSize: 12 }}>{it.exp_date ? new Date(it.exp_date).toLocaleDateString() : '—'}</td>
                     <td>{it.qty}</td>
                     <td>{it.bonus || 0}</td>
-                    <td className="mono">PKR {Math.round(it.purchase_rate).toLocaleString()}</td>
+                    <td className="mono">{canViewPurchaseRates ? `PKR ${Math.round(it.purchase_rate).toLocaleString()}` : '—'}</td>
                     <td>{it.discount_pct || 0}%</td>
                     <td>{it.tax_pct || 0}%</td>
                     <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtPKR(it.total)}</td>

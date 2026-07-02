@@ -5,10 +5,13 @@ import ConfirmModal from '../../components/common/ConfirmModal';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { formatCurrency } from '../../utils/formatters';
+import { useAuth } from '../../context/AuthContext';
 
-const emptyForm = { name: '', pack_size: '', purchase_rate: '', sale_rate: '', retail_price: '', company_id: '' };
+const emptyForm = { name: '', pack_size: '', purchase_rate: '', sale_rate: '', retail_price: '', company_id: '', show_purchase_rate: true };
 
 export default function Products() {
+  const { user, can } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [data, setData] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -29,10 +32,14 @@ export default function Products() {
 
   useEffect(load, []);
 
+  const canViewPurchaseRates = isAdmin || can('perm_view_purchase_rate');
+  const canEditPurchaseRate = isAdmin;
+  const canSeePurchaseRateForProduct = (product) => isAdmin || (canViewPurchaseRates && product?.show_purchase_rate !== false && product?.show_purchase_rate !== 0);
+
   const openAdd = () => { setSelected(null); setForm(emptyForm); setModal(true); };
   const openEdit = (item) => {
     setSelected(item);
-    setForm({ name: item.name, pack_size: item.pack_size || '', purchase_rate: item.purchase_rate, sale_rate: item.sale_rate, retail_price: item.retail_price, company_id: item.company_id || '' });
+    setForm({ name: item.name, pack_size: item.pack_size || '', purchase_rate: item.purchase_rate, sale_rate: item.sale_rate, retail_price: item.retail_price, company_id: item.company_id || '', show_purchase_rate: item.show_purchase_rate !== false && item.show_purchase_rate !== 0 });
     setModal(true);
   };
 
@@ -92,10 +99,9 @@ export default function Products() {
             <table>
               <thead>
                 <tr>
-                  <th>ID</th>
                   <th>Product Name</th>
                   <th>Pack Size</th>
-                  <th>Purchase Rate</th>
+                  {canViewPurchaseRates && <th>Purchase Rate</th>}
                   <th>Sale Rate</th>
                   <th>Retail Price</th>
                   <th>Company</th>
@@ -105,10 +111,9 @@ export default function Products() {
               <tbody>
                 {filtered.map(p => (
                   <tr key={p.id}>
-                    <td><span className="mono" style={{ color: 'var(--gray-400)', fontSize: 12 }}>{p.id}</span></td>
                     <td style={{ fontWeight: 600 }}>{p.name}</td>
                     <td>{p.pack_size || '—'}</td>
-                    <td className="mono">{fmt(p.purchase_rate)}</td>
+                    {canViewPurchaseRates && <td className="mono">{canSeePurchaseRateForProduct(p) ? fmt(p.purchase_rate) : '—'}</td>}
                     <td className="mono">{fmt(p.sale_rate)}</td>
                     <td className="mono">{fmt(p.retail_price)}</td>
                     <td>{p.company_name ? <span className="badge badge-blue">{p.company_name}</span> : '—'}</td>
@@ -154,10 +159,12 @@ export default function Products() {
           </div>
         </div>
         <div className="form-grid form-grid-3">
-          <div className="form-group">
-            <label className="form-label">Purchase Rate (PKR)</label>
-            <input className="form-control" type="number" step="0.01" placeholder="0.00" value={form.purchase_rate} onChange={e => setForm(p => ({ ...p, purchase_rate: e.target.value }))} />
-          </div>
+          {canEditPurchaseRate && (
+            <div className="form-group">
+              <label className="form-label">Purchase Rate (PKR)</label>
+              <input className="form-control" type="number" step="0.01" placeholder="0.00" value={form.purchase_rate} onChange={e => setForm(p => ({ ...p, purchase_rate: e.target.value }))} />
+            </div>
+          )}
           <div className="form-group">
             <label className="form-label">Sale Rate (PKR)</label>
             <input className="form-control" type="number" step="0.01" placeholder="0.00" value={form.sale_rate} onChange={e => setForm(p => ({ ...p, sale_rate: e.target.value }))} />
@@ -167,6 +174,12 @@ export default function Products() {
             <input className="form-control" type="number" step="0.01" placeholder="0.00" value={form.retail_price} onChange={e => setForm(p => ({ ...p, retail_price: e.target.value }))} />
           </div>
         </div>
+        {isAdmin && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 13, color: 'var(--gray-700)' }}>
+            <input type="checkbox" checked={!!form.show_purchase_rate} onChange={e => setForm(p => ({ ...p, show_purchase_rate: e.target.checked }))} />
+            Show purchase rate to authorized users
+          </label>
+        )}
       </Modal>
 
       <ConfirmModal isOpen={deleteModal} onClose={() => setDeleteModal(false)} onConfirm={handleDelete} loading={deleting} message={`Delete "${selected?.name}"?`} />

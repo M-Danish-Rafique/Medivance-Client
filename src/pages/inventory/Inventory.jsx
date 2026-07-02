@@ -4,8 +4,10 @@ import api from '../../utils/api';
 import { formatCurrency } from '../../utils/formatters';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
+import { useAuth } from '../../context/AuthContext';
 
 export default function Inventory() {
+  const { user, can } = useAuth();
   const [data, setData] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [lowStock, setLowStock] = useState([]);
@@ -13,6 +15,7 @@ export default function Inventory() {
   const [search, setSearch] = useState('');
   const [showAll, setShowAll] = useState(false);        // false = active only (qty > 0)
   const [companyFilter, setCompanyFilter] = useState(''); // company_id or ''
+  const canViewPurchaseRates = user?.role === 'admin' || can('perm_view_purchase_rate');
 
   useEffect(() => {
     setLoading(true);
@@ -172,7 +175,7 @@ export default function Inventory() {
                   <th>Pack Size</th>
                   <th>Batch No</th>
                   <th>Qty</th>
-                  <th>Purchase Rate</th>
+                  {canViewPurchaseRates && <th>Purchase Rate</th>}
                   <th>Sale Rate</th>
                   <th>Retail Price</th>
                   <th>Exp Date</th>
@@ -203,7 +206,7 @@ export default function Inventory() {
                           {item.qty}
                         </span>
                       </td>
-                      <td className="mono">{formatCurrency(item.purchase_rate)}</td>
+                      <td className="mono">{canViewPurchaseRates && item.show_purchase_rate !== false && item.show_purchase_rate !== 0 ? formatCurrency(item.purchase_rate) : '—'}</td>
                       <td className="mono">{formatCurrency(item.sale_rate)}</td>
                       <td className="mono">{formatCurrency(item.retail_price)}</td>
                       <td>

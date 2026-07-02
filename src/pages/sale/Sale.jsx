@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { formatCurrency, handlePhoneInput } from '../../utils/formatters';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
+import { useAuth } from '../../context/AuthContext';
 
 const emptySaleItem = {
   product_id: '', product_name: '', pack_size: '', batch_no: '',
@@ -72,10 +73,11 @@ function PrintOptionsModal({ isOpen, onClose, invoice }) {
   );
 }
 
-function RateInfoPanel({ rateHistory, activeRowIdx }) {
+function RateInfoPanel({ rateHistory, activeRowIdx, canViewPurchaseRates }) {
   if (!rateHistory || activeRowIdx === null) return null;
   const info = rateHistory[activeRowIdx];
   if (!info) return null;
+  const canShowPurchaseRate = canViewPurchaseRates && info.purchase_rate_visible !== false && info.purchase_rate_visible !== 0;
 
   return (
     <div style={{
@@ -87,13 +89,15 @@ function RateInfoPanel({ rateHistory, activeRowIdx }) {
         <span className="material-symbols-outlined" style={{ fontSize: 16 }}>bar_chart</span>
         Rate Info — Row {activeRowIdx + 1} {info.product_name ? `· ${info.product_name}` : ''}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
-        <div style={{ padding: '8px 10px', background: 'white', borderRadius: 8, textAlign: 'center' }}>
-          <div style={{ fontSize: 10, color: 'var(--gray-500)', marginBottom: 4 }}>Purchase Rate</div>
-          <div style={{ fontWeight: 700, color: 'var(--navy)' }}>
-            {info.purchase_rate ? formatCurrency(info.purchase_rate) : 'N/A'}
+      <div style={{ display: 'grid', gridTemplateColumns: canShowPurchaseRate ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 12 }}>
+        {canShowPurchaseRate && (
+          <div style={{ padding: '8px 10px', background: 'white', borderRadius: 8, textAlign: 'center' }}>
+            <div style={{ fontSize: 10, color: 'var(--gray-500)', marginBottom: 4 }}>Purchase Rate</div>
+            <div style={{ fontWeight: 700, color: 'var(--navy)' }}>
+              {info.purchase_rate ? formatCurrency(info.purchase_rate) : 'N/A'}
+            </div>
           </div>
-        </div>
+        )}
         {[0, 1, 2].map(i => (
           <div key={i} style={{ padding: '8px 10px', background: 'white', borderRadius: 8, textAlign: 'center' }}>
             <div style={{ fontSize: 10, color: 'var(--gray-500)', marginBottom: 4 }}>
@@ -115,6 +119,7 @@ function RateInfoPanel({ rateHistory, activeRowIdx }) {
 }
 
 export default function Sale() {
+  const { user, can } = useAuth();
   const [sales, setSales] = useState([]);
   const { page, setPage, pageSize, setPageSize, totalPages, totalItems, pageItems: pagedSales } = usePagination(sales, 25);
   const [customers, setCustomers] = useState([]);
@@ -146,6 +151,7 @@ export default function Sale() {
   // New customer form
   const [newCustForm, setNewCustForm] = useState({ name: '', phone: '', address: '', city_id: '' });
   const [savingCust, setSavingCust] = useState(false);
+  const canViewPurchaseRates = user?.role === 'admin' || can('perm_view_purchase_rate');
 
   const load = () => {
     setLoading(true);
@@ -441,7 +447,7 @@ export default function Sale() {
 
       <button className="btn btn-outline btn-sm mt-2" onClick={addItem}>+ Add Row</button>
 
-      <RateInfoPanel rateHistory={rateHistory} activeRowIdx={activeRowIdx} />
+      <RateInfoPanel rateHistory={rateHistory} activeRowIdx={activeRowIdx} canViewPurchaseRates={canViewPurchaseRates} />
     </>
   );
 
