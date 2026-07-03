@@ -9,33 +9,32 @@ import usePagination from '../../hooks/usePagination';
 import { useAuth } from '../../context/AuthContext';
 
 const emptyItem = {
-  product_id: '', pack_size: '', purchase_rate: '', sale_rate: '',
+  row_id: null,
+  product_id: '', product_search: '', pack_size: '', purchase_rate: '', sale_rate: '',
   qty: '', batch_no: '', exp_date: '', retail_price: '', bonus: 0,
   discount_pct: 0, tax_pct: 0, total: 0,
   _expConflict: false, _priceConflict: false, _existingBatch: null
 };
 
+const createPurchaseItem = () => ({ ...emptyItem, row_id: `purchase-${Date.now()}-${Math.random().toString(16).slice(2)}` });
+
 const today = () => new Date().toISOString().split('T')[0];
 const fmtPKR = (n) => `PKR ${Math.round(parseFloat(n || 0)).toLocaleString()}`;
 
-// Spinner control for numeric fields
-function Spinner({ value, onChange, step = 1, min = 0, suffix = '', hideMinus = false }) {
-  const v = parseFloat(value) || 0;
-  const updateValue = (newValue) => onChange(Math.max(min, +(newValue || 0).toFixed(2)));
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', border: '1.5px solid var(--gray-200)', borderRadius: 8, overflow: 'hidden', background: 'white' }}>
-      {!hideMinus && (
-        <button type="button" onClick={() => updateValue(v - step)}
-          style={{ padding: '5px 9px', border: 'none', background: 'var(--gray-50)', cursor: 'pointer', fontWeight: 700, color: 'var(--gray-600)', fontSize: 14, borderRight: '1px solid var(--gray-200)' }}>−</button>
-      )}
-      <input type="number" min={min} value={value} onChange={e => updateValue(e.target.value)}
-        style={{ width: 52, textAlign: 'center', border: 'none', outline: 'none', fontSize: 12, fontFamily: 'inherit', padding: '5px 2px' }} />
-      {suffix && <span style={{ fontSize: 11, color: 'var(--gray-500)', paddingRight: 4 }}>{suffix}</span>}
-      <button type="button" onClick={() => updateValue(v + step)}
-        style={{ padding: '5px 9px', border: 'none', background: 'var(--gray-50)', cursor: 'pointer', fontWeight: 700, color: 'var(--gray-600)', fontSize: 14, borderLeft: '1px solid var(--gray-200)' }}>+</button>
-    </div>
-  );
-}
+const getProductSuggestions = (products, query) => {
+  const normalized = (query || '').trim().toLowerCase();
+  if (!normalized) return [];
+  return products
+    .map(p => ({
+      product: p,
+      score: p.name.toLowerCase().startsWith(normalized) ? 0 : p.name.toLowerCase().includes(normalized) ? 1 : 2,
+    }))
+    .filter(item => item.score < 2)
+    .sort((a, b) => a.score - b.score || a.product.name.localeCompare(b.product.name))
+    .slice(0, 8)
+    .map(item => item.product);
+};
+
 
 export default function Purchase() {
   const { user, can } = useAuth();
@@ -52,7 +51,7 @@ export default function Purchase() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [header, setHeader] = useState({ supplier_id: '', invoice_no: '', date: today() });
-  const [items, setItems] = useState([{ ...emptyItem }]);
+  const [items, setItems] = useState([createPurchaseItem()]);
   const canViewPurchaseRates = user?.role === 'admin' || can('perm_view_purchase_rate');
 
   const load = () => {
@@ -93,19 +92,44 @@ export default function Purchase() {
     } catch { }
   }, []);
 
+  const selectProduct = (idx, product) => {
+    setItems(prev => prev.map((it, i) => {
+      if (i !== idx) return it;
+      return {
+        ...it,
+        product_id: product.id,
+        product_search: product.name,
+        pack_size: product.pack_size || '',
+        purchase_rate: product.purchase_rate ? Math.round(product.purchase_rate) : '',
+        retail_price: product.retail_price ? Math.round(product.retail_price) : '',
+        sale_rate: product.sale_rate ? Math.round(product.sale_rate) : '',
+        total: calcTotal({
+          ...it,
+          product_id: product.id,
+          pack_size: product.pack_size || '',
+          purchase_rate: product.purchase_rate ? Math.round(product.purchase_rate) : '',
+          retail_price: product.retail_price ? Math.round(product.retail_price) : '',
+          sale_rate: product.sale_rate ? Math.round(product.sale_rate) : '',
+        }),
+      };
+    }));
+  };
+
   const updateItem = (idx, field, value) => {
     setItems(prev => {
       const updated = prev.map((it, i) => {
         if (i !== idx) return it;
         const newIt = { ...it, [field]: value };
-        if (field === 'product_id') {
-          const prod = products.find(p => p.id === parseInt(value));
-          if (prod) {
-            newIt.pack_size = prod.pack_size || '';
-            newIt.purchase_rate = prod.purchase_rate ? Math.round(prod.purchase_rate) : '';
-            newIt.retail_price = prod.retail_price ? Math.round(prod.retail_price) : '';
-            newIt.sale_rate = prod.sale_rate ? Math.round(prod.sale_rate) : '';
-          }
+        if (field === 'product_search') {
+          newIt.product_id = '';
+          newIt.pack_size = '';
+          newIt.purchase_rate = '';
+          newIt.retail_price = '';
+          newIt.sale_rate = '';
+          newIt.batch_no = '';
+          newIt._existingBatch = null;
+          newIt._expConflict = false;
+          newIt._priceConflict = false;
         }
         newIt.total = calcTotal(newIt);
         return newIt;
@@ -126,7 +150,7 @@ export default function Purchase() {
     }
   };
 
-  const addItem = () => setItems(p => [...p, { ...emptyItem }]);
+  const addItem = () => setItems(p => [...p, createPurchaseItem()]);
   const removeItem = (idx) => setItems(p => p.filter((_, i) => i !== idx));
   const grandTotal = items.reduce((sum, it) => sum + (parseFloat(it.total) || 0), 0);
 
@@ -156,8 +180,8 @@ export default function Purchase() {
       setSelected(r.data);
       setHeader({ supplier_id: r.data.supplier_id, invoice_no: r.data.invoice_no || '', date: r.data.date.split('T')[0] });
       const mapped = (r.data.items || []).map(it => ({
-        ...emptyItem,
-        product_id: it.product_id, pack_size: it.pack_size || '',
+        ...createPurchaseItem(),
+        product_id: it.product_id, product_search: it.product_name || '', pack_size: it.pack_size || '',
         purchase_rate: Math.round(it.purchase_rate), sale_rate: Math.round(it.sale_rate || 0),
         qty: it.qty, batch_no: it.batch_no || '', exp_date: it.exp_date ? it.exp_date.split('T')[0] : '',
         retail_price: Math.round(it.retail_price), bonus: it.bonus || 0,
@@ -308,7 +332,7 @@ export default function Purchase() {
         </div>
 
         {items.map((item, idx) => (
-          <div key={idx} style={{ marginBottom: 6 }}>
+          <div key={item.row_id || idx} style={{ marginBottom: 6 }}>
             {(item._expConflict || item._priceConflict) && (
               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '4px 10px', marginBottom: 3, fontSize: 11, color: '#92400e' }}>
                 ⚠ {item._expConflict && `Expiry conflict (existing: ${item._existingBatch?.exp_date?.split('T')[0]})`}
@@ -324,11 +348,39 @@ export default function Purchase() {
               border: `1.5px solid ${item._expConflict || item._priceConflict ? '#fde68a' : 'var(--gray-200)'}`,
               borderRadius: 8
             }}>
-              <select className="form-control" style={inputSm} value={item.product_id}
-                onChange={e => updateItem(idx, 'product_id', e.target.value)}>
-                <option value="">— Product —</option>
-                {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
+              <div style={{ position: 'relative' }}>
+                <input className="form-control" style={inputSm} value={item.product_search}
+                  placeholder="Search product" autoComplete="off"
+                  onChange={e => updateItem(idx, 'product_search', e.target.value)}
+                  onBlur={() => setTimeout(() => {
+                    setItems(prev => {
+                      const updated = [...prev];
+                      const it = updated[idx];
+                      if (it && !it.product_id) {
+                        updated[idx] = { ...it, product_search: '' };
+                      }
+                      return updated;
+                    });
+                  }, 150)}
+                />
+                {item.product_search && !item.product_id && (
+                  <div style={{
+                    position: 'absolute', top: 38, left: 0, right: 0, zIndex: 20,
+                    background: 'white', border: '1px solid var(--gray-200)', borderRadius: 8,
+                    boxShadow: '0 10px 20px rgba(0,0,0,0.08)', maxHeight: 220, overflowY: 'auto'
+                  }}>
+                    {getProductSuggestions(products, item.product_search).map(prod => (
+                      <button key={prod.id} type="button" onMouseDown={() => selectProduct(idx, prod)}
+                        style={{
+                          width: '100%', textAlign: 'left', padding: '9px 12px', border: 'none',
+                          background: 'white', cursor: 'pointer', fontSize: 13, color: 'var(--gray-900)'
+                        }}>
+                        {prod.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               <input className="form-control" style={inputSm} placeholder="Pack"
                 value={item.pack_size} onChange={e => updateItem(idx, 'pack_size', e.target.value)} />
@@ -341,9 +393,10 @@ export default function Purchase() {
                 style={{ ...inputSm, width: '100%', borderColor: !item.exp_date && item.product_id ? 'var(--red)' : undefined }}
                 value={item.exp_date} onChange={e => updateItem(idx, 'exp_date', e.target.value)} />
 
-              <input className="form-control" type="number" style={{ ...inputSm, borderColor: !item.qty && item.product_id ? 'var(--red)' : undefined }}
+              <input className="form-control" type="number" step="1" min="0" style={{ ...inputSm, borderColor: !item.qty && item.product_id ? 'var(--red)' : undefined }}
                 placeholder="Qty *" value={item.qty}
-                onChange={e => updateItem(idx, 'qty', e.target.value)} />
+                onChange={e => updateItem(idx, 'qty', e.target.value)}
+                inputMode="numeric" />
 
               {canViewPurchaseRates ? (
                 <input className="form-control" type="number" style={{ ...inputSm, borderColor: !item.purchase_rate && item.product_id ? 'var(--red)' : undefined }}
@@ -357,14 +410,17 @@ export default function Purchase() {
                 placeholder="Retail *" value={item.retail_price}
                 onChange={e => updateItem(idx, 'retail_price', e.target.value)} />
 
-              <Spinner value={item.bonus} step={1} min={0} hideMinus
-                onChange={v => updateItem(idx, 'bonus', v)} />
+              <input className="form-control no-spinner" type="number" step="1" min="0" style={inputSm}
+                value={item.bonus} onChange={e => updateItem(idx, 'bonus', e.target.value)}
+                inputMode="numeric" />
 
-              <Spinner value={item.discount_pct} step={1} min={0} suffix="%" hideMinus
-                onChange={v => updateItem(idx, 'discount_pct', v)} />
+              <input className="form-control no-spinner" type="number" step="0.5" min="0" style={inputSm}
+                value={item.discount_pct} onChange={e => updateItem(idx, 'discount_pct', e.target.value)}
+                inputMode="decimal" />
 
-              <Spinner value={item.tax_pct} step={0.5} min={0} suffix="%" hideMinus
-                onChange={v => updateItem(idx, 'tax_pct', v)} />
+              <input className="form-control no-spinner" type="number" step="0.5" min="0" style={inputSm}
+                value={item.tax_pct} onChange={e => updateItem(idx, 'tax_pct', e.target.value)}
+                inputMode="decimal" />
 
               <div style={{ fontWeight: 700, fontSize: 12, textAlign: 'right', color: 'var(--navy)', paddingRight: 2 }}>
                 {item.total > 0 ? `PKR ${Math.round(item.total).toLocaleString()}` : '—'}

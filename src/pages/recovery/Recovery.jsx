@@ -10,6 +10,62 @@ import usePagination from '../../hooks/usePagination';
 const today = () => new Date().toISOString().split('T')[0];
 const fmt = formatCurrency;
 
+function ReturnTable({ lines, items, isCross, updateReturnLine, fmt }) {
+  return (
+    <div>
+      {lines.length === 0 ? (
+        <div className="empty-state" style={{ padding: 24 }}>
+          <div className="empty-state-desc">No items in this invoice</div>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', gap: 6, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6, fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
+            <span>Product</span><span>Batch / Expiry</span><span>Sold Qty</span><span>Return Qty</span><span>Rate</span><span>Return Amt</span>
+          </div>
+          {lines.map((line, idx) => {
+            const retAmt = parseFloat(line.return_amount || 0);
+            let expiryBlocked = false;
+            let expiryLabel = null;
+            if (line.exp_date) {
+              const expiry = new Date(line.exp_date);
+              const threshold = new Date(expiry);
+              threshold.setMonth(threshold.getMonth() - 5);
+              expiryBlocked = new Date() > threshold;
+              expiryLabel = expiry.toLocaleDateString();
+            }
+            return (
+              <div key={line.row_id || idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: expiryBlocked ? '#fff7ed' : 'white', border: `1.5px solid ${expiryBlocked ? 'var(--amber)' : 'var(--gray-200)'}`, borderRadius: 8 }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>{line.product_name}</div>
+                <div>
+                  <span className="mono badge badge-gray" style={{ fontSize: 11 }}>{line.batch_no || '—'}</span>
+                  {expiryLabel && (
+                    <div style={{ fontSize: 10, marginTop: 2, color: expiryBlocked ? 'var(--red)' : 'var(--gray-500)' }}>
+                      {expiryBlocked ? '⛔ Return window expired' : `Exp: ${expiryLabel}`}
+                    </div>
+                  )}
+                </div>
+                <div style={{ color: 'var(--gray-600)' }}>{line.original_qty ?? '—'}</div>
+                <input className="form-control" type="number" step="1" min="0" max={line.original_qty}
+                  style={{ fontSize: 12, padding: '5px 8px', opacity: expiryBlocked ? 0.4 : 1 }}
+                  placeholder="0" value={line.qty_returned} disabled={expiryBlocked}
+                  onChange={e => updateReturnLine(idx, 'qty_returned', e.target.value, line, isCross)}
+                  inputMode="numeric" />
+                <input className="form-control" type="number" step="0.01"
+                  style={{ fontSize: 12, padding: '5px 8px', opacity: expiryBlocked ? 0.4 : 1 }}
+                  value={line.return_rate} disabled={expiryBlocked}
+                  onChange={e => updateReturnLine(idx, 'return_rate', e.target.value, line, isCross)} />
+                <div style={{ fontWeight: 700, color: retAmt > 0 ? 'var(--amber)' : 'var(--gray-400)' }}>
+                  {retAmt > 0 ? fmt(retAmt) : '—'}
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function Recovery() {
   const [allSales, setAllSales] = useState([]);
   const [sales, setSales] = useState([]);
@@ -32,6 +88,13 @@ export default function Recovery() {
   const [recoveryLines, setRecoveryLines] = useState([]);
   const [returnLines, setReturnLines] = useState([]);
   const [recHeader, setRecHeader] = useState({ date: today(), salesman_id: '', notes: '' });
+
+  const createRecoveryReturnLine = (item) => ({
+    row_id: `return-${item.id}-${Math.random().toString(16).slice(2)}`,
+    sale_item_id: item.id, sale_id: item.sale_id || null, product_id: item.product_id,
+    batch_no: item.batch_no, qty_returned: '', return_rate: item.sale_rate, return_amount: 0,
+    product_name: item.product_name, original_qty: item.qty, exp_date: item.exp_date
+  });
   const [amountRecovered, setAmountRecovered] = useState('');
   const [amountRecoveredTouched, setAmountRecoveredTouched] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -106,11 +169,7 @@ export default function Recovery() {
         sale_item_id: item.id, product_id: item.product_id, batch_no: item.batch_no,
         original_total: item.total, discount_given: '', final_amount: item.total
       }));
-      const retLines = (r.data.items || []).map(item => ({
-        sale_item_id: item.id, sale_id: sale.id, product_id: item.product_id,
-        batch_no: item.batch_no, qty_returned: '', return_rate: item.sale_rate, return_amount: 0,
-        product_name: item.product_name, original_qty: item.qty, exp_date: item.exp_date
-      }));
+      const retLines = (r.data.items || []).map(item => createRecoveryReturnLine({ ...item, sale_id: sale.id }));
       setRecoveryLines(recLines);
       setReturnLines(retLines);
       setCrossReturnLines([]);
@@ -132,11 +191,7 @@ export default function Recovery() {
     try {
       const r = await api.get(`/sales/${invoiceId}`);
       setReturnInvoiceDetail(r.data);
-      setCrossReturnLines((r.data.items || []).map(item => ({
-        sale_item_id: item.id, sale_id: parseInt(invoiceId), product_id: item.product_id,
-        batch_no: item.batch_no, qty_returned: '', return_rate: item.sale_rate, return_amount: 0,
-        product_name: item.product_name, original_qty: item.qty, exp_date: item.exp_date
-      })));
+      setCrossReturnLines((r.data.items || []).map(item => createRecoveryReturnLine({ ...item, sale_id: parseInt(invoiceId) })));
     } catch { toast.error('Error loading invoice'); }
     setLoadingReturnInvoice(false);
   };
@@ -241,61 +296,6 @@ export default function Recovery() {
     setFilterSalesman(''); setFilterCustomer('');
   };
 
-  /* ── Return items table ── */
-  const ReturnTable = ({ lines, items, isCross }) => (
-    <div>
-      {lines.length === 0 ? (
-        <div className="empty-state" style={{ padding: 24 }}>
-          <div className="empty-state-desc">No items in this invoice</div>
-        </div>
-      ) : (
-        <>
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', gap: 6, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6, fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
-            <span>Product</span><span>Batch / Expiry</span><span>Sold Qty</span><span>Return Qty</span><span>Rate</span><span>Return Amt</span>
-          </div>
-          {lines.map((line, idx) => {
-            const retAmt = parseFloat(line.return_amount || 0);
-            // Expiry check: within 5 months = blocked
-            let expiryBlocked = false;
-            let expiryLabel = null;
-            if (line.exp_date) {
-              const expiry = new Date(line.exp_date);
-              const threshold = new Date(expiry);
-              threshold.setMonth(threshold.getMonth() - 5);
-              expiryBlocked = new Date() > threshold;
-              expiryLabel = expiry.toLocaleDateString();
-            }
-            return (
-              <div key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: expiryBlocked ? '#fff7ed' : 'white', border: `1.5px solid ${expiryBlocked ? 'var(--amber)' : 'var(--gray-200)'}`, borderRadius: 8 }}>
-                <div style={{ fontWeight: 600, fontSize: 13 }}>{line.product_name}</div>
-                <div>
-                  <span className="mono badge badge-gray" style={{ fontSize: 11 }}>{line.batch_no || '—'}</span>
-                  {expiryLabel && (
-                    <div style={{ fontSize: 10, marginTop: 2, color: expiryBlocked ? 'var(--red)' : 'var(--gray-500)' }}>
-                      {expiryBlocked ? '⛔ Return window expired' : `Exp: ${expiryLabel}`}
-                    </div>
-                  )}
-                </div>
-                <div style={{ color: 'var(--gray-600)' }}>{line.original_qty ?? '—'}</div>
-                <input className="form-control" type="number" min="0" max={line.original_qty}
-                  style={{ fontSize: 12, padding: '5px 8px', opacity: expiryBlocked ? 0.4 : 1 }}
-                  placeholder="0" value={line.qty_returned} disabled={expiryBlocked}
-                  onChange={e => updateReturnLine(idx, 'qty_returned', e.target.value, line, isCross)} />
-                <input className="form-control" type="number" step="0.01"
-                  style={{ fontSize: 12, padding: '5px 8px', opacity: expiryBlocked ? 0.4 : 1 }}
-                  value={line.return_rate} disabled={expiryBlocked}
-                  onChange={e => updateReturnLine(idx, 'return_rate', e.target.value, line, isCross)} />
-                <div style={{ fontWeight: 700, color: retAmt > 0 ? 'var(--amber)' : 'var(--gray-400)' }}>
-                  {retAmt > 0 ? fmt(retAmt) : '—'}
-                </div>
-              </div>
-            );
-          })}
-        </>
-      )}
-    </div>
-  );
-
   return (
     <Layout title="Recovery & Return">
       {/* Filters */}
@@ -351,6 +351,8 @@ export default function Recovery() {
           </div>
         </div>
       </div>
+
+      {/* Invoices table */}
 
       {/* Invoices table */}
       <div className="card">
@@ -526,7 +528,7 @@ export default function Recovery() {
             )}
 
             {activeTab === 'return' && (
-              <ReturnTable lines={returnLines} items={saleDetail.items} isCross={false} />
+              <ReturnTable lines={returnLines} items={saleDetail.items} isCross={false} updateReturnLine={updateReturnLine} fmt={fmt} />
             )}
 
             {activeTab === 'cross-return' && (
@@ -554,7 +556,7 @@ export default function Recovery() {
                       Invoice <strong>{returnInvoiceDetail.invoice_no}</strong> — {fmt(returnInvoiceDetail.total_amount)}
                       {returnInvoiceDetail.is_locked && <span className="badge badge-amber" style={{ marginLeft: 8, fontSize: 10 }}>Locked — credit will apply to current invoice</span>}
                     </div>
-                    <ReturnTable lines={crossReturnLines} items={returnInvoiceDetail.items} isCross={true} />
+                    <ReturnTable lines={crossReturnLines} items={returnInvoiceDetail.items} isCross={true} updateReturnLine={updateReturnLine} fmt={fmt} />
                   </>
                 )}
               </div>

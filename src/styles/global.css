@@ -58,6 +58,15 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--gray-400); }
 
+input.no-spinner[type=number]::-webkit-outer-spin-button,
+input.no-spinner[type=number]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input.no-spinner[type=number] {
+  -moz-appearance: textfield;
+}
+
 /* Layout */
 .app-layout { display: flex; min-height: 100vh; }
 
