@@ -156,7 +156,8 @@ function SaleFormBody({
             {customers.map(c => {
               const area = geo?.areas?.find(a => String(a.id) === String(c.area_id))?.name;
               const territory = geo?.territories?.find(t => String(t.id) === String(c.territory_id))?.name;
-              const label = [c.name, area, territory].filter(Boolean).join(' — ');
+              const location = [area, territory].filter(Boolean).join(' / ');
+              const label = [c.name, location].filter(Boolean).join(' — ');
               return <option key={c.id} value={c.id}>{label}</option>;
             })}
           </select>

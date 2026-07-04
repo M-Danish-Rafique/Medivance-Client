@@ -10,6 +10,20 @@ import usePagination from '../../hooks/usePagination';
 const today = () => new Date().toISOString().split('T')[0];
 const fmt = formatCurrency;
 
+// Falls back gracefully for invoices saved before the recovery_status column existed.
+const getRecoveryStatus = (sale) => {
+  if (sale.recovery_status) return sale.recovery_status;
+  return sale.is_locked ? 'completed' : 'pending';
+};
+const getPendingAmount = (sale) => {
+  if (sale.pending_amount !== undefined && sale.pending_amount !== null) return parseFloat(sale.pending_amount);
+  return sale.is_locked ? 0 : parseFloat(sale.total_amount || 0);
+};
+const getRecoveredAmount = (sale) => {
+  if (sale.total_recovered !== undefined && sale.total_recovered !== null) return parseFloat(sale.total_recovered);
+  return sale.is_locked ? parseFloat(sale.total_amount || 0) : 0;
+};
+
 function ReturnTable({ lines, items, isCross, updateReturnLine, fmt }) {
   return (
     <div>
@@ -81,6 +95,13 @@ export default function Recovery() {
   const [filterTerritory, setFilterTerritory] = useState('');
   const [filterSalesman, setFilterSalesman] = useState('');
   const [filterCustomer, setFilterCustomer] = useState('');
+  const [filterStatus, setFilterStatus] = useState('pending'); // 'pending' | 'all' — Pending Only by default
+
+  // Payment history popup (click on an invoice row)
+  const [historyModal, setHistoryModal] = useState(false);
+  const [historySale, setHistorySale] = useState(null);
+  const [historyList, setHistoryList] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const [modal, setModal] = useState(false);
   const [selectedSale, setSelectedSale] = useState(null);
@@ -105,6 +126,11 @@ export default function Recovery() {
   const [returnInvoiceDetail, setReturnInvoiceDetail] = useState(null);
   const [loadingReturnInvoice, setLoadingReturnInvoice] = useState(false);
   const [crossReturnLines, setCrossReturnLines] = useState([]);
+
+  // (Other) Pending Invoices tab — collect payment for other unpaid invoices of the same customer
+  const [otherPendingInvoices, setOtherPendingInvoices] = useState([]);
+  const [loadingOtherPending, setLoadingOtherPending] = useState(false);
+  const [otherPayments, setOtherPayments] = useState({}); // { [saleId]: amountString }
 
   const load = useCallback(() => {
     setLoading(true);
@@ -140,8 +166,11 @@ export default function Recovery() {
     }
     if (filterSalesman) filtered = filtered.filter(s => String(s.salesman_id) === String(filterSalesman));
     if (filterCustomer) filtered = filtered.filter(s => String(s.customer_id) === String(filterCustomer));
+    if (filterStatus === 'pending') {
+      filtered = filtered.filter(s => getRecoveryStatus(s) !== 'completed');
+    }
     setSales(filtered);
-  }, [filterCity, filterArea, filterTerritory, filterSalesman, filterCustomer, allSales, customers]);
+  }, [filterCity, filterArea, filterTerritory, filterSalesman, filterCustomer, filterStatus, allSales, customers]);
 
   const { page, setPage, pageSize, setPageSize, totalPages, totalItems, pageItems: pagedSales } = usePagination(sales, 25);
 
@@ -153,6 +182,13 @@ export default function Recovery() {
     if (filterTerritory && String(c.territory_id) !== String(filterTerritory)) return false;
     return true;
   });
+
+  const areaNameById = Object.fromEntries(areas.map(a => [String(a.id), a.name]));
+  const territoryNameById = Object.fromEntries(territories.map(t => [String(t.id), t.name]));
+  const customerLabel = (c) => {
+    const loc = [areaNameById[String(c.area_id)], territoryNameById[String(c.territory_id)]].filter(Boolean).join(', ');
+    return loc ? `${c.name} — ${loc}` : c.name;
+  };
 
   // All non-locked sales for the same customer (for cross-invoice return dropdown)
   const eligibleReturnInvoices = allSales.filter(s =>
@@ -178,9 +214,34 @@ export default function Recovery() {
       setRecHeader({ date: today(), salesman_id: sale.salesman_id || '', notes: '' });
       setAmountRecovered('');
       setAmountRecoveredTouched(false);
+      setOtherPayments({});
+      setOtherPendingInvoices([]);
       setActiveTab('recovery');
       setModal(true);
+      loadOtherPendingInvoices(r.data.customer_id, sale.id);
     } catch { toast.error('Error loading invoice'); }
+  };
+
+  /* ── View payment history for an invoice ── */
+  const openHistory = async (sale) => {
+    setHistorySale(sale);
+    setHistoryModal(true);
+    setHistoryLoading(true);
+    try {
+      const r = await api.get(`/recoveries/history/${sale.id}`);
+      setHistoryList(r.data);
+    } catch { toast.error('Error loading payment history'); }
+    setHistoryLoading(false);
+  };
+
+  /* ── Load other pending invoices for the current customer (for the "(Other) Pending Invoices" tab) ── */
+  const loadOtherPendingInvoices = async (customerId, excludeSaleId) => {
+    setLoadingOtherPending(true);
+    try {
+      const r = await api.get(`/recoveries/pending-invoices/${customerId}?exclude=${excludeSaleId}`);
+      setOtherPendingInvoices(r.data);
+    } catch { toast.error('Error loading pending invoices'); }
+    setLoadingOtherPending(false);
   };
 
   /* ── Load cross-invoice return detail ── */
@@ -223,11 +284,17 @@ export default function Recovery() {
   const crossReturnAmt = crossReturnLines.reduce((s, l) => s + parseFloat(l.return_amount || 0), 0);
   const totalReturnAmt = currentReturnAmt + crossReturnAmt;
   const invoiceTotal = saleDetail ? parseFloat(saleDetail.total_amount) : 0;
-  const netCollectible = Math.max(0, invoiceTotal - totalDiscount - totalReturnAmt);
+  // Figures already banked from a PRIOR (partial) recovery installment on this same invoice, if any.
+  const priorDiscount = saleDetail ? parseFloat(saleDetail.total_discount || 0) : 0;
+  const priorReturn = saleDetail ? parseFloat(saleDetail.total_return_amount || 0) : 0;
+  const priorRecovered = saleDetail ? parseFloat(saleDetail.total_recovered || 0) : 0;
+  const netCollectible = Math.max(0, invoiceTotal - (priorDiscount + totalDiscount) - (priorReturn + totalReturnAmt));
+  const pendingBeforeThisPayment = Math.max(0, netCollectible - priorRecovered);
   const recoveredValue = amountRecoveredTouched
     ? parseFloat(amountRecovered || 0)
-    : netCollectible;
-  const pendingAmount = Math.max(0, netCollectible - (Number.isNaN(recoveredValue) ? 0 : recoveredValue));
+    : pendingBeforeThisPayment;
+  const pendingAmount = Math.max(0, pendingBeforeThisPayment - (Number.isNaN(recoveredValue) ? 0 : recoveredValue));
+  const otherPaymentsTotal = Object.values(otherPayments).reduce((s, v) => s + (parseFloat(v) || 0), 0);
 
   const handleSave = async () => {
     if (!recHeader.date) return toast.error('Date required');
@@ -246,15 +313,26 @@ export default function Recovery() {
       return_amount: parseInt(l.qty_returned) * parseFloat(l.return_rate)
     }));
     const allReturns = [...validCurrentReturns, ...validCrossReturns];
-    const recovered = amountRecoveredTouched ? parseFloat(amountRecovered || 0) : netCollectible;
+    const recovered = amountRecoveredTouched ? parseFloat(amountRecovered || 0) : pendingBeforeThisPayment;
     if (Number.isNaN(recovered) || recovered < 0) {
       return toast.error('Enter a valid recovered amount');
     }
-    if (recovered > netCollectible) {
-      return toast.error(`Recovered amount cannot exceed net collectible (${fmt(netCollectible)})`);
+    if (recovered > pendingBeforeThisPayment) {
+      return toast.error(`Recovered amount cannot exceed pending balance (${fmt(pendingBeforeThisPayment)})`);
     }
-    if (!validRecovery.length && !allReturns.length && recovered <= 0) {
+    if (!validRecovery.length && !allReturns.length && recovered <= 0 && otherPaymentsTotal <= 0) {
       return toast.error('Enter at least one discount, return, or recovered amount');
+    }
+
+    // Validate any payments entered for OTHER pending invoices of this customer
+    const otherPaymentEntries = Object.entries(otherPayments)
+      .map(([saleId, amt]) => ({ saleId: parseInt(saleId), amount: parseFloat(amt || 0) }))
+      .filter(p => p.amount > 0);
+    for (const p of otherPaymentEntries) {
+      const inv = otherPendingInvoices.find(i => i.id === p.saleId);
+      if (inv && p.amount > parseFloat(inv.pending_amount)) {
+        return toast.error(`Amount for ${inv.invoice_no} cannot exceed its pending balance (${fmt(inv.pending_amount)})`);
+      }
     }
 
     // Front-end expiry check: block if batch expiry is within 5 months
@@ -282,9 +360,25 @@ export default function Recovery() {
         return_items: allReturns,
         amount_recovered: recovered,
       });
-      toast.success(pendingAmount > 0
-        ? `Recovery saved! ${fmt(recovered)} collected, ${fmt(pendingAmount)} pending in ledger.`
-        : 'Recovery saved! Invoice locked. Payment recorded in ledger.');
+
+      // Record any payments entered for OTHER pending invoices of this customer
+      for (const p of otherPaymentEntries) {
+        const inv = otherPendingInvoices.find(i => i.id === p.saleId);
+        await api.post('/recoveries', {
+          sale_id: p.saleId,
+          salesman_id: recHeader.salesman_id || null,
+          date: recHeader.date,
+          notes: `Payment collected alongside ${selectedSale.invoice_no}${recHeader.notes ? ' — ' + recHeader.notes : ''}`,
+          recovery_items: [],
+          return_items: [],
+          amount_recovered: p.amount,
+        });
+      }
+
+      const otherMsg = otherPaymentEntries.length ? ` Plus ${fmt(otherPaymentsTotal)} collected against ${otherPaymentEntries.length} other invoice(s).` : '';
+      toast.success((pendingAmount > 0
+        ? `Recovery saved! ${fmt(recovered)} collected, ${fmt(pendingAmount)} still pending on this invoice.`
+        : 'Recovery saved! Invoice fully recovered.') + otherMsg);
       setModal(false); load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Error saving recovery');
@@ -345,7 +439,7 @@ export default function Recovery() {
               <label className="form-label">Customer</label>
               <select className="form-control" value={filterCustomer} onChange={e => setFilterCustomer(e.target.value)}>
                 <option value="">All Customers</option>
-                {filteredCustomers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {filteredCustomers.map(c => <option key={c.id} value={c.id}>{customerLabel(c)}</option>)}
               </select>
             </div>
           </div>
@@ -353,13 +447,40 @@ export default function Recovery() {
       </div>
 
       {/* Invoices table */}
-
-      {/* Invoices table */}
       <div className="card">
         <div className="card-header">
           <div>
             <div className="card-title">Sales Invoices</div>
             <div className="text-sm text-muted mt-1">{sales.length} invoice{sales.length !== 1 ? 's' : ''} found</div>
+          </div>
+          {/* Pending / All toggle */}
+          <div style={{ display: 'flex', background: 'var(--gray-100)', borderRadius: 8, padding: 3, gap: 2 }}>
+            <button
+              className="btn btn-sm"
+              style={{
+                background: filterStatus === 'pending' ? 'white' : 'transparent',
+                boxShadow: filterStatus === 'pending' ? 'var(--shadow-sm)' : 'none',
+                color: filterStatus === 'pending' ? 'var(--navy)' : 'var(--gray-500)',
+                fontWeight: filterStatus === 'pending' ? 700 : 500,
+                border: 'none', borderRadius: 6, padding: '5px 14px'
+              }}
+              onClick={() => setFilterStatus('pending')}
+            >
+              Pending Only
+            </button>
+            <button
+              className="btn btn-sm"
+              style={{
+                background: filterStatus === 'all' ? 'white' : 'transparent',
+                boxShadow: filterStatus === 'all' ? 'var(--shadow-sm)' : 'none',
+                color: filterStatus === 'all' ? 'var(--navy)' : 'var(--gray-500)',
+                fontWeight: filterStatus === 'all' ? 700 : 500,
+                border: 'none', borderRadius: 6, padding: '5px 14px'
+              }}
+              onClick={() => setFilterStatus('all')}
+            >
+              All Invoices
+            </button>
           </div>
         </div>
         <div className="table-wrap">
@@ -369,29 +490,34 @@ export default function Recovery() {
             : (
               <table>
                 <thead>
-                  <tr><th>Invoice No</th><th>Date</th><th>Customer</th><th>Salesman</th><th>City / Area</th><th>Total</th><th>Status</th><th style={{ textAlign: 'right' }}>Actions</th></tr>
+                  <tr><th>Invoice No</th><th>Date</th><th>Customer</th><th>Salesman</th><th>City / Area</th><th>Total</th><th>Recovered</th><th>Pending</th><th style={{ textAlign: 'right' }}>Actions</th></tr>
                 </thead>
                 <tbody>
-                  {pagedSales.map(s => (
-                    <tr key={s.id}>
-                      <td className="mono">{s.invoice_no || '—'}</td>
-                      <td>{new Date(s.date).toLocaleDateString()}</td>
-                      <td style={{ fontWeight: 600 }}>{s.customer_name}</td>
-                      <td>{s.salesman_name || '—'}</td>
-                      <td>{[s.city_name, s.area_name].filter(Boolean).join(' / ') || '—'}</td>
-                      <td style={{ fontWeight: 700 }}>{fmt(s.total_amount)}</td>
-                      <td>
-                        {s.is_locked
-                          ? <span className="badge badge-amber">Recovered</span>
-                          : <span className="badge badge-blue">Open</span>}
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        {s.is_locked
-                          ? <span style={{ fontSize: 12, color: 'var(--gray-400)', padding: '5px 8px' }}>Locked</span>
-                          : <button className="btn btn-primary btn-sm" onClick={() => openRecovery(s)}>Recovery / Return</button>}
-                      </td>
-                    </tr>
-                  ))}
+                  {pagedSales.map(s => {
+                    const status = getRecoveryStatus(s);
+                    const pending = getPendingAmount(s);
+                    const recovered = getRecoveredAmount(s);
+                    const isCompleted = status === 'completed';
+                    return (
+                      <tr key={s.id} style={{ cursor: 'pointer' }} onClick={() => openHistory(s)} title="Click to view payment history">
+                        <td className="mono">{s.invoice_no || '—'}</td>
+                        <td>{new Date(s.date).toLocaleDateString()}</td>
+                        <td style={{ fontWeight: 600 }}>{s.customer_name}</td>
+                        <td>{s.salesman_name || '—'}</td>
+                        <td>{[s.city_name, s.area_name].filter(Boolean).join(' / ') || '—'}</td>
+                        <td style={{ fontWeight: 700 }}>{fmt(s.total_amount)}</td>
+                        <td style={{ color: 'var(--green)' }}>{fmt(recovered)}</td>
+                        <td style={{ fontWeight: 600, color: pending > 0 ? 'var(--amber)' : 'var(--gray-400)' }}>{fmt(pending)}</td>
+                        <td style={{ textAlign: 'right' }} onClick={e => e.stopPropagation()}>
+                          {isCompleted
+                            ? <span style={{ fontSize: 12, color: 'var(--gray-400)', padding: '5px 8px' }}>Settled</span>
+                            : <button className="btn btn-primary btn-sm" onClick={() => openRecovery(s)}>
+                                {s.is_locked ? 'Collect Payment' : 'Recovery / Return'}
+                              </button>}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
@@ -465,15 +591,17 @@ export default function Recovery() {
                 <input
                   className="form-control"
                   type="number"
-                  step="0.01"
-                  min="0"
-                  max={netCollectible}
-                  placeholder={netCollectible.toFixed(2)}
-                  value={amountRecoveredTouched ? amountRecovered : (netCollectible ? String(netCollectible) : '')}
+                  step="1"
+                  min="1"
+                  max={pendingBeforeThisPayment}
+                  placeholder={pendingBeforeThisPayment.toFixed(2)}
+                  value={amountRecoveredTouched ? amountRecovered : (pendingBeforeThisPayment ? String(pendingBeforeThisPayment) : '')}
                   onChange={e => { setAmountRecoveredTouched(true); setAmountRecovered(e.target.value); }}
                 />
                 <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 4 }}>
-                  May be less than net collectible if customer pays partially. Pending balance stays on ledger.
+                  {priorRecovered > 0
+                    ? `${fmt(priorRecovered)} already collected on this invoice. Pending balance stays on ledger.`
+                    : 'Pending balance stays on ledger.'}
                 </div>
               </div>
               <div className="form-group" style={{ margin: 0 }}>
@@ -498,6 +626,10 @@ export default function Recovery() {
               <button className={`tab-btn ${activeTab === 'cross-return' ? 'active' : ''}`} onClick={() => setActiveTab('cross-return')}>
                 Returns — Previous Invoice
                 {crossReturnAmt > 0 && <span className="badge badge-amber" style={{ marginLeft: 6, fontSize: 10 }}>{fmt(crossReturnAmt)}</span>}
+              </button>
+              <button className={`tab-btn ${activeTab === 'other-pending' ? 'active' : ''}`} onClick={() => setActiveTab('other-pending')}>
+                (Other) Pending Invoices
+                {otherPaymentsTotal > 0 && <span className="badge badge-amber" style={{ marginLeft: 6, fontSize: 10 }}>{fmt(otherPaymentsTotal)}</span>}
               </button>
             </div>
 
@@ -562,6 +694,45 @@ export default function Recovery() {
               </div>
             )}
 
+            {activeTab === 'other-pending' && (
+              <div>
+                <div className="alert alert-info" style={{ marginBottom: 14 }}>
+                  This customer's other unpaid invoices are listed below. Enter an amount here to collect payment
+                  towards any of them in the same visit — each is saved as its own recovery entry.
+                </div>
+                {loadingOtherPending ? (
+                  <div className="loading-center"><div className="spinner" /></div>
+                ) : otherPendingInvoices.length === 0 ? (
+                  <div className="empty-state" style={{ padding: 24 }}>
+                    <div className="empty-state-desc">No other pending invoices for this customer.</div>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1fr 1fr 1.2fr', gap: 6, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6, fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
+                      <span>Invoice No</span><span>Date</span><span>Total</span><span>Paid</span><span>Pending</span><span>Recover Now</span>
+                    </div>
+                    {otherPendingInvoices.map(inv => {
+                      const pend = parseFloat(inv.pending_amount);
+                      const val = otherPayments[inv.id] ?? '';
+                      return (
+                        <div key={inv.id} style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1fr 1fr 1.2fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: 'white', border: '1.5px solid var(--gray-200)', borderRadius: 8 }}>
+                          <div className="mono" style={{ fontWeight: 600, fontSize: 13 }}>{inv.invoice_no}</div>
+                          <div>{new Date(inv.date).toLocaleDateString()}</div>
+                          <div style={{ fontWeight: 700 }}>{fmt(inv.total_amount)}</div>
+                          <div style={{ color: 'var(--green)' }}>{fmt(inv.total_recovered)}</div>
+                          <div style={{ fontWeight: 700, color: 'var(--amber)' }}>{fmt(pend)}</div>
+                          <input className="form-control" type="number" step="1" min="0" max={pend}
+                            style={{ fontSize: 12, padding: '5px 8px' }} placeholder="0"
+                            value={val}
+                            onChange={e => setOtherPayments(prev => ({ ...prev, [inv.id]: e.target.value }))} />
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+              </div>
+            )}
+
             {/* Net summary */}
             <div style={{
               marginTop: 18, padding: '12px 16px',
@@ -587,10 +758,54 @@ export default function Recovery() {
                 <div>Net Collectible: <strong>{fmt(netCollectible)}</strong></div>
               </div>
             </div>
+            {otherPaymentsTotal > 0 && (
+              <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--gray-50)', borderRadius: 8, fontSize: 12 }}>
+                Also collecting <strong style={{ color: 'var(--green)' }}>{fmt(otherPaymentsTotal)}</strong> against other pending invoices — see the "(Other) Pending Invoices" tab.
+              </div>
+            )}
             <div className="alert alert-warning" style={{ marginTop: 12 }}>
               <span style={{ fontWeight: 700, marginRight: 8 }}>Note:</span>
-              <span>After saving, this invoice will be <strong>locked</strong>. Only the recovered amount is credited in the customer ledger; any pending balance remains receivable.</span>
+              <span>After saving, this invoice's line items will be <strong>locked</strong>. Only the recovered amount is credited in the customer ledger; any pending balance stays open on this invoice's recovery until it's fully collected — you can come back and add another payment later.</span>
             </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Payment History Modal */}
+      <Modal isOpen={historyModal} onClose={() => setHistoryModal(false)}
+        title={`Payment History — ${historySale?.invoice_no || ''}`} size="lg">
+        {historySale && (
+          <div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, padding: '10px 14px', background: 'var(--blue-ultra)', border: '1px solid var(--blue-pale)', borderRadius: 10, marginBottom: 18 }}>
+              <div><div style={{ fontSize: 10, color: 'var(--gray-500)', marginBottom: 2 }}>Customer</div><div style={{ fontWeight: 700 }}>{historySale.customer_name}</div></div>
+              <div><div style={{ fontSize: 10, color: 'var(--gray-500)', marginBottom: 2 }}>Invoice Total</div><div style={{ fontWeight: 700 }}>{fmt(historySale.total_amount)}</div></div>
+              <div><div style={{ fontSize: 10, color: 'var(--gray-500)', marginBottom: 2 }}>Recovered</div><div style={{ fontWeight: 700, color: 'var(--green)' }}>{fmt(getRecoveredAmount(historySale))}</div></div>
+              <div><div style={{ fontSize: 10, color: 'var(--gray-500)', marginBottom: 2 }}>Pending</div><div style={{ fontWeight: 700, color: getPendingAmount(historySale) > 0 ? 'var(--amber)' : 'var(--green)' }}>{fmt(getPendingAmount(historySale))}</div></div>
+            </div>
+
+            {historyLoading ? (
+              <div className="loading-center"><div className="spinner" /></div>
+            ) : historyList.length === 0 ? (
+              <div className="empty-state" style={{ padding: 24 }}>
+                <div className="empty-state-desc">No recovery activity recorded yet for this invoice.</div>
+              </div>
+            ) : (
+              <div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1.4fr', gap: 6, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6, fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
+                  <span>Date</span><span>Discount</span><span>Return</span><span>Collected</span><span>Pending After</span><span>Notes</span>
+                </div>
+                {historyList.map(h => (
+                  <div key={h.id} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1.4fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: 'white', border: '1.5px solid var(--gray-200)', borderRadius: 8 }}>
+                    <div>{new Date(h.date).toLocaleDateString()}</div>
+                    <div style={{ color: parseFloat(h.total_discount) > 0 ? 'var(--amber)' : 'var(--gray-400)' }}>{fmt(h.total_discount)}</div>
+                    <div style={{ color: parseFloat(h.total_return_amount) > 0 ? 'var(--amber)' : 'var(--gray-400)' }}>{fmt(h.total_return_amount)}</div>
+                    <div style={{ fontWeight: 700, color: 'var(--green)' }}>{fmt(h.net_collected)}</div>
+                    <div style={{ fontWeight: 600, color: parseFloat(h.pending_amount) > 0 ? 'var(--amber)' : 'var(--green)' }}>{fmt(h.pending_amount)}</div>
+                    <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>{h.notes || (h.salesman_name ? `Collected by ${h.salesman_name}` : '—')}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </Modal>

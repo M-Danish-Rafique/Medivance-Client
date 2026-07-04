@@ -385,6 +385,7 @@ input.no-spinner[type=number] {
 }
 
 .btn-sm { padding: 5px 12px; font-size: 12px; }
+.btn-std { padding: 10px 18px; font-size: 12px; }
 .btn-lg { padding: 11px 22px; font-size: 15px; }
 .btn-icon { padding: 7px; border-radius: 8px; }
 
