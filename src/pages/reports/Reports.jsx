@@ -257,10 +257,10 @@ export default function Reports() {
                   </button>
                 ))}
               </div>
-              <div className="form-grid form-grid-4" style={{ alignItems: 'flex-end', gridTemplateColumns: '3fr 1fr 1fr 1fr' }}>
+              <div className="form-grid form-grid-4" style={{ alignItems: 'flex-end', gridTemplateColumns: '2fr 1fr 1fr 1fr' }}>
                 <div className="form-group" style={{ margin: 0 }}>
                   <label className="form-label">{ledgerType === 'customer' ? 'Customer' : 'Supplier'} *</label>
-                  <select className="form-control" style={{ minWidth: 340, width: '100%' }} value={ledgerEntityId} onChange={e => { setLedgerEntityId(e.target.value); setLedger(null); }}>
+                  <select className="form-control" style={{ minWidth: 260 }} value={ledgerEntityId} onChange={e => { setLedgerEntityId(e.target.value); setLedger(null); }}>
                     <option value="">— Select —</option>
                     {ledgerType === 'customer'
                       ? customers.map(c => <option key={c.id} value={c.id}>{customerLabel(c)}</option>)
