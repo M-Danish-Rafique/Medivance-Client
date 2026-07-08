@@ -44,6 +44,8 @@ export default function Reports() {
   const [suppliers, setSuppliers] = useState([]);
   const [employeesSalesman, setEmployeesSalesman] = useState([]);
   const [employeesSupplier, setEmployeesSupplier] = useState([]);
+  const [areas, setAreas] = useState([]);
+  const [territories, setTerritories] = useState([]);
   const [dataLoading, setDataLoading] = useState(true);
 
   // Ledger state
@@ -74,16 +76,26 @@ export default function Reports() {
       api.get('/suppliers'),
       api.get('/employees?role=Salesman'),
       api.get('/employees?role=Supplier'),
+      api.get('/geography/geo'),
     ])
-      .then(([c, s, e_sm, e_sp]) => {
+      .then(([c, s, e_sm, e_sp, g]) => {
         setCustomers(c.data);
         setSuppliers(s.data);
         setEmployeesSalesman(e_sm.data);
         setEmployeesSupplier(e_sp.data);
+        setAreas(g.data.areas);
+        setTerritories(g.data.territories);
         setDataLoading(false);
       })
       .catch(() => setDataLoading(false));
   }, []);
+
+  const areaNameById = Object.fromEntries(areas.map(a => [String(a.id), a.name]));
+  const territoryNameById = Object.fromEntries(territories.map(t => [String(t.id), t.name]));
+  const customerLabel = (c) => {
+    const loc = [areaNameById[String(c.area_id)], territoryNameById[String(c.territory_id)]].filter(Boolean).join(', ');
+    return loc ? `${c.name} — ${loc}` : c.name;
+  };
 
   const fetchLedger = async () => {
     if (!ledgerEntityId) return toast.error('Please select a customer or supplier');
@@ -245,14 +257,14 @@ export default function Reports() {
                   </button>
                 ))}
               </div>
-              <div className="form-grid form-grid-4" style={{ alignItems: 'flex-end' }}>
+              <div className="form-grid form-grid-4" style={{ alignItems: 'flex-end', gridTemplateColumns: '3fr 1fr 1fr 1fr' }}>
                 <div className="form-group" style={{ margin: 0 }}>
                   <label className="form-label">{ledgerType === 'customer' ? 'Customer' : 'Supplier'} *</label>
-                  <select className="form-control" value={ledgerEntityId} onChange={e => { setLedgerEntityId(e.target.value); setLedger(null); }}>
+                  <select className="form-control" style={{ minWidth: 340, width: '100%' }} value={ledgerEntityId} onChange={e => { setLedgerEntityId(e.target.value); setLedger(null); }}>
                     <option value="">— Select —</option>
-                    {(ledgerType === 'customer' ? customers : suppliers).map(x => (
-                      <option key={x.id} value={x.id}>{x.name}</option>
-                    ))}
+                    {ledgerType === 'customer'
+                      ? customers.map(c => <option key={c.id} value={c.id}>{customerLabel(c)}</option>)
+                      : suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
                 </div>
                 <div className="form-group" style={{ margin: 0 }}>

@@ -25,7 +25,7 @@ const ALL_PERMS = [
   { key: 'perm_mfg_batches',       label: 'Batches',              section: 'Manufacturing' },
   { key: 'perm_mfg_yields',        label: 'Yield (End Products)', section: 'Manufacturing' },
   { key: 'perm_finance',           label: 'Finance',              section: 'Finance & Reports' },
-  { key: 'perm_reports',           label: 'Ledger Reports',       section: 'Finance & Reports' },
+  { key: 'perm_reports',           label: 'Reports',       section: 'Finance & Reports' },
   { key: 'perm_tax_ledger',        label: 'FBR Tax Ledger',       section: 'Finance & Reports' },
 ];
 const PERM_SECTIONS = ['Master Data', 'Distribution', 'Manufacturing', 'Finance & Reports'];

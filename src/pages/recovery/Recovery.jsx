@@ -10,6 +10,11 @@ import usePagination from '../../hooks/usePagination';
 const today = () => new Date().toISOString().split('T')[0];
 const fmt = formatCurrency;
 
+// Number inputs change value on mouse-wheel/trackpad scroll by default when focused.
+// Blurring on wheel disables that, so only the up/down buttons or keyboard editing change the value,
+// and the page still scrolls normally underneath the cursor.
+const blockWheelChange = (e) => e.target.blur();
+
 // Falls back gracefully for invoices saved before the recovery_status column existed.
 const getRecoveryStatus = (sale) => {
   if (sale.recovery_status) return sale.recovery_status;
@@ -63,11 +68,13 @@ function ReturnTable({ lines, items, isCross, updateReturnLine, fmt }) {
                   style={{ fontSize: 12, padding: '5px 8px', opacity: expiryBlocked ? 0.4 : 1 }}
                   placeholder="0" value={line.qty_returned} disabled={expiryBlocked}
                   onChange={e => updateReturnLine(idx, 'qty_returned', e.target.value, line, isCross)}
+                  onWheel={blockWheelChange}
                   inputMode="numeric" />
                 <input className="form-control" type="number" step="0.01"
                   style={{ fontSize: 12, padding: '5px 8px', opacity: expiryBlocked ? 0.4 : 1 }}
                   value={line.return_rate} disabled={expiryBlocked}
-                  onChange={e => updateReturnLine(idx, 'return_rate', e.target.value, line, isCross)} />
+                  onChange={e => updateReturnLine(idx, 'return_rate', e.target.value, line, isCross)}
+                  onWheel={blockWheelChange} />
                 <div style={{ fontWeight: 700, color: retAmt > 0 ? 'var(--amber)' : 'var(--gray-400)' }}>
                   {retAmt > 0 ? fmt(retAmt) : '—'}
                 </div>
@@ -597,6 +604,7 @@ export default function Recovery() {
                   placeholder={pendingBeforeThisPayment.toFixed(2)}
                   value={amountRecoveredTouched ? amountRecovered : (pendingBeforeThisPayment ? String(pendingBeforeThisPayment) : '')}
                   onChange={e => { setAmountRecoveredTouched(true); setAmountRecovered(e.target.value); }}
+                  onWheel={blockWheelChange}
                 />
                 <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 4 }}>
                   {priorRecovered > 0
@@ -649,7 +657,8 @@ export default function Recovery() {
                       <input className="form-control" type="number" step="0.01" min="0" max={item.total}
                         style={{ fontSize: 12, padding: '5px 8px' }} placeholder="0.00"
                         value={line.discount_given}
-                        onChange={e => updateRecoveryLine(idx, 'discount_given', e.target.value, item)} />
+                        onChange={e => updateRecoveryLine(idx, 'discount_given', e.target.value, item)}
+                        onWheel={blockWheelChange} />
                       <div style={{ fontWeight: 700, color: finalAmt < 0 ? 'var(--red)' : 'var(--green)' }}>
                         {fmt(Math.max(0, finalAmt))}
                       </div>
@@ -724,7 +733,8 @@ export default function Recovery() {
                           <input className="form-control" type="number" step="1" min="0" max={pend}
                             style={{ fontSize: 12, padding: '5px 8px' }} placeholder="0"
                             value={val}
-                            onChange={e => setOtherPayments(prev => ({ ...prev, [inv.id]: e.target.value }))} />
+                            onChange={e => setOtherPayments(prev => ({ ...prev, [inv.id]: e.target.value }))}
+                            onWheel={blockWheelChange} />
                         </div>
                       );
                     })}
