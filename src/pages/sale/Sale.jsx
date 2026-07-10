@@ -8,6 +8,7 @@ import { formatCurrency, handlePhoneInput } from '../../utils/formatters';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
 import { useAuth } from '../../context/AuthContext';
+import CustomerAutocomplete from '../../components/common/CustomerAutocomplete';
 
 const emptySaleItem = {
   row_id: null,
@@ -144,23 +145,20 @@ function SaleFormBody({
     <>
       <div className="form-grid form-grid-4" style={{ marginBottom: 20 }}>
         <div className="form-group" style={{ margin: 0 }}>
-          <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center justify-between" style={{ marginBottom: 5 }}>
             <label className="form-label" style={{ margin: 0 }}>Customer *</label>
             <button type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11, color: 'var(--blue)', padding: '2px 8px' }}
               onClick={() => setNewCustModal(true)}>+ New</button>
           </div>
-          <select className="form-control" value={header.customer_id}
-            onChange={e => setHeader(p => ({ ...p, customer_id: e.target.value }))}
-            style={{ minWidth: 420 }}>
-            <option value="">— Select Customer —</option>
-            {customers.map(c => {
-              const area = geo?.areas?.find(a => String(a.id) === String(c.area_id))?.name;
-              const territory = geo?.territories?.find(t => String(t.id) === String(c.territory_id))?.name;
-              const location = [area, territory].filter(Boolean).join(' / ');
-              const label = [c.name, location].filter(Boolean).join(' — ');
-              return <option key={c.id} value={c.id}>{label}</option>;
-            })}
-          </select>
+          <CustomerAutocomplete
+            customers={customers}
+            areas={geo?.areas}
+            territories={geo?.territories}
+            value={header.customer_id}
+            onChange={id => setHeader(p => ({ ...p, customer_id: id }))}
+            placeholder="Search customer by name…"
+            style={{ minWidth: 420 }}
+          />
         </div>
         <div className="form-group" style={{ margin: 0 }}>
           <label className="form-label">Salesman</label>

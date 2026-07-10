@@ -3,6 +3,7 @@ import Layout from '../../components/layout/Layout';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { formatCurrency } from '../../utils/formatters';
+import CustomerAutocomplete from '../../components/common/CustomerAutocomplete';
 
 const fmt = formatCurrency;
 
@@ -89,13 +90,6 @@ export default function Reports() {
       })
       .catch(() => setDataLoading(false));
   }, []);
-
-  const areaNameById = Object.fromEntries(areas.map(a => [String(a.id), a.name]));
-  const territoryNameById = Object.fromEntries(territories.map(t => [String(t.id), t.name]));
-  const customerLabel = (c) => {
-    const loc = [areaNameById[String(c.area_id)], territoryNameById[String(c.territory_id)]].filter(Boolean).join(', ');
-    return loc ? `${c.name} — ${loc}` : c.name;
-  };
 
   const fetchLedger = async () => {
     if (!ledgerEntityId) return toast.error('Please select a customer or supplier');
@@ -260,12 +254,22 @@ export default function Reports() {
               <div className="form-grid form-grid-4" style={{ alignItems: 'flex-end', gridTemplateColumns: '2fr 1fr 1fr 1fr' }}>
                 <div className="form-group" style={{ margin: 0 }}>
                   <label className="form-label">{ledgerType === 'customer' ? 'Customer' : 'Supplier'} *</label>
-                  <select className="form-control" style={{ minWidth: 260 }} value={ledgerEntityId} onChange={e => { setLedgerEntityId(e.target.value); setLedger(null); }}>
-                    <option value="">— Select —</option>
-                    {ledgerType === 'customer'
-                      ? customers.map(c => <option key={c.id} value={c.id}>{customerLabel(c)}</option>)
-                      : suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
+                  {ledgerType === 'customer' ? (
+                    <CustomerAutocomplete
+                      customers={customers}
+                      areas={areas}
+                      territories={territories}
+                      value={ledgerEntityId}
+                      onChange={id => { setLedgerEntityId(id); setLedger(null); }}
+                      placeholder="Search customer by name…"
+                      style={{ minWidth: 260 }}
+                    />
+                  ) : (
+                    <select className="form-control" style={{ minWidth: 260 }} value={ledgerEntityId} onChange={e => { setLedgerEntityId(e.target.value); setLedger(null); }}>
+                      <option value="">— Select —</option>
+                      {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                  )}
                 </div>
                 <div className="form-group" style={{ margin: 0 }}>
                   <label className="form-label">From Date</label>

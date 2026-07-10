@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { formatCurrency } from '../../utils/formatters';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
+import CustomerAutocomplete from '../../components/common/CustomerAutocomplete';
 
 const today = () => new Date().toISOString().split('T')[0];
 const fmt = formatCurrency;
@@ -144,7 +145,7 @@ export default function Recovery() {
     Promise.all([
       api.get('/sales'),
       api.get('/customers'),
-      api.get('/employees?role=Salesman'),
+      api.get('/employees?role=Supplier'),
       api.get('/geography/geo'),
     ]).then(([s, c, e, g]) => {
       setAllSales(s.data); setSales(s.data);
@@ -189,13 +190,6 @@ export default function Recovery() {
     if (filterTerritory && String(c.territory_id) !== String(filterTerritory)) return false;
     return true;
   });
-
-  const areaNameById = Object.fromEntries(areas.map(a => [String(a.id), a.name]));
-  const territoryNameById = Object.fromEntries(territories.map(t => [String(t.id), t.name]));
-  const customerLabel = (c) => {
-    const loc = [areaNameById[String(c.area_id)], territoryNameById[String(c.territory_id)]].filter(Boolean).join(', ');
-    return loc ? `${c.name} — ${loc}` : c.name;
-  };
 
   // All non-locked sales for the same customer (for cross-invoice return dropdown)
   const eligibleReturnInvoices = allSales.filter(s =>
@@ -444,10 +438,16 @@ export default function Recovery() {
             </div>
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">Customer</label>
-              <select className="form-control" value={filterCustomer} onChange={e => setFilterCustomer(e.target.value)}>
-                <option value="">All Customers</option>
-                {filteredCustomers.map(c => <option key={c.id} value={c.id}>{customerLabel(c)}</option>)}
-              </select>
+              <CustomerAutocomplete
+                customers={filteredCustomers}
+                areas={areas}
+                territories={territories}
+                value={filterCustomer}
+                onChange={id => setFilterCustomer(id)}
+                placeholder="Search customer by name…"
+                allowClear
+                clearLabel="All Customers"
+              />
             </div>
           </div>
         </div>
@@ -577,7 +577,7 @@ export default function Recovery() {
                   onChange={e => setRecHeader(p => ({ ...p, date: e.target.value }))} />
               </div>
               <div className="form-group" style={{ margin: 0 }}>
-                <label className="form-label">Salesman</label>
+                <label className="form-label">Supplier</label>
                 <select className="form-control" value={recHeader.salesman_id}
                   onChange={e => setRecHeader(p => ({ ...p, salesman_id: e.target.value }))}>
                   <option value="">— Select —</option>

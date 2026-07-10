@@ -499,6 +499,18 @@ tbody tr:last-child td { border-bottom: none; }
   background: white;
   transition: var(--transition);
   outline: none;
+  /* Pin line-height + box-sizing explicitly on every .form-control.
+     Without this, browsers apply their own UA line-height to native
+     <select> elements that differs from a plain <input>'s, so an
+     <input class="form-control"> renders a few px shorter than a
+     <select class="form-control"> even with identical padding/border/
+     font-size. Declaring line-height here (rather than relying on the
+     inherited body line-height, which UA stylesheets partly override
+     on form controls) makes every input/select/textarea the same
+     height, so the customer autocomplete lines up with the selects
+     next to it instead of looking smaller / sitting higher. */
+  line-height: 1.4;
+  box-sizing: border-box;
 }
 
 .form-control:focus {
@@ -510,7 +522,7 @@ tbody tr:last-child td { border-bottom: none; }
 .form-control::placeholder { color: var(--gray-400); }
 
 select.form-control { cursor: pointer; }
-textarea.form-control { resize: vertical; min-height: 80px; }
+textarea.form-control { resize: vertical; min-height: 80px; line-height: 1.5; }
 
 .form-grid { display: grid; gap: 16px; }
 .form-grid-2 { grid-template-columns: 1fr 1fr; }
@@ -808,3 +820,8 @@ textarea.form-control { resize: vertical; min-height: 80px; }
 .font-bold { font-weight: 700; }
 .text-right { text-align: right; }
 .w-full { width: 100%; }
+
+/* Customer autocomplete (Sale / Recovery & Return / Ledger Report) —
+   plain positioning hook, kept out of inline styles so it's easy to
+   tweak globally if the dropdown ever needs a different look. */
+.customer-autocomplete-wrap { position: relative; width: 100%; }
