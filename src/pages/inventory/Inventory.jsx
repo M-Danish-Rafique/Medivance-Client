@@ -50,6 +50,12 @@ export default function Inventory() {
   const [invItems, setInvItems] = useState([createInventoryItem()]);
   const [invSaving, setInvSaving] = useState(false);
 
+  // Edit Inventory Batch modal state
+  const [editModal, setEditModal] = useState(false);
+  const [editItem, setEditItem] = useState(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const canEditInventory = user?.role === 'admin' || can('perm_manage_inventory') || can('perm_add_purchase');
+
   const load = () => {
     setLoading(true);
     Promise.all([
@@ -203,6 +209,99 @@ export default function Inventory() {
 
   const inputSm = { fontSize: 12, padding: '6px 7px' };
 
+  // ---------- Edit Inventory Batch modal logic ----------
+
+  const minAllowedExpDate = (() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() + 3);
+    return d.toISOString().split('T')[0];
+  })();
+
+  const openEdit = (item) => {
+    setEditItem({
+      id: item.id,
+      product_name: item.product_name,
+      pack_size: item.pack_size,
+      purchase_rate: item.purchase_rate,
+      show_purchase_rate: item.show_purchase_rate,
+      batch_no: item.batch_no || '',
+      qty: item.qty ?? '',
+      exp_date: item.exp_date ? item.exp_date.split('T')[0] : '',
+      sale_rate: item.sale_rate ?? '',
+      retail_price: item.retail_price ?? '',
+      low_stock_threshold: item.low_stock_threshold ?? '',
+    });
+    setEditModal(true);
+  };
+
+  const updateEditField = (field, value) => {
+    setEditItem(prev => ({ ...prev, [field]: value }));
+  };
+
+  const validateEditItem = (it) => {
+    if (!it.batch_no || !it.batch_no.trim()) return 'Batch No is required';
+    if (it.qty === '' || it.qty === null || it.qty === undefined || parseFloat(it.qty) < 0) return 'Qty must not be less than 0';
+    if (it.exp_date && it.exp_date < minAllowedExpDate) {
+      return 'Expiry Date must be more than 3 months from today';
+    }
+    const purchaseRate = parseFloat(it.purchase_rate) || 0;
+    const saleRate = it.sale_rate === '' ? NaN : parseFloat(it.sale_rate);
+    const retailPrice = it.retail_price === '' ? NaN : parseFloat(it.retail_price);
+    if (isNaN(saleRate) || isNaN(retailPrice)) return 'Sale Rate and Retail Price are required';
+    if (canViewPurchaseRates && saleRate < purchaseRate) {
+      return `Sale Rate cannot be less than Purchase Rate (${formatCurrency(purchaseRate)})`;
+    }
+    if (retailPrice < saleRate) return 'Retail Price cannot be less than Sale Rate';
+    if (it.low_stock_threshold !== '' && parseInt(it.low_stock_threshold) < 1) {
+      return 'Low Stock Threshold must be at least 1';
+    }
+    return null;
+  };
+
+  // Per-field validity, used to redden the border of only the offending input(s)
+  const getEditFieldErrors = (it) => {
+    const purchaseRate = parseFloat(it.purchase_rate) || 0;
+    const saleRate = it.sale_rate === '' ? NaN : parseFloat(it.sale_rate);
+    const retailPrice = it.retail_price === '' ? NaN : parseFloat(it.retail_price);
+    const saleBelowPurchase = canViewPurchaseRates && !isNaN(saleRate) && saleRate < purchaseRate;
+    const retailBelowSale = !isNaN(saleRate) && !isNaN(retailPrice) && retailPrice < saleRate;
+
+    return {
+      batch_no: !it.batch_no || !it.batch_no.trim(),
+      qty: it.qty === '' || it.qty === null || it.qty === undefined || parseFloat(it.qty) < 0,
+      exp_date: !!(it.exp_date && it.exp_date < minAllowedExpDate),
+      low_stock_threshold: it.low_stock_threshold !== '' && parseInt(it.low_stock_threshold) < 1,
+      sale_rate: isNaN(saleRate) || saleBelowPurchase,
+      retail_price: isNaN(retailPrice) || retailBelowSale,
+    };
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editItem) return;
+    const err = validateEditItem(editItem);
+    if (err) return toast.error(err);
+
+    setEditSaving(true);
+    try {
+      await api.put(`/inventory/${editItem.id}`, {
+        batch_no: editItem.batch_no.trim(),
+        qty: editItem.qty,
+        exp_date: editItem.exp_date || null,
+        sale_rate: editItem.sale_rate,
+        retail_price: editItem.retail_price,
+        low_stock_threshold: editItem.low_stock_threshold || null,
+      });
+      toast.success('Inventory batch updated successfully!');
+      setEditModal(false);
+      setEditItem(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Error updating inventory');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
   return (
     <Layout title="Inventory">
       {lowStock.length > 0 && (
@@ -332,6 +431,7 @@ export default function Inventory() {
                   <th>Retail Price</th>
                   <th>Exp Date</th>
                   <th>Status</th>
+                  {canEditInventory && <th style={{ textAlign: 'center' }}>Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -379,6 +479,13 @@ export default function Inventory() {
                           : isLow ? <span className="badge badge-red">Low Stock</span>
                           : <span className="badge badge-green">In Stock</span>}
                       </td>
+                      {canEditInventory && (
+                        <td style={{ textAlign: 'center' }}>
+                          <button className="btn btn-outline btn-sm btn-icon" title="Edit batch" aria-label="Edit batch" onClick={() => openEdit(item)}>
+                            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>edit</span>
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -521,6 +628,106 @@ export default function Inventory() {
         ))}
 
         <button className="btn btn-outline btn-sm mt-2" onClick={addInvRow}>+ Add Row</button>
+      </Modal>
+
+      {/* Edit Inventory Batch Modal — only batch_no, qty, exp_date, sale_rate,
+          retail_price, and low_stock_threshold can be changed here. */}
+      <Modal isOpen={editModal} onClose={() => { setEditModal(false); setEditItem(null); }}
+        title="Edit Inventory Batch"
+        size="md"
+        footer={
+          <>
+            <button className="btn btn-outline btn-std" onClick={() => { setEditModal(false); setEditItem(null); }} disabled={editSaving}>
+              Cancel
+            </button>
+            <button className="btn btn-primary btn-std" onClick={handleSaveEdit}
+              disabled={editSaving || (editItem && !!validateEditItem(editItem))}>
+              {editSaving ? 'Saving...' : 'Save Changes'}
+            </button>
+          </>
+        }>
+        {editItem && (() => {
+          const liveError = validateEditItem(editItem);
+          const fieldErrors = getEditFieldErrors(editItem);
+          const errorBorder = { borderColor: 'var(--red)' };
+          return (
+            <div>
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                background: 'var(--gray-50)', borderRadius: 8, padding: '10px 14px', marginBottom: 16
+              }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{editItem.product_name}</div>
+                  <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>{editItem.pack_size || '—'}</div>
+                </div>
+                {canViewPurchaseRates && (editItem.show_purchase_rate !== false && editItem.show_purchase_rate !== 0) && (
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 11, color: 'var(--gray-500)', textTransform: 'uppercase' }}>Purchase Rate</div>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{formatCurrency(editItem.purchase_rate)}</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Dynamic runtime error listener — reflects the current form state on every keystroke */}
+              {liveError && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  background: '#fef2f2', border: '1px solid #fecaca', color: 'var(--red)',
+                  borderRadius: 6, padding: '6px 10px', marginBottom: 10, fontSize: 12, fontWeight: 600
+                }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 15 }}>error</span>
+                  {liveError}
+                </div>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12, rowGap: 7 }}>
+                <div className="form-group">
+                  <label className="form-label">Batch No *</label>
+                  <input className="form-control" value={editItem.batch_no}
+                    style={fieldErrors.batch_no ? errorBorder : undefined}
+                    onChange={e => updateEditField('batch_no', e.target.value)} />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Qty *</label>
+                  <input className="form-control" type="number" step="1" min="0"
+                    style={fieldErrors.qty ? errorBorder : undefined}
+                    value={editItem.qty} onChange={e => updateEditField('qty', e.target.value)}
+                    inputMode="numeric" />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Expiry Date</label>
+                  <input className="form-control" type="date"
+                    style={fieldErrors.exp_date ? errorBorder : undefined}
+                    value={editItem.exp_date} onChange={e => updateEditField('exp_date', e.target.value)} />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Low Stock Threshold</label>
+                  <input className="form-control no-spinner" type="number" step="1" min="1"
+                    style={fieldErrors.low_stock_threshold ? errorBorder : undefined}
+                    value={editItem.low_stock_threshold} onChange={e => updateEditField('low_stock_threshold', e.target.value)}
+                    inputMode="numeric" />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Sale Rate *</label>
+                  <input className="form-control" type="number" step="0.01"
+                    style={fieldErrors.sale_rate ? errorBorder : undefined}
+                    value={editItem.sale_rate} onChange={e => updateEditField('sale_rate', e.target.value)} />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Retail Price *</label>
+                  <input className="form-control" type="number" step="0.01"
+                    style={fieldErrors.retail_price ? errorBorder : undefined}
+                    value={editItem.retail_price} onChange={e => updateEditField('retail_price', e.target.value)} />
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </Modal>
     </Layout>
   );
