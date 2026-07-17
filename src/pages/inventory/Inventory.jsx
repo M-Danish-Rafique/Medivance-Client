@@ -56,6 +56,11 @@ export default function Inventory() {
   const [editSaving, setEditSaving] = useState(false);
   const canEditInventory = user?.role === 'admin' || can('perm_manage_inventory') || can('perm_add_purchase');
 
+  // Print Inventory modal state
+  const [printModal, setPrintModal] = useState(false);
+  const [printCompany, setPrintCompany] = useState('');
+  const [printLoading, setPrintLoading] = useState(false);
+
   const load = () => {
     setLoading(true);
     Promise.all([
@@ -302,32 +307,110 @@ export default function Inventory() {
     }
   };
 
+  // ---------- Print Inventory modal logic ----------
+
+  const openPrintModal = () => {
+    setPrintCompany(companyFilter); // sensible default: reuse whatever the page is already filtered to
+    setPrintModal(true);
+  };
+
+  const handlePrintInventory = async () => {
+    setPrintLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (printCompany) params.append('company_id', printCompany);
+      const res = await api.get(`/inventory/print/pdf?${params.toString()}`, { responseType: 'blob' });
+      const blob = new Blob([res.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+      setPrintModal(false);
+    } catch (err) {
+      toast.error('Error generating inventory PDF');
+    } finally {
+      setPrintLoading(false);
+    }
+  };
+
   return (
     <Layout title="Inventory">
       {lowStock.length > 0 && (
         <div className="alert alert-warning" style={{ marginBottom: 20 }}>
-          <span className="material-symbols-outlined" style={{ marginRight: 8, fontSize: 18 }}>warning</span>
+          <span
+            className="material-symbols-outlined"
+            style={{ marginRight: 8, fontSize: 18 }}
+          >
+            warning
+          </span>
           <span>
-            <strong>{lowStock.length} item{lowStock.length > 1 ? 's' : ''}</strong> running low on stock:&nbsp;
-            {lowStock.slice(0, 3).map(i => i.product_name).join(', ')}
-            {lowStock.length > 3 ? ` and ${lowStock.length - 3} more` : ''}
+            <strong>
+              {lowStock.length} item{lowStock.length > 1 ? "s" : ""}
+            </strong>{" "}
+            running low on stock:&nbsp;
+            {lowStock
+              .slice(0, 3)
+              .map((i) => i.product_name)
+              .join(", ")}
+            {lowStock.length > 3 ? ` and ${lowStock.length - 3} more` : ""}
           </span>
         </div>
       )}
 
       {/* Stats row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: 16,
+          marginBottom: 20,
+        }}
+      >
         {[
-          { label: 'Total Batches', value: data.length, icon: 'inventory_2', color: '#dbeafe' },
-          { label: 'Low Stock', value: lowStock.length, icon: 'warning', color: '#fef3c7', textColor: '#d97706' },
-          { label: 'Expiring (90d)', value: expiringSoon.length, icon: 'schedule', color: '#fce7f3', textColor: '#be185d' },
-          { label: 'Expired', value: expired.length, icon: 'cancel', color: '#fee2e2', textColor: '#dc2626' },
+          {
+            label: "Total Batches",
+            value: data.length,
+            icon: "inventory_2",
+            color: "#dbeafe",
+          },
+          {
+            label: "Low Stock",
+            value: lowStock.length,
+            icon: "warning",
+            color: "#fef3c7",
+            textColor: "#d97706",
+          },
+          {
+            label: "Expiring (90d)",
+            value: expiringSoon.length,
+            icon: "schedule",
+            color: "#fce7f3",
+            textColor: "#be185d",
+          },
+          {
+            label: "Expired",
+            value: expired.length,
+            icon: "cancel",
+            color: "#fee2e2",
+            textColor: "#dc2626",
+          },
         ].map((s, i) => (
           <div key={i} className="stat-card">
-            <div className="stat-icon" style={{ background: s.color }}><span className="material-symbols-outlined" style={{ fontSize: 20 }}>{s.icon}</span></div>
+            <div className="stat-icon" style={{ background: s.color }}>
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: 20 }}
+              >
+                {s.icon}
+              </span>
+            </div>
             <div>
               <div className="stat-label">{s.label}</div>
-              <div className="stat-value" style={{ color: s.textColor || 'var(--gray-900)' }}>{s.value}</div>
+              <div
+                className="stat-value"
+                style={{ color: s.textColor || "var(--gray-900)" }}
+              >
+                {s.value}
+              </div>
             </div>
           </div>
         ))}
@@ -337,34 +420,53 @@ export default function Inventory() {
         <div className="card-header">
           <div className="card-title">
             Stock Ledger
-            <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--gray-400)', marginLeft: 8 }}>
-              {filtered.length} {showAll ? 'total' : 'active'} batches
+            <span
+              style={{
+                fontSize: 12,
+                fontWeight: 400,
+                color: "var(--gray-400)",
+                marginLeft: 8,
+              }}
+            >
+              {filtered.length} {showAll ? "total" : "active"} batches
             </span>
           </div>
-          <div className="flex items-center gap-3" style={{ flexWrap: 'wrap' }}>
+          <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
             {/* Company filter */}
             <select
               className="form-control"
               style={{ width: 180, fontSize: 13 }}
               value={companyFilter}
-              onChange={e => setCompanyFilter(e.target.value)}
+              onChange={(e) => setCompanyFilter(e.target.value)}
             >
               <option value="">All Companies</option>
-              {companies.map(c => (
-                <option key={c.id} value={c.id}>{c.name}</option>
+              {companies.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
               ))}
             </select>
 
             {/* Active / All toggle */}
-            <div style={{ display: 'flex', background: 'var(--gray-100)', borderRadius: 8, padding: 3, gap: 2 }}>
+            <div
+              style={{
+                display: "flex",
+                background: "var(--gray-100)",
+                borderRadius: 8,
+                padding: 3,
+                gap: 2,
+              }}
+            >
               <button
                 className="btn btn-sm"
                 style={{
-                  background: !showAll ? 'white' : 'transparent',
-                  boxShadow: !showAll ? 'var(--shadow-sm)' : 'none',
-                  color: !showAll ? 'var(--navy)' : 'var(--gray-500)',
+                  background: !showAll ? "white" : "transparent",
+                  boxShadow: !showAll ? "var(--shadow-sm)" : "none",
+                  color: !showAll ? "var(--navy)" : "var(--gray-500)",
                   fontWeight: !showAll ? 700 : 500,
-                  border: 'none', borderRadius: 6, padding: '5px 14px'
+                  border: "none",
+                  borderRadius: 6,
+                  padding: "5px 14px",
                 }}
                 onClick={() => setShowAll(false)}
               >
@@ -373,11 +475,13 @@ export default function Inventory() {
               <button
                 className="btn btn-sm"
                 style={{
-                  background: showAll ? 'white' : 'transparent',
-                  boxShadow: showAll ? 'var(--shadow-sm)' : 'none',
-                  color: showAll ? 'var(--navy)' : 'var(--gray-500)',
+                  background: showAll ? "white" : "transparent",
+                  boxShadow: showAll ? "var(--shadow-sm)" : "none",
+                  color: showAll ? "var(--navy)" : "var(--gray-500)",
                   fontWeight: showAll ? 700 : 500,
-                  border: 'none', borderRadius: 6, padding: '5px 14px'
+                  border: "none",
+                  borderRadius: 6,
+                  padding: "5px 14px",
                 }}
                 onClick={() => setShowAll(true)}
               >
@@ -386,13 +490,31 @@ export default function Inventory() {
             </div>
 
             <div className="search-bar">
-              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>search</span>
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: 18 }}
+              >
+                search
+              </span>
               <input
                 placeholder="Search product or batch..."
                 value={search}
-                onChange={e => setSearch(e.target.value)}
+                onChange={(e) => setSearch(e.target.value)}
               />
             </div>
+
+            <button
+              className="btn bg-white btn-xl btn-icon"
+              title="Print inventory report"
+              onClick={openPrintModal}
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: 16 }}
+              >
+                print
+              </span>
+            </button>
 
             {canAddInventory && (
               <button
@@ -400,7 +522,12 @@ export default function Inventory() {
                 title="Add inventory manually"
                 onClick={openAddInventory}
               >
-                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add_circle</span>
+                <span
+                  className="material-symbols-outlined"
+                  style={{ fontSize: 16 }}
+                >
+                  add_circle
+                </span>
               </button>
             )}
           </div>
@@ -408,13 +535,24 @@ export default function Inventory() {
 
         <div className="table-wrap">
           {loading ? (
-            <div className="loading-center"><div className="spinner" /></div>
+            <div className="loading-center">
+              <div className="spinner" />
+            </div>
           ) : filtered.length === 0 ? (
             <div className="empty-state">
-              <div className="empty-state-icon"><span className="material-symbols-outlined" style={{ fontSize: 28 }}>inventory_2</span></div>
+              <div className="empty-state-icon">
+                <span
+                  className="material-symbols-outlined"
+                  style={{ fontSize: 28 }}
+                >
+                  inventory_2
+                </span>
+              </div>
               <div className="empty-state-title">No inventory found</div>
               <div className="empty-state-desc">
-                {!showAll ? 'Try switching to "All Products" to see zero-stock items' : 'No records match your filters'}
+                {!showAll
+                  ? 'Try switching to "All Products" to see zero-stock items'
+                  : "No records match your filters"}
               </div>
             </div>
           ) : (
@@ -431,58 +569,131 @@ export default function Inventory() {
                   <th>Retail Price</th>
                   <th>Exp Date</th>
                   <th>Status</th>
-                  {canEditInventory && <th style={{ textAlign: 'center' }}>Actions</th>}
+                  {canEditInventory && (
+                    <th style={{ textAlign: "center" }}>Actions</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {pagedInventory.map((item, i) => {
-                  const isLow = item.qty > 0 && item.qty <= item.low_stock_threshold;
-                  const isExpired = item.exp_date && new Date(item.exp_date) < new Date();
-                  const isExpiringSoon = !isExpired && item.exp_date &&
-                    (new Date(item.exp_date) - new Date()) / (1000 * 60 * 60 * 24) <= 90;
+                  const isLow =
+                    item.qty > 0 && item.qty <= item.low_stock_threshold;
+                  const isExpired =
+                    item.exp_date && new Date(item.exp_date) < new Date();
+                  const isExpiringSoon =
+                    !isExpired &&
+                    item.exp_date &&
+                    (new Date(item.exp_date) - new Date()) /
+                      (1000 * 60 * 60 * 24) <=
+                      90;
                   const isInactive = item.qty === 0;
 
                   return (
-                    <tr key={i} style={{ ...getRowStyle(item), opacity: isInactive ? 0.55 : 1 }}>
+                    <tr
+                      key={i}
+                      style={{
+                        ...getRowStyle(item),
+                        opacity: isInactive ? 0.55 : 1,
+                      }}
+                    >
                       <td style={{ fontWeight: 600 }}>{item.product_name}</td>
                       <td>
-                        {item.company_name
-                          ? <span className="badge badge-blue" style={{ fontSize: 11 }}>{item.company_name}</span>
-                          : <span style={{ color: 'var(--gray-300)' }}>—</span>}
+                        {item.company_name ? (
+                          <span
+                            className="badge badge-blue"
+                            style={{ fontSize: 11 }}
+                          >
+                            {item.company_name}
+                          </span>
+                        ) : (
+                          <span style={{ color: "var(--gray-300)" }}>—</span>
+                        )}
                       </td>
-                      <td>{item.pack_size || '—'}</td>
-                      <td><span className="mono badge badge-gray">{item.batch_no}</span></td>
+                      <td>{item.pack_size || "—"}</td>
                       <td>
-                        <span style={{ fontWeight: 700, color: isInactive ? 'var(--gray-400)' : isLow ? 'var(--red)' : 'var(--green)' }}>
-                          {isLow && <span className="low-stock-dot" style={{ marginRight: 5 }} />}
+                        <span className="mono badge badge-gray">
+                          {item.batch_no}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          style={{
+                            fontWeight: 700,
+                            color: isInactive
+                              ? "var(--gray-400)"
+                              : isLow
+                                ? "var(--red)"
+                                : "var(--green)",
+                          }}
+                        >
+                          {isLow && (
+                            <span
+                              className="low-stock-dot"
+                              style={{ marginRight: 5 }}
+                            />
+                          )}
                           {item.qty}
                         </span>
                       </td>
-                      <td className="mono">{canViewPurchaseRates && item.show_purchase_rate !== false && item.show_purchase_rate !== 0 ? formatCurrency(item.purchase_rate) : '—'}</td>
+                      <td className="mono">
+                        {canViewPurchaseRates &&
+                        item.show_purchase_rate !== false &&
+                        item.show_purchase_rate !== 0
+                          ? formatCurrency(item.purchase_rate)
+                          : "—"}
+                      </td>
                       <td className="mono">{formatCurrency(item.sale_rate)}</td>
-                      <td className="mono">{formatCurrency(item.retail_price)}</td>
+                      <td className="mono">
+                        {formatCurrency(item.retail_price)}
+                      </td>
                       <td>
                         {item.exp_date ? (
-                          <span style={{
-                            color: isExpired ? 'var(--red)' : isExpiringSoon ? 'var(--amber)' : 'var(--gray-700)',
-                            fontWeight: isExpired || isExpiringSoon ? 700 : 400
-                          }}>
+                          <span
+                            style={{
+                              color: isExpired
+                                ? "var(--red)"
+                                : isExpiringSoon
+                                  ? "var(--amber)"
+                                  : "var(--gray-700)",
+                              fontWeight:
+                                isExpired || isExpiringSoon ? 700 : 400,
+                            }}
+                          >
                             {new Date(item.exp_date).toLocaleDateString()}
                           </span>
-                        ) : '—'}
+                        ) : (
+                          "—"
+                        )}
                       </td>
                       <td>
-                        {isInactive
-                          ? <span className="badge badge-gray">Out of Stock</span>
-                          : isExpired ? <span className="badge badge-red">Expired</span>
-                          : isExpiringSoon ? <span className="badge badge-amber">Expiring Soon</span>
-                          : isLow ? <span className="badge badge-red">Low Stock</span>
-                          : <span className="badge badge-green">In Stock</span>}
+                        {isInactive ? (
+                          <span className="badge badge-gray">Out of Stock</span>
+                        ) : isExpired ? (
+                          <span className="badge badge-red">Expired</span>
+                        ) : isExpiringSoon ? (
+                          <span className="badge badge-amber">
+                            Expiring Soon
+                          </span>
+                        ) : isLow ? (
+                          <span className="badge badge-red">Low Stock</span>
+                        ) : (
+                          <span className="badge badge-green">In Stock</span>
+                        )}
                       </td>
                       {canEditInventory && (
-                        <td style={{ textAlign: 'center' }}>
-                          <button className="btn btn-outline btn-sm btn-icon" title="Edit batch" aria-label="Edit batch" onClick={() => openEdit(item)}>
-                            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>edit</span>
+                        <td style={{ textAlign: "center" }}>
+                          <button
+                            className="btn btn-outline btn-sm btn-icon"
+                            title="Edit batch"
+                            aria-label="Edit batch"
+                            onClick={() => openEdit(item)}
+                          >
+                            <span
+                              className="material-symbols-outlined"
+                              style={{ fontSize: 16 }}
+                            >
+                              edit
+                            </span>
                           </button>
                         </td>
                       )}
@@ -493,241 +704,622 @@ export default function Inventory() {
             </table>
           )}
         </div>
-        <Pagination page={page} totalPages={totalPages} totalItems={totalItems}
-          pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          totalItems={totalItems}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+        />
       </div>
 
       {/* Manual Add Inventory Modal — for migrating stock from the previous system.
           No purchase / supplier / ledger records are created here, only inventory rows. */}
-      <Modal isOpen={invModal} onClose={() => setInvModal(false)}
+      <Modal
+        isOpen={invModal}
+        onClose={() => setInvModal(false)}
         title="Add Inventory Manually"
         size="xl"
         footer={
-            <button className="btn btn-primary btn-std" onClick={handleSaveInventory} disabled={invSaving}>
-              {invSaving ? 'Saving...' : 'Save Inventory'}
-            </button>
-        }>
-
+          <button
+            className="btn btn-primary btn-std"
+            onClick={handleSaveInventory}
+            disabled={invSaving}
+          >
+            {invSaving ? "Saving..." : "Save Inventory"}
+          </button>
+        }
+      >
         {/* Column headers */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: '2fr 0.7fr 1fr 1fr 0.7fr 1fr 1fr 1fr 90px 36px',
-          gap: 5, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 5,
-          fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase'
-        }}>
-          <span>Product *</span><span>Pack</span><span>Batch No *</span><span>Exp Date *</span>
-          <span>Qty *</span>{canViewPurchaseRates ? <span>Purch.Rate *</span> : <span style={{ color: 'var(--gray-400)' }}>Purch.Rate</span>}
-          <span>Sale Rate</span><span>Retail Price *</span><span>Low Stock At</span><span></span>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns:
+              "2fr 0.7fr 1fr 1fr 0.7fr 1fr 1fr 1fr 90px 36px",
+            gap: 5,
+            padding: "5px 8px",
+            background: "var(--gray-50)",
+            borderRadius: 6,
+            marginBottom: 5,
+            fontSize: 10,
+            fontWeight: 700,
+            color: "var(--gray-500)",
+            textTransform: "uppercase",
+          }}
+        >
+          <span>Product *</span>
+          <span>Pack</span>
+          <span>Batch No *</span>
+          <span>Exp Date *</span>
+          <span>Qty *</span>
+          {canViewPurchaseRates ? (
+            <span>Purch.Rate *</span>
+          ) : (
+            <span style={{ color: "var(--gray-400)" }}>Purch.Rate</span>
+          )}
+          <span>Sale Rate</span>
+          <span>Retail Price *</span>
+          <span>Low Stock At</span>
+          <span></span>
         </div>
 
         {invItems.map((item, idx) => (
           <div key={item.row_id || idx} style={{ marginBottom: 6 }}>
             {(item._expConflict || item._priceConflict) && (
-              <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '4px 10px', marginBottom: 3, fontSize: 11, color: '#92400e' }}>
-                ⚠ {item._expConflict && `Expiry conflict (existing: ${item._existingBatch?.exp_date?.split('T')[0]})`}
-                {item._expConflict && item._priceConflict && ' · '}
-                {item._priceConflict && `Retail price conflict (existing: PKR ${Math.round(item._existingBatch?.retail_price)})`}
-                {' — saving will add this qty on top of the existing batch.'}
+              <div
+                style={{
+                  background: "#fffbeb",
+                  border: "1px solid #fde68a",
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  marginBottom: 3,
+                  fontSize: 11,
+                  color: "#92400e",
+                }}
+              >
+                ⚠{" "}
+                {item._expConflict &&
+                  `Expiry conflict (existing: ${item._existingBatch?.exp_date?.split("T")[0]})`}
+                {item._expConflict && item._priceConflict && " · "}
+                {item._priceConflict &&
+                  `Retail price conflict (existing: PKR ${Math.round(item._existingBatch?.retail_price)})`}
+                {" — saving will add this qty on top of the existing batch."}
               </div>
             )}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: '2fr 0.7fr 1fr 1fr 0.7fr 1fr 1fr 1fr 90px 36px',
-              gap: 5, alignItems: 'center', padding: '7px 8px',
-              background: item._expConflict || item._priceConflict ? '#fffbeb' : 'white',
-              border: `1.5px solid ${item._expConflict || item._priceConflict ? '#fde68a' : 'var(--gray-200)'}`,
-              borderRadius: 8
-            }}>
-              <div style={{ position: 'relative' }}>
-                <input className="form-control" style={inputSm} value={item.product_search}
-                  placeholder="Search product" autoComplete="off"
-                  onChange={e => updateInvItem(idx, 'product_search', e.target.value)}
-                  onBlur={() => setTimeout(() => {
-                    setInvItems(prev => {
-                      const updated = [...prev];
-                      const it = updated[idx];
-                      if (it && !it.product_id) {
-                        updated[idx] = { ...it, product_search: '' };
-                      }
-                      return updated;
-                    });
-                  }, 150)}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "2fr 0.7fr 1fr 1fr 0.7fr 1fr 1fr 1fr 90px 36px",
+                gap: 5,
+                alignItems: "center",
+                padding: "7px 8px",
+                background:
+                  item._expConflict || item._priceConflict
+                    ? "#fffbeb"
+                    : "white",
+                border: `1.5px solid ${item._expConflict || item._priceConflict ? "#fde68a" : "var(--gray-200)"}`,
+                borderRadius: 8,
+              }}
+            >
+              <div style={{ position: "relative" }}>
+                <input
+                  className="form-control"
+                  style={inputSm}
+                  value={item.product_search}
+                  placeholder="Search product"
+                  autoComplete="off"
+                  onChange={(e) =>
+                    updateInvItem(idx, "product_search", e.target.value)
+                  }
+                  onBlur={() =>
+                    setTimeout(() => {
+                      setInvItems((prev) => {
+                        const updated = [...prev];
+                        const it = updated[idx];
+                        if (it && !it.product_id) {
+                          updated[idx] = { ...it, product_search: "" };
+                        }
+                        return updated;
+                      });
+                    }, 150)
+                  }
                 />
                 {item.product_search && !item.product_id && (
-                  <div style={{
-                    position: 'absolute', top: 38, left: 0, right: 0, zIndex: 20,
-                    background: 'white', border: '1px solid var(--gray-200)', borderRadius: 8,
-                    boxShadow: '0 10px 20px rgba(0,0,0,0.08)', maxHeight: 220, overflowY: 'auto'
-                  }}>
-                    {getProductSuggestions(products, item.product_search).map(prod => (
-                      <button key={prod.id} type="button" onMouseDown={() => selectProduct(idx, prod)}
-                        style={{
-                          width: '100%', textAlign: 'left', padding: '9px 12px', border: 'none',
-                          background: 'white', cursor: 'pointer', fontSize: 13, color: 'var(--gray-900)'
-                        }}>
-                        {prod.name}
-                      </button>
-                    ))}
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: 38,
+                      left: 0,
+                      right: 0,
+                      zIndex: 20,
+                      background: "white",
+                      border: "1px solid var(--gray-200)",
+                      borderRadius: 8,
+                      boxShadow: "0 10px 20px rgba(0,0,0,0.08)",
+                      maxHeight: 220,
+                      overflowY: "auto",
+                    }}
+                  >
+                    {getProductSuggestions(products, item.product_search).map(
+                      (prod) => (
+                        <button
+                          key={prod.id}
+                          type="button"
+                          onMouseDown={() => selectProduct(idx, prod)}
+                          style={{
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "9px 12px",
+                            border: "none",
+                            background: "white",
+                            cursor: "pointer",
+                            fontSize: 13,
+                            color: "var(--gray-900)",
+                          }}
+                        >
+                          {prod.name}
+                        </button>
+                      ),
+                    )}
                   </div>
                 )}
               </div>
 
-              <input className="form-control" style={inputSm} placeholder="Pack"
-                value={item.pack_size} onChange={e => updateInvItem(idx, 'pack_size', e.target.value)} />
+              <input
+                className="form-control"
+                style={inputSm}
+                placeholder="Pack"
+                value={item.pack_size}
+                onChange={(e) =>
+                  updateInvItem(idx, "pack_size", e.target.value)
+                }
+              />
 
-              <input className="form-control" style={{ ...inputSm, borderColor: !item.batch_no && item.product_id ? 'var(--red)' : undefined }}
-                placeholder="Batch *" value={item.batch_no}
-                onChange={e => updateInvItem(idx, 'batch_no', e.target.value)} />
+              <input
+                className="form-control"
+                style={{
+                  ...inputSm,
+                  borderColor:
+                    !item.batch_no && item.product_id
+                      ? "var(--red)"
+                      : undefined,
+                }}
+                placeholder="Batch *"
+                value={item.batch_no}
+                onChange={(e) => updateInvItem(idx, "batch_no", e.target.value)}
+              />
 
-              <input className="form-control" type="date"
-                style={{ ...inputSm, width: '100%', borderColor: !item.exp_date && item.product_id ? 'var(--red)' : undefined }}
-                value={item.exp_date} onChange={e => updateInvItem(idx, 'exp_date', e.target.value)} />
+              <input
+                className="form-control"
+                type="date"
+                style={{
+                  ...inputSm,
+                  width: "100%",
+                  borderColor:
+                    !item.exp_date && item.product_id
+                      ? "var(--red)"
+                      : undefined,
+                }}
+                value={item.exp_date}
+                onChange={(e) => updateInvItem(idx, "exp_date", e.target.value)}
+              />
 
-              <input className="form-control" type="number" step="1" min="0" style={{ ...inputSm, borderColor: !item.qty && item.product_id ? 'var(--red)' : undefined }}
-                placeholder="Qty *" value={item.qty}
-                onChange={e => updateInvItem(idx, 'qty', e.target.value)}
-                inputMode="numeric" />
+              <input
+                className="form-control"
+                type="number"
+                step="1"
+                min="0"
+                style={{
+                  ...inputSm,
+                  borderColor:
+                    !item.qty && item.product_id ? "var(--red)" : undefined,
+                }}
+                placeholder="Qty *"
+                value={item.qty}
+                onChange={(e) => updateInvItem(idx, "qty", e.target.value)}
+                inputMode="numeric"
+              />
 
               {canViewPurchaseRates ? (
-                <input className="form-control" type="number" style={{ ...inputSm, borderColor: !item.purchase_rate && item.product_id ? 'var(--red)' : undefined }}
-                  placeholder="Rate *" value={item.purchase_rate}
-                  onChange={e => updateInvItem(idx, 'purchase_rate', e.target.value)} />
+                <input
+                  className="form-control"
+                  type="number"
+                  style={{
+                    ...inputSm,
+                    borderColor:
+                      !item.purchase_rate && item.product_id
+                        ? "var(--red)"
+                        : undefined,
+                  }}
+                  placeholder="Rate *"
+                  value={item.purchase_rate}
+                  onChange={(e) =>
+                    updateInvItem(idx, "purchase_rate", e.target.value)
+                  }
+                />
               ) : (
-                <div style={{ fontSize: 11, color: 'var(--gray-400)', textAlign: 'center' }}>Hidden</div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--gray-400)",
+                    textAlign: "center",
+                  }}
+                >
+                  Hidden
+                </div>
               )}
 
-              <input className="form-control" type="number" style={inputSm}
-                placeholder="Sale Rate" value={item.sale_rate}
-                onChange={e => updateInvItem(idx, 'sale_rate', e.target.value)} />
+              <input
+                className="form-control"
+                type="number"
+                style={inputSm}
+                placeholder="Sale Rate"
+                value={item.sale_rate}
+                onChange={(e) =>
+                  updateInvItem(idx, "sale_rate", e.target.value)
+                }
+              />
 
-              <input className="form-control" type="number" style={{ ...inputSm, borderColor: !item.retail_price && item.product_id ? 'var(--red)' : undefined }}
-                placeholder="Retail *" value={item.retail_price}
-                onChange={e => updateInvItem(idx, 'retail_price', e.target.value)} />
+              <input
+                className="form-control"
+                type="number"
+                style={{
+                  ...inputSm,
+                  borderColor:
+                    !item.retail_price && item.product_id
+                      ? "var(--red)"
+                      : undefined,
+                }}
+                placeholder="Retail *"
+                value={item.retail_price}
+                onChange={(e) =>
+                  updateInvItem(idx, "retail_price", e.target.value)
+                }
+              />
 
-              <input className="form-control no-spinner" type="number" step="1" min="0" style={inputSm}
-                placeholder="10" value={item.low_stock_threshold}
-                onChange={e => updateInvItem(idx, 'low_stock_threshold', e.target.value)}
-                inputMode="numeric" />
+              <input
+                className="form-control no-spinner"
+                type="number"
+                step="1"
+                min="0"
+                style={inputSm}
+                placeholder="10"
+                value={item.low_stock_threshold}
+                onChange={(e) =>
+                  updateInvItem(idx, "low_stock_threshold", e.target.value)
+                }
+                inputMode="numeric"
+              />
 
               <button
                 title="Remove row"
                 onClick={() => removeInvRow(idx)}
                 disabled={invItems.length === 1}
                 style={{
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: 24, height: 24, padding: 0, borderRadius: 4, boxSizing: 'border-box',
-                  fontSize: 12, lineHeight: 1,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 24,
+                  height: 24,
+                  padding: 0,
+                  borderRadius: 4,
+                  boxSizing: "border-box",
+                  fontSize: 12,
+                  lineHeight: 1,
                 }}
               >
-                <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true" focusable="false" style={{ display: 'block' }}>
-                  <path d="M2 2l8 8M10 2L2 10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                <svg
+                  viewBox="0 0 12 12"
+                  width="10"
+                  height="10"
+                  aria-hidden="true"
+                  focusable="false"
+                  style={{ display: "block" }}
+                >
+                  <path
+                    d="M2 2l8 8M10 2L2 10"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
                 </svg>
               </button>
             </div>
           </div>
         ))}
 
-        <button className="btn btn-outline btn-sm mt-2" onClick={addInvRow}>+ Add Row</button>
+        <button className="btn btn-outline btn-sm mt-2" onClick={addInvRow}>
+          + Add Row
+        </button>
       </Modal>
 
       {/* Edit Inventory Batch Modal — only batch_no, qty, exp_date, sale_rate,
           retail_price, and low_stock_threshold can be changed here. */}
-      <Modal isOpen={editModal} onClose={() => { setEditModal(false); setEditItem(null); }}
+      <Modal
+        isOpen={editModal}
+        onClose={() => {
+          setEditModal(false);
+          setEditItem(null);
+        }}
         title="Edit Inventory Batch"
         size="md"
         footer={
           <>
-            <button className="btn btn-outline btn-std" onClick={() => { setEditModal(false); setEditItem(null); }} disabled={editSaving}>
+            <button
+              className="btn btn-outline btn-std"
+              onClick={() => {
+                setEditModal(false);
+                setEditItem(null);
+              }}
+              disabled={editSaving}
+            >
               Cancel
             </button>
-            <button className="btn btn-primary btn-std" onClick={handleSaveEdit}
-              disabled={editSaving || (editItem && !!validateEditItem(editItem))}>
-              {editSaving ? 'Saving...' : 'Save Changes'}
+            <button
+              className="btn btn-primary btn-std"
+              onClick={handleSaveEdit}
+              disabled={
+                editSaving || (editItem && !!validateEditItem(editItem))
+              }
+            >
+              {editSaving ? "Saving..." : "Save Changes"}
             </button>
           </>
-        }>
-        {editItem && (() => {
-          const liveError = validateEditItem(editItem);
-          const fieldErrors = getEditFieldErrors(editItem);
-          const errorBorder = { borderColor: 'var(--red)' };
-          return (
-            <div>
-              <div style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                background: 'var(--gray-50)', borderRadius: 8, padding: '10px 14px', marginBottom: 16
-              }}>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>{editItem.product_name}</div>
-                  <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>{editItem.pack_size || '—'}</div>
+        }
+      >
+        {editItem &&
+          (() => {
+            const liveError = validateEditItem(editItem);
+            const fieldErrors = getEditFieldErrors(editItem);
+            const errorBorder = { borderColor: "var(--red)" };
+            return (
+              <div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    background: "var(--gray-50)",
+                    borderRadius: 8,
+                    padding: "10px 14px",
+                    marginBottom: 16,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>
+                      {editItem.product_name}
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--gray-500)" }}>
+                      {editItem.pack_size || "—"}
+                    </div>
+                  </div>
+                  {canViewPurchaseRates &&
+                    editItem.show_purchase_rate !== false &&
+                    editItem.show_purchase_rate !== 0 && (
+                      <div style={{ textAlign: "right" }}>
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: "var(--gray-500)",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          Purchase Rate
+                        </div>
+                        <div style={{ fontWeight: 700, fontSize: 14 }}>
+                          {formatCurrency(editItem.purchase_rate)}
+                        </div>
+                      </div>
+                    )}
                 </div>
-                {canViewPurchaseRates && (editItem.show_purchase_rate !== false && editItem.show_purchase_rate !== 0) && (
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: 11, color: 'var(--gray-500)', textTransform: 'uppercase' }}>Purchase Rate</div>
-                    <div style={{ fontWeight: 700, fontSize: 14 }}>{formatCurrency(editItem.purchase_rate)}</div>
+
+                {/* Dynamic runtime error listener — reflects the current form state on every keystroke */}
+                {liveError && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      background: "#fef2f2",
+                      border: "1px solid #fecaca",
+                      color: "var(--red)",
+                      borderRadius: 6,
+                      padding: "6px 10px",
+                      marginBottom: 10,
+                      fontSize: 12,
+                      fontWeight: 600,
+                    }}
+                  >
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: 15 }}
+                    >
+                      error
+                    </span>
+                    {liveError}
                   </div>
                 )}
-              </div>
 
-              {/* Dynamic runtime error listener — reflects the current form state on every keystroke */}
-              {liveError && (
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  background: '#fef2f2', border: '1px solid #fecaca', color: 'var(--red)',
-                  borderRadius: 6, padding: '6px 10px', marginBottom: 10, fontSize: 12, fontWeight: 600
-                }}>
-                  <span className="material-symbols-outlined" style={{ fontSize: 15 }}>error</span>
-                  {liveError}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    columnGap: 12,
+                    rowGap: 7,
+                  }}
+                >
+                  <div className="form-group">
+                    <label className="form-label">Batch No *</label>
+                    <input
+                      className="form-control"
+                      value={editItem.batch_no}
+                      style={fieldErrors.batch_no ? errorBorder : undefined}
+                      onChange={(e) =>
+                        updateEditField("batch_no", e.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Qty *</label>
+                    <input
+                      className="form-control"
+                      type="number"
+                      step="1"
+                      min="0"
+                      style={fieldErrors.qty ? errorBorder : undefined}
+                      value={editItem.qty}
+                      onChange={(e) => updateEditField("qty", e.target.value)}
+                      inputMode="numeric"
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Expiry Date</label>
+                    <input
+                      className="form-control"
+                      type="date"
+                      style={fieldErrors.exp_date ? errorBorder : undefined}
+                      value={editItem.exp_date}
+                      onChange={(e) =>
+                        updateEditField("exp_date", e.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Low Stock Threshold</label>
+                    <input
+                      className="form-control no-spinner"
+                      type="number"
+                      step="1"
+                      min="1"
+                      style={
+                        fieldErrors.low_stock_threshold
+                          ? errorBorder
+                          : undefined
+                      }
+                      value={editItem.low_stock_threshold}
+                      onChange={(e) =>
+                        updateEditField("low_stock_threshold", e.target.value)
+                      }
+                      inputMode="numeric"
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Sale Rate *</label>
+                    <input
+                      className="form-control"
+                      type="number"
+                      step="0.01"
+                      style={fieldErrors.sale_rate ? errorBorder : undefined}
+                      value={editItem.sale_rate}
+                      onChange={(e) =>
+                        updateEditField("sale_rate", e.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Retail Price *</label>
+                    <input
+                      className="form-control"
+                      type="number"
+                      step="0.01"
+                      style={fieldErrors.retail_price ? errorBorder : undefined}
+                      value={editItem.retail_price}
+                      onChange={(e) =>
+                        updateEditField("retail_price", e.target.value)
+                      }
+                    />
+                  </div>
                 </div>
+              </div>
+            );
+          })()}
+      </Modal>
+
+      {/* Print Inventory Modal — company filter only; date filtering is not wired up
+          yet, so the PDF always stamps today's date server-side. */}
+      <Modal
+        isOpen={printModal}
+        onClose={() => setPrintModal(false)}
+        title="Print Inventory"
+        size="sm"
+        footer={
+          <>
+            <button
+              className="btn btn-outline btn-std"
+              onClick={() => setPrintModal(false)}
+              disabled={printLoading}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn btn-primary btn-std"
+              onClick={handlePrintInventory}
+              disabled={printLoading}
+            >
+              {printLoading ? (
+                <>
+                  <span
+                    className="spinner spinner-border"
+                    style={{
+                      width: "16px",
+                      height: "16px",
+                      marginRight: 6,
+                      borderWidth: "2px",
+                    }}
+                  />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <span
+                    className="material-symbols-outlined"
+                    style={{
+                      fontSize: 16,
+                      verticalAlign: "middle",
+                      marginRight: 4,
+                    }}
+                  >
+                    picture_as_pdf
+                  </span>
+                  Generate PDF
+                </>
               )}
+            </button>
+          </>
+        }
+      >
+        <div className="form-group">
+          <label className="form-label">Company</label>
+          <select
+            className="form-control"
+            value={printCompany}
+            onChange={(e) => setPrintCompany(e.target.value)}
+          >
+            <option value="">All Companies</option>
+            {companies.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12, rowGap: 7 }}>
-                <div className="form-group">
-                  <label className="form-label">Batch No *</label>
-                  <input className="form-control" value={editItem.batch_no}
-                    style={fieldErrors.batch_no ? errorBorder : undefined}
-                    onChange={e => updateEditField('batch_no', e.target.value)} />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Qty *</label>
-                  <input className="form-control" type="number" step="1" min="0"
-                    style={fieldErrors.qty ? errorBorder : undefined}
-                    value={editItem.qty} onChange={e => updateEditField('qty', e.target.value)}
-                    inputMode="numeric" />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Expiry Date</label>
-                  <input className="form-control" type="date"
-                    style={fieldErrors.exp_date ? errorBorder : undefined}
-                    value={editItem.exp_date} onChange={e => updateEditField('exp_date', e.target.value)} />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Low Stock Threshold</label>
-                  <input className="form-control no-spinner" type="number" step="1" min="1"
-                    style={fieldErrors.low_stock_threshold ? errorBorder : undefined}
-                    value={editItem.low_stock_threshold} onChange={e => updateEditField('low_stock_threshold', e.target.value)}
-                    inputMode="numeric" />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Sale Rate *</label>
-                  <input className="form-control" type="number" step="0.01"
-                    style={fieldErrors.sale_rate ? errorBorder : undefined}
-                    value={editItem.sale_rate} onChange={e => updateEditField('sale_rate', e.target.value)} />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Retail Price *</label>
-                  <input className="form-control" type="number" step="0.01"
-                    style={fieldErrors.retail_price ? errorBorder : undefined}
-                    value={editItem.retail_price} onChange={e => updateEditField('retail_price', e.target.value)} />
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+        <div className="form-group">
+          <label className="form-label">Date</label>
+          <input
+            className="form-control"
+            value={new Date().toLocaleDateString("en-GB")}
+            disabled
+            style={{ background: "var(--gray-50)", color: "var(--gray-500)" }}
+          />
+        </div>
       </Modal>
     </Layout>
   );
