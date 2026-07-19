@@ -7,8 +7,9 @@ import { formatCurrency } from '../../utils/formatters';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
 import CustomerAutocomplete from '../../components/common/CustomerAutocomplete';
+import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
 
-const today = () => new Date().toISOString().split('T')[0];
+const today = () => todayPKT();
 const fmt = formatCurrency;
 
 // Number inputs change value on mouse-wheel/trackpad scroll by default when focused.
@@ -51,7 +52,7 @@ function ReturnTable({ lines, items, isCross, updateReturnLine, fmt }) {
               const threshold = new Date(expiry);
               threshold.setMonth(threshold.getMonth() - 5);
               expiryBlocked = new Date() > threshold;
-              expiryLabel = expiry.toLocaleDateString();
+              expiryLabel = formatDatePKT(expiry);
             }
             return (
               <div key={line.row_id || idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: expiryBlocked ? '#fff7ed' : 'white', border: `1.5px solid ${expiryBlocked ? 'var(--amber)' : 'var(--gray-200)'}`, borderRadius: 8 }}>
@@ -345,7 +346,7 @@ export default function Recovery() {
         threshold.setMonth(threshold.getMonth() - 5);
         if (new Date() > threshold) {
           return toast.error(
-            `Return blocked for "${retLine.product_name}" (Batch: ${retLine.batch_no}): expires ${expiry.toLocaleDateString()} — within 5-month return window.`
+            `Return blocked for "${retLine.product_name}" (Batch: ${retLine.batch_no}): expires ${formatDatePKT(expiry)} — within 5-month return window.`
           );
         }
       }
@@ -508,7 +509,7 @@ export default function Recovery() {
                     return (
                       <tr key={s.id} style={{ cursor: 'pointer' }} onClick={() => openHistory(s)} title="Click to view payment history">
                         <td className="mono">{s.invoice_no || '—'}</td>
-                        <td>{new Date(s.date).toLocaleDateString()}</td>
+                        <td>{formatDatePKT(s.date)}</td>
                         <td style={{ fontWeight: 600 }}>{s.customer_name}</td>
                         <td>{s.salesman_name || '—'}</td>
                         <td>{[s.city_name, s.area_name].filter(Boolean).join(' / ') || '—'}</td>
@@ -565,7 +566,7 @@ export default function Recovery() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, padding: '10px 14px', background: 'var(--blue-ultra)', border: '1px solid var(--blue-pale)', borderRadius: 10, marginBottom: 18 }}>
               <div><div style={{ fontSize: 10, color: 'var(--gray-500)', marginBottom: 2 }}>Customer</div><div style={{ fontWeight: 700 }}>{saleDetail.customer_name}</div></div>
               <div><div style={{ fontSize: 10, color: 'var(--gray-500)', marginBottom: 2 }}>Invoice</div><span className="badge badge-green">{saleDetail.invoice_no}</span></div>
-              <div><div style={{ fontSize: 10, color: 'var(--gray-500)', marginBottom: 2 }}>Date</div><div style={{ fontWeight: 600 }}>{new Date(saleDetail.date).toLocaleDateString()}</div></div>
+              <div><div style={{ fontSize: 10, color: 'var(--gray-500)', marginBottom: 2 }}>Date</div><div style={{ fontWeight: 600 }}>{formatDatePKT(saleDetail.date)}</div></div>
               <div><div style={{ fontSize: 10, color: 'var(--gray-500)', marginBottom: 2 }}>Invoice Total</div><div style={{ fontWeight: 800, color: 'var(--navy)', fontSize: 15 }}>{fmt(saleDetail.total_amount)}</div></div>
             </div>
 
@@ -685,7 +686,7 @@ export default function Recovery() {
                     <option value="">— Select Invoice —</option>
                     {eligibleReturnInvoices.map(s => (
                       <option key={s.id} value={s.id}>
-                        {s.invoice_no} — {new Date(s.date).toLocaleDateString()} — {fmt(s.total_amount)}{s.is_locked ? ' (Locked)' : ''}
+                        {s.invoice_no} — {formatDatePKT(s.date)} — {fmt(s.total_amount)}{s.is_locked ? ' (Locked)' : ''}
                       </option>
                     ))}
                   </select>
@@ -726,7 +727,7 @@ export default function Recovery() {
                       return (
                         <div key={inv.id} style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1fr 1fr 1.2fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: 'white', border: '1.5px solid var(--gray-200)', borderRadius: 8 }}>
                           <div className="mono" style={{ fontWeight: 600, fontSize: 13 }}>{inv.invoice_no}</div>
-                          <div>{new Date(inv.date).toLocaleDateString()}</div>
+                          <div>{formatDatePKT(inv.date)}</div>
                           <div style={{ fontWeight: 700 }}>{fmt(inv.total_amount)}</div>
                           <div style={{ color: 'var(--green)' }}>{fmt(inv.total_recovered)}</div>
                           <div style={{ fontWeight: 700, color: 'var(--amber)' }}>{fmt(pend)}</div>
@@ -806,7 +807,7 @@ export default function Recovery() {
                 </div>
                 {historyList.map(h => (
                   <div key={h.id} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1.4fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: 'white', border: '1.5px solid var(--gray-200)', borderRadius: 8 }}>
-                    <div>{new Date(h.date).toLocaleDateString()}</div>
+                    <div>{formatDatePKT(h.date)}</div>
                     <div style={{ color: parseFloat(h.total_discount) > 0 ? 'var(--amber)' : 'var(--gray-400)' }}>{fmt(h.total_discount)}</div>
                     <div style={{ color: parseFloat(h.total_return_amount) > 0 ? 'var(--amber)' : 'var(--gray-400)' }}>{fmt(h.total_return_amount)}</div>
                     <div style={{ fontWeight: 700, color: 'var(--green)' }}>{fmt(h.net_collected)}</div>

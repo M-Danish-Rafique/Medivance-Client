@@ -4,6 +4,7 @@ import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { formatCurrency } from '../../utils/formatters';
 import CustomerAutocomplete from '../../components/common/CustomerAutocomplete';
+import { formatDatePKT } from '../../utils/dateUtils';
 
 const fmt = formatCurrency;
 
@@ -320,7 +321,7 @@ export default function Reports() {
                   <tbody>
                     {rowsWithBalance.map((row, i) => (
                       <tr key={i}>
-                        <td>{new Date(row.date).toLocaleDateString()}</td>
+                        <td>{formatDatePKT(row.date)}</td>
                         <td>{row.invoice_no || '—'}</td>
                         <td>{row.description || '—'}</td>
                         <td style={{ textAlign: 'right' }}>{parseFloat(row.dr) > 0 ? fmt(row.dr) : '—'}</td>
@@ -399,7 +400,7 @@ export default function Reports() {
                       {salesRows.map((row, i) => (
                         <tr key={row.id}>
                           <td>{i + 1}</td>
-                          <td>{new Date(row.date).toLocaleDateString()}</td>
+                          <td>{formatDatePKT(row.date)}</td>
                           <td className="mono">{row.invoice_no}</td>
                           <td style={{ fontWeight: 600 }}>{row.customer_name}</td>
                           <td style={{ textAlign: 'right' }}>{fmt(row.gross_amount)}</td>
@@ -487,7 +488,7 @@ export default function Reports() {
                       {recRows.map((row, i) => (
                         <tr key={row.id}>
                           <td>{i + 1}</td>
-                          <td>{new Date(row.date).toLocaleDateString()}</td>
+                          <td>{formatDatePKT(row.date)}</td>
                           <td style={{ fontWeight: 600 }}>{row.customer_name}</td>
                           <td style={{ textAlign: 'right' }}>{fmt(row.gross_amount)}</td>
                           <td style={{ textAlign: 'right' }}>{fmt(row.recovered_amount)}</td>

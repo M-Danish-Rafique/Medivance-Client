@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
 import { useAuth } from '../../context/AuthContext';
+import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
 
 const emptyItem = {
   row_id: null,
@@ -18,7 +19,7 @@ const emptyItem = {
 
 const createPurchaseItem = () => ({ ...emptyItem, row_id: `purchase-${Date.now()}-${Math.random().toString(16).slice(2)}` });
 
-const today = () => new Date().toISOString().split('T')[0];
+const today = () => todayPKT();
 const fmtPKR = (n) => `PKR ${Math.round(parseFloat(n || 0)).toLocaleString()}`;
 
 const getProductSuggestions = (products, query) => {
@@ -257,7 +258,7 @@ export default function Purchase() {
                       <td className="mono" style={{ color: 'var(--gray-700)' }}>{p.purchase_id}</td>
                       <td className="mono">{p.invoice_no || '—'}</td>
                       <td>{p.supplier_name}</td>
-                      <td>{new Date(p.date).toLocaleDateString()}</td>
+                      <td>{formatDatePKT(p.date)}</td>
                       <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtPKR(p.total_amount)}</td>
                       <td style={{ textAlign: 'right' }}>
                         <div className="flex gap-2" style={{ justifyContent: 'flex-end' }}>
@@ -472,7 +473,7 @@ export default function Purchase() {
               {[
                 { label: 'Supplier', val: viewData.supplier_name },
                 { label: 'Invoice No', val: viewData.invoice_no || '—' },
-                { label: 'Date', val: new Date(viewData.date).toLocaleDateString() },
+                { label: 'Date', val: formatDatePKT(viewData.date) },
                 { label: 'Purchase ID', val: viewData.purchase_id },
                 { label: 'Total Amount', val: fmtPKR(viewData.total_amount), bold: true },
               ].map((s, i) => (
@@ -496,7 +497,7 @@ export default function Purchase() {
                     <td style={{ fontWeight: 600 }}>{it.product_name}</td>
                     <td>{it.pack_size || '—'}</td>
                     <td className="mono">{it.batch_no || '—'}</td>
-                    <td style={{ fontSize: 12 }}>{it.exp_date ? new Date(it.exp_date).toLocaleDateString() : '—'}</td>
+                    <td style={{ fontSize: 12 }}>{it.exp_date ? formatDatePKT(it.exp_date) : '—'}</td>
                     <td>{it.qty}</td>
                     <td>{it.bonus || 0}</td>
                     <td className="mono">{canViewPurchaseRates ? `PKR ${Math.round(it.purchase_rate).toLocaleString()}` : '—'}</td>

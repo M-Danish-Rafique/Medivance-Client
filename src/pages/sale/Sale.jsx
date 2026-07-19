@@ -5,6 +5,7 @@ import ConfirmModal from '../../components/common/ConfirmModal';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { formatCurrency, handlePhoneInput } from '../../utils/formatters';
+import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
 import { useAuth } from '../../context/AuthContext';
@@ -33,7 +34,7 @@ const getProductSuggestions = (products, query) => {
     .map(item => item.product);
 };
 
-const today = () => new Date().toISOString().split('T')[0];
+const today = () => todayPKT();
 
 function openInvoicePrint(saleId, type) {
   window.open(`/invoice/${saleId}/print?type=${type}`, '_blank', 'width=960,height=760,scrollbars=yes');
@@ -124,7 +125,7 @@ function RateInfoPanel({ rateHistory, activeRowIdx, canViewPurchaseRates }) {
             {info.history && info.history[i] ? (
               <>
                 <div style={{ fontWeight: 700, color: 'var(--blue)' }}>{formatCurrency(info.history[i].sale_rate)}</div>
-                <div style={{ fontSize: 10, color: 'var(--gray-400)', marginTop: 2 }}>{new Date(info.history[i].date).toLocaleDateString()}</div>
+                <div style={{ fontSize: 10, color: 'var(--gray-400)', marginTop: 2 }}>{formatDatePKT(info.history[i].date)}</div>
               </>
             ) : (
               <div style={{ fontWeight: 600, color: 'var(--gray-400)' }}>N/A</div>
@@ -570,7 +571,7 @@ export default function Sale() {
                       <td>{s.customer_name}</td>
                       <td>{s.salesman_name || '—'}</td>
                       <td>{s.delivery_by_name || '—'}</td>
-                      <td>{new Date(s.date).toLocaleDateString()}</td>
+                      <td>{formatDatePKT(s.date)}</td>
                       <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--green)' }}>{fmt(s.total_amount)}</td>
                       <td>
                         {s.is_locked
@@ -649,7 +650,7 @@ export default function Sale() {
               <div>
                 <div className="text-sm text-muted">Invoice Details</div>
                 <div style={{ color: 'var(--gray-800)' }}>{viewData.invoice_no}</div>
-                <div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 4 }}>Date: {new Date(viewData.date).toLocaleDateString()}</div>
+                <div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 4 }}>Date: {formatDatePKT(viewData.date)}</div>
                 {viewData.salesman_name && <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>Salesman: {viewData.salesman_name}</div>}
                 {viewData.delivery_by_name && <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>Delivery By: {viewData.delivery_by_name}</div>}
               </div>
