@@ -21,7 +21,7 @@ function computeInvoiceRows(items, type) {
     const taxPct = parseNum(item.tax_pct || item.sale_tax_pct);
     const lineTotal = parseNum(item.total);
 
-    let prdId, rate, amount, effDiscPct, invAmount;
+    let prdId, rate, amount, effDiscPct, invAmount, taxAmount;
 
     if (isWarranty) {
       effDiscPct = discPct + (is10Disc ? 10 : 0);
@@ -29,6 +29,7 @@ function computeInvoiceRows(items, type) {
       amount = rate * qty;
       const discAmt = amount * effDiscPct / 100;
       invAmount = amount - discAmt;
+      taxAmount = 0;
 
       if (is10Disc) {
         const afterDisc = amount * (1 - effDiscPct / 100);
@@ -38,11 +39,14 @@ function computeInvoiceRows(items, type) {
         prdId = qty > 0 ? Math.round(lineTotal / qty) : Math.round(lineTotal);
       }
     } else {
+      // Non-warranty: sale rate, then discount, then tax% on post-discount amount
       effDiscPct = discPct;
       prdId = parseInt(item.product_id, 10) || item.product_id;
       rate = saleRate > 0 ? saleRate : retailPrice;
       amount = rate * qty;
-      invAmount = amount - (amount * effDiscPct / 100);
+      const afterDisc = amount * (1 - effDiscPct / 100);
+      taxAmount = afterDisc * (taxPct / 100);
+      invAmount = afterDisc + taxAmount;
     }
 
     return {
@@ -58,17 +62,19 @@ function computeInvoiceRows(items, type) {
       disc_pct: effDiscPct,
       inv_amount: invAmount,
       tax_pct: taxPct,
+      tax_amount: taxAmount,
     };
   });
 
   const grossAmount = rows.reduce((s, r) => s + r.amount, 0);
+  const totalTaxAmount = rows.reduce((s, r) => s + (r.tax_amount || 0), 0);
+  const totalDiscAmount = rows.reduce((s, r) => s + r.amount * (r.disc_pct / 100), 0);
   const netAmount = rows.reduce((s, r) => s + r.inv_amount, 0);
-  const totalDiscAmount = grossAmount - netAmount;
   const referenceNo = isWarranty
     ? rows.reduce((s, r) => s + (parseInt(r.prd_id, 10) || 0) * r.qty, 0)
     : null;
 
-  return { rows, grossAmount, netAmount, totalDiscAmount, referenceNo };
+  return { rows, grossAmount, netAmount, totalDiscAmount, totalTaxAmount, referenceNo };
 }
 
 export { computeInvoiceRows };

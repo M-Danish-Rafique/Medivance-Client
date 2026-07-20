@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useCompany } from '../../context/CompanyContext';
 import CompanyLogo from '../../components/common/CompanyLogo';
 import toast from 'react-hot-toast';
+import { yearPKT } from '../../utils/dateUtils';
 
 export default function Login() {
   const [form, setForm] = useState({ username: '', password: '' });
@@ -97,7 +98,7 @@ export default function Login() {
         </form>
 
         <div style={{ textAlign: 'center', marginTop: 28, paddingTop: 20, borderTop: '1px solid #e2e8f0' }}>
-          <div style={{ fontSize: 11, color: '#94a3b8' }}>© {new Date().getFullYear()} {company.name} · All rights reserved</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>© {yearPKT()} {company.name} · All rights reserved</div>
         </div>
       </div>
     </div>

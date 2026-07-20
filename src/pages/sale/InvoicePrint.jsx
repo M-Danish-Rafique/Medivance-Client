@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { useParams, useSearchParams } from 'react-router-dom';
 import api from '../../utils/api';
 import { computeInvoiceRows } from '../../utils/invoiceCalculations';
-import { formatDatePKT } from '../../utils/dateUtils';
+import { formatDatePKT, formatMonthYearPKT } from '../../utils/dateUtils';
 import CompanyLogo from '../../components/common/CompanyLogo';
 
 const DEFAULT_COMPANY = { name: 'Medivance', address: '', phone: '', email: '', logo_url: '' };
@@ -105,7 +105,7 @@ function InvoiceDocument({ saleData, type, customerBalance, company, printedAt }
 
   const isWarranty = type === 'warranty' || type === 'warranty10';
 
-  const { rows: computedRows, grossAmount, netAmount, totalDiscAmount, referenceNo } =
+  const { rows: computedRows, grossAmount, netAmount, totalDiscAmount, totalTaxAmount, referenceNo } =
     computeInvoiceRows(items, type);
 
   const prevBalance = parseFloat(customerBalance || 0);
@@ -183,6 +183,7 @@ function InvoiceDocument({ saleData, type, customerBalance, company, printedAt }
               <th>RATE</th>
               <th>AMOUNT</th>
               <th>DISC%</th>
+              {!isWarranty && <th>TAX%</th>}
               <th>INV. AMOUNT</th>
             </tr>
           </thead>
@@ -195,10 +196,13 @@ function InvoiceDocument({ saleData, type, customerBalance, company, printedAt }
                 <td className="left">{row.product_name}</td>
                 <td>{row.pack_size || '—'}</td>
                 <td>{row.batch_no || '—'}</td>
-                <td>{fmtDate(row.exp_date)}</td>
+                <td>{formatMonthYearPKT(row.exp_date)}</td>
                 <td>{fmtNum(row.rate)}</td>
                 <td>{fmtNum(row.amount)}</td>
                 <td>{row.disc_pct > 0 ? row.disc_pct : '0.00'}</td>
+                {!isWarranty && (
+                  <td>{row.tax_pct > 0 ? row.tax_pct : '0.00'}</td>
+                )}
                 <td className="bold">{fmtNum(row.inv_amount)}</td>
               </tr>
             ))}
@@ -226,7 +230,7 @@ function InvoiceDocument({ saleData, type, customerBalance, company, printedAt }
             <div className="summary-line"><span>Gross Amount :</span><span>{fmtNum(grossAmount)}</span></div>
             <div className="summary-line"><span>Discount :</span><span>{fmtNum(totalDiscAmount)}</span></div>
             <div className="summary-line"><span>Sp. Discount :</span><span>0.00</span></div>
-            <div className="summary-line"><span>GST :</span><span>0.00</span></div>
+            <div className="summary-line"><span>GST :</span><span>{fmtNum(isWarranty ? 0 : totalTaxAmount)}</span></div>
             <div className="summary-line"><span>Advance Inc Tax :</span><span>0.00</span></div>
             <div className="summary-line"><span>Printing Charges :</span><span>0.00</span></div>
             <div className="summary-line summary-net"><span>Net Amount :</span><span>{fmtNum(netAmount)}</span></div>

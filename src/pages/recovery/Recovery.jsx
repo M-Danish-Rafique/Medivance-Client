@@ -7,7 +7,7 @@ import { formatCurrency } from '../../utils/formatters';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
 import CustomerAutocomplete from '../../components/common/CustomerAutocomplete';
-import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
+import { formatDatePKT, todayPKT, addMonthsPKT } from '../../utils/dateUtils';
 
 const today = () => todayPKT();
 const fmt = formatCurrency;
@@ -48,11 +48,10 @@ function ReturnTable({ lines, items, isCross, updateReturnLine, fmt }) {
             let expiryBlocked = false;
             let expiryLabel = null;
             if (line.exp_date) {
-              const expiry = new Date(line.exp_date);
-              const threshold = new Date(expiry);
-              threshold.setMonth(threshold.getMonth() - 5);
-              expiryBlocked = new Date() > threshold;
-              expiryLabel = formatDatePKT(expiry);
+              const expiryStr = String(line.exp_date).slice(0, 10);
+              const threshold = addMonthsPKT(expiryStr, -5);
+              expiryBlocked = todayPKT() > threshold;
+              expiryLabel = formatDatePKT(expiryStr);
             }
             return (
               <div key={line.row_id || idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: expiryBlocked ? '#fff7ed' : 'white', border: `1.5px solid ${expiryBlocked ? 'var(--amber)' : 'var(--gray-200)'}`, borderRadius: 8 }}>
@@ -341,12 +340,11 @@ export default function Recovery() {
     for (const retLine of allReturns) {
       if (!parseInt(retLine.qty_returned)) continue;
       if (retLine.exp_date) {
-        const expiry = new Date(retLine.exp_date);
-        const threshold = new Date(expiry);
-        threshold.setMonth(threshold.getMonth() - 5);
-        if (new Date() > threshold) {
+        const expiryStr = String(retLine.exp_date).slice(0, 10);
+        const threshold = addMonthsPKT(expiryStr, -5);
+        if (todayPKT() > threshold) {
           return toast.error(
-            `Return blocked for "${retLine.product_name}" (Batch: ${retLine.batch_no}): expires ${formatDatePKT(expiry)} — within 5-month return window.`
+            `Return blocked for "${retLine.product_name}" (Batch: ${retLine.batch_no}): expires ${formatDatePKT(expiryStr)} — within 5-month return window.`
           );
         }
       }

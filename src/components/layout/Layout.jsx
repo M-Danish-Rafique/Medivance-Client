@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatLongDatePKT } from '../../utils/dateUtils';
 
 /**
  * Per-page chrome: topbar + content area.
@@ -13,7 +14,7 @@ export default function Layout({ children, title }) {
         <div className="topbar-title">{title}</div>
         <div className="topbar-right">
           <span style={{ fontSize: 12, color: 'var(--gray-400)' }}>
-            {new Date().toLocaleDateString('en-PK', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+            {formatLongDatePKT()}
           </span>
         </div>
       </div>

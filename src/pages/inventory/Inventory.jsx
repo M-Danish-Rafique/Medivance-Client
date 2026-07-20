@@ -7,7 +7,7 @@ import { formatCurrency } from '../../utils/formatters';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
 import { useAuth } from '../../context/AuthContext';
-import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
+import { formatDatePKT, todayPKT, addMonthsPKT } from '../../utils/dateUtils';
 
 const emptyInventoryItem = {
   row_id: null,
@@ -217,11 +217,7 @@ export default function Inventory() {
 
   // ---------- Edit Inventory Batch modal logic ----------
 
-  const minAllowedExpDate = (() => {
-    const d = new Date();
-    d.setMonth(d.getMonth() + 3);
-    return todayPKT(d);
-  })();
+  const minAllowedExpDate = addMonthsPKT(todayPKT(), 3);
 
   const openEdit = (item) => {
     setEditItem({
