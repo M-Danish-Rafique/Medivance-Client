@@ -7,6 +7,7 @@ import { formatCurrency } from '../../utils/formatters';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
 import { useAuth } from '../../context/AuthContext';
+import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
 
 const emptyInventoryItem = {
   row_id: null,
@@ -219,7 +220,7 @@ export default function Inventory() {
   const minAllowedExpDate = (() => {
     const d = new Date();
     d.setMonth(d.getMonth() + 3);
-    return d.toISOString().split('T')[0];
+    return todayPKT(d);
   })();
 
   const openEdit = (item) => {
@@ -659,7 +660,7 @@ export default function Inventory() {
                                 isExpired || isExpiringSoon ? 700 : 400,
                             }}
                           >
-                            {new Date(item.exp_date).toLocaleDateString()}
+                            {formatDatePKT(item.exp_date)}
                           </span>
                         ) : (
                           "—"
@@ -1315,7 +1316,7 @@ export default function Inventory() {
           <label className="form-label">Date</label>
           <input
             className="form-control"
-            value={new Date().toLocaleDateString("en-GB")}
+            value={formatDatePKT(new Date())}
             disabled
             style={{ background: "var(--gray-50)", color: "var(--gray-500)" }}
           />

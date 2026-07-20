@@ -3,6 +3,7 @@ import Layout from '../../components/layout/Layout';
 import Modal from '../../components/common/Modal';
 import api from '../../utils/api';
 import { formatCurrency, formatDecimal } from '../../utils/formatters';
+import { formatDatePKT } from '../../utils/dateUtils';
 import toast from 'react-hot-toast';
 
 const emptyYieldItem = {
@@ -216,8 +217,8 @@ export default function Yields() {
                   {yields.map(y => (
                     <tr key={y.id}>
                       <td className="mono" style={{ color: 'var(--gray-700)' }}>{y.batch_code}</td>
-                      <td>{new Date(y.batch_date).toLocaleDateString()}</td>
-                      <td>{new Date(y.expiry_date).toLocaleDateString()}</td>
+                      <td>{formatDatePKT(y.batch_date)}</td>
+                      <td>{formatDatePKT(y.expiry_date)}</td>
                       <td>{y.item_count} SKUs</td>
                       <td style={{ fontWeight: 700 }}>{fmtPKR2(y.total_cost)}</td>
                       <td style={{ textAlign: 'right' }}>
@@ -265,7 +266,7 @@ export default function Yields() {
         {selectedBatch && (
           <div style={{ display: 'flex', gap: 12, marginBottom: 18, padding: '10px 14px', background: 'var(--blue-ultra)', border: '1px solid var(--blue-pale)', borderRadius: 10, fontSize: 12 }}>
             <div><span style={{ color: 'var(--gray-500)' }}>Batch:</span> <strong>{selectedBatch.batch_code}</strong></div>
-            <div><span style={{ color: 'var(--gray-500)' }}>Expiry:</span> <strong>{new Date(selectedBatch.expiry_date).toLocaleDateString()}</strong></div>
+            <div><span style={{ color: 'var(--gray-500)' }}>Expiry:</span> <strong>{formatDatePKT(selectedBatch.expiry_date)}</strong></div>
             <div><span style={{ color: 'var(--gray-500)' }}>Total Cost:</span> <strong>{fmtPKR2(selectedBatch.total_cost)}</strong></div>
             <div><span style={{ color: 'var(--gray-500)' }}>Cost/base unit:</span> <strong>{fmtPKR(selectedBatch.cost_per_base_unit)}</strong></div>
           </div>
@@ -375,8 +376,8 @@ export default function Yields() {
               {[
                 { label: 'Yield Code', val: viewData.yield_code },
                 { label: 'Batch Code', val: viewData.batch_code },
-                { label: 'Batch Date', val: new Date(viewData.batch_date).toLocaleDateString() },
-                { label: 'Expiry', val: new Date(viewData.expiry_date).toLocaleDateString() },
+                { label: 'Batch Date', val: formatDatePKT(viewData.batch_date) },
+                { label: 'Expiry', val: formatDatePKT(viewData.expiry_date) },
                 { label: 'Total Batch Cost', val: fmtPKR2(viewData.total_cost) },
               ].map((s, i) => (
                 <div key={i} style={{ padding: '8px 12px', background: 'var(--gray-50)', borderRadius: 8, minWidth: 120 }}>

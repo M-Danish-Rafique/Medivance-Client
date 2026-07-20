@@ -4,9 +4,10 @@ import Modal from '../../components/common/Modal';
 import ConfirmModal from '../../components/common/ConfirmModal';
 import api from '../../utils/api';
 import { formatCurrency, formatDecimal } from '../../utils/formatters';
+import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
 import toast from 'react-hot-toast';
 
-const emptyBatch = { category_id: '', batch_date: new Date().toISOString().split('T')[0], expiry_date: '', total_volume: '', volume_uom_id: '', misc_expense: '', notes: '' };
+const emptyBatch = () => ({ category_id: '', batch_date: todayPKT(), expiry_date: '', total_volume: '', volume_uom_id: '', misc_expense: '', notes: '' });
 const emptyMat = { raw_material_id: '', uom_id: '', qty: '', _unit_cost: 0, _total_cost: 0 };
 
 export default function Batches() {
@@ -23,7 +24,7 @@ export default function Batches() {
 
   const [selected, setSelected] = useState(null);
   const [viewData, setViewData] = useState(null);
-  const [batchForm, setBatchForm] = useState(emptyBatch);
+  const [batchForm, setBatchForm] = useState(emptyBatch());
   const [materials, setMaterials] = useState([{ ...emptyMat }]);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -43,7 +44,7 @@ export default function Batches() {
   };
   useEffect(load, []);
 
-  const openAdd = () => { setBatchForm(emptyBatch); setMaterials([{ ...emptyMat }]); setModal(true); };
+  const openAdd = () => { setBatchForm(emptyBatch()); setMaterials([{ ...emptyMat }]); setModal(true); };
 
   const openView = async (batch) => {
     try {
@@ -135,8 +136,8 @@ export default function Batches() {
                     <tr key={b.id}>
                       <td className="mono" style={{ color: 'var(--gray-700)' }}>{b.batch_code}</td>
                       <td>{b.category_name || '—'}</td>
-                      <td>{new Date(b.batch_date).toLocaleDateString()}</td>
-                      <td>{new Date(b.expiry_date).toLocaleDateString()}</td>
+                      <td>{formatDatePKT(b.batch_date)}</td>
+                      <td>{formatDatePKT(b.expiry_date)}</td>
                       <td>{formatDecimal(b.total_volume)} {b.vol_uom_symbol}</td>
                       <td className="mono">{fmtPKR(b.raw_material_cost)}</td>
                       <td style={{ fontWeight: 700 }}>{fmtPKR(b.total_cost)}</td>
@@ -264,8 +265,8 @@ export default function Batches() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
               {[
                 { label: 'Category', val: viewData.category_name || '—' },
-                { label: 'Batch Date', val: new Date(viewData.batch_date).toLocaleDateString() },
-                { label: 'Expiry Date', val: new Date(viewData.expiry_date).toLocaleDateString() },
+                { label: 'Batch Date', val: formatDatePKT(viewData.batch_date) },
+                { label: 'Expiry Date', val: formatDatePKT(viewData.expiry_date) },
                 { label: 'Total Volume', val: `${formatDecimal(viewData.total_volume)} ${viewData.vol_uom_name}` },
                 { label: 'RM Cost', val: fmtPKR(viewData.raw_material_cost) },
                 { label: 'Misc Expense', val: fmtPKR(viewData.misc_expense) },

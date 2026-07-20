@@ -3,6 +3,7 @@ import Layout from '../../components/layout/Layout';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { formatCurrency } from '../../utils/formatters';
+import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
 
 export default function TaxLedger() {
   const [data, setData] = useState({ rows: [], summary: {}, by_product: [] });
@@ -53,7 +54,7 @@ export default function TaxLedger() {
     if (!selected.length) return toast.error('Select at least one record');
     setSubmitting(true);
     try {
-      const submissionDate = toDate || new Date().toISOString().split('T')[0];
+      const submissionDate = toDate || todayPKT();
       await api.post('/tax-ledger/submit-fbr', { ids: selected, submission_date: submissionDate });
       toast.success(`${selected.length} records marked as submitted to FBR`);
       setSelected([]);
@@ -137,7 +138,7 @@ export default function TaxLedger() {
                             <input type="checkbox" checked={selected.includes(r.id)} onChange={() => toggleSelect(r.id)} />
                           )}
                         </td>
-                        <td>{new Date(r.sale_date).toLocaleDateString()}</td>
+                        <td>{formatDatePKT(r.sale_date)}</td>
                         <td><span className="mono badge badge-gray" style={{ fontSize: 10 }}>{r.invoice_no || '—'}</span></td>
                         <td>{r.customer_name || '—'}</td>
                         <td style={{ fontWeight: 600 }}>{r.product_name}</td>
@@ -150,7 +151,7 @@ export default function TaxLedger() {
                             : <span className="badge badge-red">Pending</span>}
                         </td>
                         <td style={{ fontSize: 12, color: 'var(--gray-500)' }}>
-                          {r.fbr_submission_date ? new Date(r.fbr_submission_date).toLocaleDateString() : '—'}
+                          {formatDatePKT(r.fbr_submission_date)}
                         </td>
                       </tr>
                     ))}

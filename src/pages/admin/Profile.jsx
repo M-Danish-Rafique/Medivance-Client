@@ -7,6 +7,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useCompany } from '../../context/CompanyContext';
 import CompanyLogo from '../../components/common/CompanyLogo';
 import { Building2, Users, UserCircle, ScrollText } from 'lucide-react';
+import { formatDatePKT } from '../../utils/dateUtils';
 
 const ALL_PERMS = [
   { key: 'perm_companies',         label: 'Companies',            section: 'Master Data' },
@@ -305,7 +306,7 @@ export default function Profile() {
                         <td className="mono">{u.username}</td>
                         <td><span className={'badge ' + (u.role === 'admin' ? 'badge-blue' : 'badge-gray')} style={{ textTransform: 'capitalize' }}>{u.role}</span></td>
                         <td>{u.is_active ? <span className="badge badge-green">Active</span> : <span className="badge badge-amber">Inactive</span>}</td>
-                        <td style={{ fontSize: 12, color: 'var(--gray-500)' }}>{u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</td>
+                        <td style={{ fontSize: 12, color: 'var(--gray-500)' }}>{formatDatePKT(u.created_at)}</td>
                         <td style={{ textAlign: 'right' }}>
                           <button className="btn btn-ghost btn-sm" onClick={() => openEditUser(u)}>Edit</button>
                           {u.id !== user?.id && u.role !== 'admin' && (

@@ -4,6 +4,7 @@ import Modal from '../../components/common/Modal';
 import ConfirmModal from '../../components/common/ConfirmModal';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
+import { formatDatePKT } from '../../utils/dateUtils';
 
 export default function Geography() {
   const [geo, setGeo] = useState({ cities: [], areas: [], territories: [] });
@@ -133,7 +134,7 @@ export default function Geography() {
                     <tr key={c.id}>
                       <td style={{ fontWeight: 600 }}>{c.name}</td>
                       <td><span className="badge badge-gray">{geo.areas.filter(a => a.city_id === c.id).length} areas</span></td>
-                      <td style={{ color: 'var(--gray-400)', fontSize: 12 }}>{new Date(c.created_at).toLocaleDateString()}</td>
+                      <td style={{ color: 'var(--gray-400)', fontSize: 12 }}>{formatDatePKT(c.created_at)}</td>
                       <td style={{ textAlign: 'right' }}>
                         <div className="flex gap-2" style={{ justifyContent: 'flex-end' }}>
                           <button className="btn btn-outline btn-sm" onClick={() => openEditCity(c)}><span className="material-symbols-outlined" style={{ fontSize: 16, verticalAlign: 'middle' }}>edit</span></button>

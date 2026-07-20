@@ -5,11 +5,12 @@ import ConfirmModal from '../../components/common/ConfirmModal';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { formatCurrency } from '../../utils/formatters';
+import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
 
-const today = () => new Date().toISOString().split('T')[0];
-const emptyForm = { date: today(), category: 'Expense', description: '', expense_type_id: '', supplier_id: '', customer_id: '', amount: '', payment_type: '' };
+const today = () => todayPKT();
+const emptyForm = () => ({ date: today(), category: 'Expense', description: '', expense_type_id: '', supplier_id: '', customer_id: '', amount: '', payment_type: '' });
 
 export default function Finance() {
   const [data, setData] = useState([]);
@@ -22,7 +23,7 @@ export default function Finance() {
   const [deleteModal, setDeleteModal] = useState(false);
   const [expTypeModal, setExpTypeModal] = useState(false);
   const [selected, setSelected] = useState(null);
-  const [form, setForm] = useState(emptyForm);
+  const [form, setForm] = useState(emptyForm());
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [balance, setBalance] = useState(null);
@@ -108,7 +109,7 @@ export default function Finance() {
           </div>
           <div className="flex gap-2">
             <button className="btn btn-outline" onClick={() => setExpTypeModal(true)}><span className="material-symbols-outlined" style={{ fontSize: 16, verticalAlign: 'middle', marginRight: 6 }}>settings</span>Expense Types</button>
-            <button className="btn btn-primary" onClick={() => { setForm(emptyForm); setBalance(null); setModal(true); }}>+ New Transaction</button>
+            <button className="btn btn-primary" onClick={() => { setForm(emptyForm()); setBalance(null); setModal(true); }}>+ New Transaction</button>
           </div>
         </div>
 
@@ -125,7 +126,7 @@ export default function Finance() {
               <tbody>
                 {pagedData.map(t => (
                   <tr key={t.id}>
-                    <td>{new Date(t.date).toLocaleDateString()}</td>
+                    <td>{formatDatePKT(t.date)}</td>
                     <td><span className={`badge ${catColor[t.category] || 'badge-gray'}`} style={{ fontSize: 11 }}>{t.category}</span></td>
                     <td style={{ maxWidth: 200, color: 'var(--gray-600)', fontSize: 12 }}>{t.description || '—'}</td>
                     <td style={{ fontWeight: 600 }}>{t.supplier_name || t.customer_name || (t.expense_type_name ? <span className="badge badge-gray">{t.expense_type_name}</span> : '—')}</td>

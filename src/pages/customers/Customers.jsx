@@ -5,6 +5,7 @@ import ConfirmModal from '../../components/common/ConfirmModal';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { formatCurrency, formatPhone, handlePhoneInput } from '../../utils/formatters';
+import { formatDatePKT } from '../../utils/dateUtils';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
 
@@ -160,7 +161,7 @@ export default function Customers() {
                       {c.license_expiry ? (
                         <span style={{ fontWeight: 600, color: isLicenseExpired(c.license_expiry) ? 'var(--red)' : isLicenseExpiringSoon(c.license_expiry) ? 'var(--amber)' : 'var(--green)', fontSize: 12 }}>
                           {isLicenseExpired(c.license_expiry) ? <span className="material-symbols-outlined" style={{ fontSize: 14, verticalAlign: 'middle', marginRight: 4 }}>warning</span> : isLicenseExpiringSoon(c.license_expiry) ? <span className="material-symbols-outlined" style={{ fontSize: 14, verticalAlign: 'middle', marginRight: 4 }}>schedule</span> : null}
-                          {new Date(c.license_expiry).toLocaleDateString()}
+                          {formatDatePKT(c.license_expiry)}
                         </span>
                       ) : '—'}
                     </td>
@@ -293,7 +294,7 @@ export default function Customers() {
             <div><strong>Phone:</strong> {viewCustomer.phone ? formatPhone(viewCustomer.phone) : '—'}</div>
             <div><strong>Address:</strong> {viewCustomer.address || '—'}</div>
             <div><strong>License No:</strong> {viewCustomer.license_no || '—'}</div>
-            <div><strong>License Expiry:</strong> {viewCustomer.license_expiry ? new Date(viewCustomer.license_expiry).toLocaleDateString() : '—'}</div>
+            <div><strong>License Expiry:</strong> {formatDatePKT(viewCustomer.license_expiry)}</div>
             <div><strong>City:</strong> {viewCustomer.city_name || '—'}</div>
             <div><strong>Area:</strong> {viewCustomer.area_name || '—'}</div>
             <div><strong>Territory:</strong> {viewCustomer.territory_name || '—'}</div>

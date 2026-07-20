@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Layout from '../../components/layout/Layout';
 import api from '../../utils/api';
+import { formatDatePKT } from '../../utils/dateUtils';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function Dashboard() {
@@ -113,7 +114,7 @@ export default function Dashboard() {
                   <tr key={s.invoice_no}>
                     <td><span className="mono badge badge-blue">{s.invoice_no}</span></td>
                     <td>{s.customer_name}</td>
-                    <td>{new Date(s.date).toLocaleDateString()}</td>
+                    <td>{formatDatePKT(s.date)}</td>
                     <td style={{ fontWeight: 700 }}>{fmt(s.total_amount)}</td>
                   </tr>
                 ))}

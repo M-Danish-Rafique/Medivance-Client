@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import { useParams, useSearchParams } from 'react-router-dom';
 import api from '../../utils/api';
 import { computeInvoiceRows } from '../../utils/invoiceCalculations';
+import { formatDatePKT } from '../../utils/dateUtils';
 import CompanyLogo from '../../components/common/CompanyLogo';
 
 const DEFAULT_COMPANY = { name: 'Medivance', address: '', phone: '', email: '', logo_url: '' };
@@ -34,18 +35,17 @@ function fmtPlainInt(n) {
   return String(Math.round(parseFloat(n || 0)));
 }
 
-const fmtDate = (d) => {
-  const dt = d instanceof Date ? d : new Date(d);
-  return `${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}/${dt.getFullYear()}`;
-};
+const fmtDate = (d) => formatDatePKT(d);
 
 const fmtTime = (d) => {
   const dt = d instanceof Date ? d : new Date(d);
-  const h = dt.getHours();
-  const m = String(dt.getMinutes()).padStart(2, '0');
-  const ampm = h >= 12 ? 'PM' : 'AM';
-  const hr = h % 12 || 12;
-  return `${String(hr).padStart(2, '0')}:${m}${ampm}`;
+  if (Number.isNaN(dt.getTime())) return '';
+  return dt.toLocaleTimeString('en-GB', {
+    timeZone: 'Asia/Karachi',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  }).replace(/\s/g, '');
 };
 
 const fmtPrintedAt = (d) => {

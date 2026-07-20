@@ -4,11 +4,12 @@ import Modal from '../../components/common/Modal';
 import ConfirmModal from '../../components/common/ConfirmModal';
 import api from '../../utils/api';
 import { formatCurrency, formatDecimal } from '../../utils/formatters';
+import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
 import toast from 'react-hot-toast';
 
 const emptyRM = { name: '', material_type: 'raw_material', uom_id: '', volume: '', volume_uom_id: '' };
 const emptyUOM = { name: '', symbol: '', base_type: 'weight', to_base_factor: 1 };
-const emptyPurchase = { raw_material_id: '', supplier_id: '', date: new Date().toISOString().split('T')[0], invoice_no: '', qty: '', amount: '' };
+const emptyPurchase = () => ({ raw_material_id: '', supplier_id: '', date: todayPKT(), invoice_no: '', qty: '', amount: '' });
 
 export default function RawMaterials() {
   const [data, setData] = useState([]);
@@ -30,7 +31,7 @@ export default function RawMaterials() {
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState(emptyRM);
   const [uomForm, setUomForm] = useState(emptyUOM);
-  const [purchaseForm, setPurchaseForm] = useState(emptyPurchase);
+  const [purchaseForm, setPurchaseForm] = useState(emptyPurchase());
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [detailData, setDetailData] = useState(null);
@@ -172,7 +173,7 @@ export default function RawMaterials() {
               <span className="material-symbols-outlined" style={{ fontSize: 18, marginRight: 6 }}>settings</span>
               UOM
             </button>
-            <button className="btn btn-success" onClick={() => { setPurchaseForm(emptyPurchase); setPurchaseModal(true); }}>
+            <button className="btn btn-success" onClick={() => { setPurchaseForm(emptyPurchase()); setPurchaseModal(true); }}>
               <span className="material-symbols-outlined" style={{ fontSize: 18, marginRight: 6 }}>inventory</span>
               Record Purchase
             </button>
@@ -243,7 +244,7 @@ export default function RawMaterials() {
                   <tbody>
                     {purchases.map(p => (
                       <tr key={p.id}>
-                        <td>{new Date(p.date).toLocaleDateString()}</td>
+                        <td>{formatDatePKT(p.date)}</td>
                         <td style={{ fontWeight: 600 }}>{p.rm_name}</td>
                         <td>{p.material_type === 'raw_material' ? <span className="badge badge-blue" style={{ fontSize: 10 }}>RM</span> : <span className="badge badge-teal" style={{ fontSize: 10 }}>PKG</span>}</td>
                         <td>{p.supplier_name || '—'}</td>
@@ -411,7 +412,7 @@ export default function RawMaterials() {
                   <tbody>
                     {purchases.filter(p => p.raw_material_id === detailData.id).map(p => (
                       <tr key={p.id}>
-                        <td>{new Date(p.date).toLocaleDateString()}</td>
+                        <td>{formatDatePKT(p.date)}</td>
                         <td>{p.supplier_name || '—'}</td>
                         <td className="mono">{p.invoice_no || '—'}</td>
                         <td>{formatDecimal(p.qty)} {detailData.uom_symbol || 'unit'}</td>
@@ -447,14 +448,14 @@ export default function RawMaterials() {
                           <td className="mono" style={{ color: 'var(--gray-700)' }}>{u.yield_code}</td>
                           <td style={{ fontWeight: 600 }}>{u.product_name}</td>
                           <td className="mono">{u.batch_code}</td>
-                          <td>{new Date(u.batch_date).toLocaleDateString()}</td>
+                          <td>{formatDatePKT(u.batch_date)}</td>
                           <td>{u.quantity_used} unit(s)</td>
                           <td>{u.status === 'yielded' ? <span className="badge badge-green">Yielded</span> : <span className="badge badge-amber">Open</span>}</td>
                         </tr>
                       ) : (
                         <tr key={u.batch_id}>
                           <td className="mono" style={{ color: 'var(--gray-700)' }}>{u.batch_code}</td>
-                          <td>{new Date(u.batch_date).toLocaleDateString()}</td>
+                          <td>{formatDatePKT(u.batch_date)}</td>
                           <td>{formatDecimal(u.quantity_used)} {detailData.uom_symbol || 'unit'}</td>
                           <td>{u.status === 'yielded' ? <span className="badge badge-green">Yielded</span> : <span className="badge badge-amber">Open</span>}</td>
                         </tr>

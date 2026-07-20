@@ -5,6 +5,7 @@ import ConfirmModal from '../../components/common/ConfirmModal';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { formatPhone, handlePhoneInput } from '../../utils/formatters';
+import { formatDatePKT } from '../../utils/dateUtils';
 
 const emptyForm = { name: '', address: '', phone: '' };
 
@@ -109,7 +110,7 @@ export default function Companies() {
                     <td style={{ fontWeight: 600 }}>{c.name}</td>
                     <td style={{ maxWidth: 200, color: 'var(--gray-500)' }}>{c.address || '—'}</td>
                     <td>{c.phone ? formatPhone(c.phone) : '—'}</td>
-                    <td style={{ color: 'var(--gray-400)', fontSize: 12 }}>{new Date(c.created_at).toLocaleDateString()}</td>
+                    <td style={{ color: 'var(--gray-400)', fontSize: 12 }}>{formatDatePKT(c.created_at)}</td>
                     <td style={{ textAlign: 'right' }}>
                       <div className="flex gap-2" style={{ justifyContent: 'flex-end' }}>
                         <button className="btn btn-outline btn-sm btn-icon" title="Edit company" aria-label="Edit company" onClick={() => openEdit(c)}><span className="material-symbols-outlined" style={{ fontSize: 16 }}>edit</span></button>
