@@ -25,18 +25,24 @@ export const formatDatePKT = (dateValue) => {
   return date.toLocaleDateString('en-GB', { timeZone: PKT_TZ });
 };
 
-/** e.g. "May 2026" — month + year only in Asia/Karachi */
+/** e.g. "May-2026" — short month + year in Asia/Karachi */
 export const formatMonthYearPKT = (dateValue) => {
   if (!dateValue) return '—';
 
   const date = dateValue instanceof Date ? dateValue : new Date(dateValue);
   if (Number.isNaN(date.getTime())) return '—';
 
-  return date.toLocaleDateString('en-GB', {
+  const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: PKT_TZ,
-    month: 'long',
+    month: 'short',
     year: 'numeric',
-  });
+  }).formatToParts(date);
+
+  const month = parts.find((p) => p.type === 'month')?.value;
+  const year = parts.find((p) => p.type === 'year')?.value;
+  if (!month || !year) return '—';
+
+  return `${month}-${year}`;
 };
 
 export const formatLongDatePKT = (dateValue = new Date()) => {
