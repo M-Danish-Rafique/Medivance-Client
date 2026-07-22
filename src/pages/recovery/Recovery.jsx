@@ -8,6 +8,11 @@ import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
 import CustomerAutocomplete from '../../components/common/CustomerAutocomplete';
 import { formatDatePKT, todayPKT, addMonthsPKT } from '../../utils/dateUtils';
+import { useAuth } from '../../context/AuthContext';
+
+// Year-month only comparison (day of month ignored) — matches backend rule:
+// a batch is only truly "expired" once the calendar month has rolled past its expiry month.
+const isPastExpiryMonth = (expiryStr) => todayPKT().slice(0, 7) > expiryStr.slice(0, 7);
 
 const today = () => todayPKT();
 const fmt = formatCurrency;
@@ -31,7 +36,7 @@ const getRecoveredAmount = (sale) => {
   return sale.is_locked ? parseFloat(sale.total_amount || 0) : 0;
 };
 
-function ReturnTable({ lines, items, isCross, updateReturnLine, fmt }) {
+function ReturnTable({ lines, items, isCross, updateReturnLine, fmt, isAdmin }) {
   return (
     <div>
       {lines.length === 0 ? (
@@ -45,22 +50,34 @@ function ReturnTable({ lines, items, isCross, updateReturnLine, fmt }) {
           </div>
           {lines.map((line, idx) => {
             const retAmt = parseFloat(line.return_amount || 0);
-            let expiryBlocked = false;
+            let expiryBlocked = false;   // hard stop — nobody can return this, admin included
+            let expiryWarning = false;   // inside the 5-month window, but admin is allowed through
             let expiryLabel = null;
             if (line.exp_date) {
               const expiryStr = String(line.exp_date).slice(0, 10);
               const threshold = addMonthsPKT(expiryStr, -5);
-              expiryBlocked = todayPKT() > threshold;
+              const withinWindow = todayPKT() > threshold;
               expiryLabel = formatDatePKT(expiryStr);
+              if (withinWindow) {
+                if (isPastExpiryMonth(expiryStr)) {
+                  expiryBlocked = true;
+                } else if (isAdmin) {
+                  expiryWarning = true;
+                } else {
+                  expiryBlocked = true;
+                }
+              }
             }
+            const rowBg = expiryBlocked ? '#fef2f2' : expiryWarning ? '#fffbeb' : 'white';
+            const rowBorder = expiryBlocked ? 'var(--red)' : expiryWarning ? '#f59e0b' : 'var(--gray-200)';
             return (
-              <div key={line.row_id || idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: expiryBlocked ? '#fff7ed' : 'white', border: `1.5px solid ${expiryBlocked ? 'var(--amber)' : 'var(--gray-200)'}`, borderRadius: 8 }}>
+              <div key={line.row_id || idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: rowBg, border: `1.5px solid ${rowBorder}`, borderRadius: 8 }}>
                 <div style={{ fontWeight: 600, fontSize: 13 }}>{line.product_name}</div>
                 <div>
                   <span className="mono badge badge-gray" style={{ fontSize: 11 }}>{line.batch_no || '—'}</span>
                   {expiryLabel && (
-                    <div style={{ fontSize: 10, marginTop: 2, color: expiryBlocked ? 'var(--red)' : 'var(--gray-500)' }}>
-                      {expiryBlocked ? '⛔ Return window expired' : `Exp: ${expiryLabel}`}
+                    <div style={{ fontSize: 10, marginTop: 2, color: expiryBlocked ? 'var(--red)' : expiryWarning ? '#b45309' : 'var(--gray-500)' }}>
+                      {expiryBlocked ? '⛔ Return window expired' : expiryWarning ? '⚠️ Within 5-month window (admin override)' : `Exp: ${expiryLabel}`}
                     </div>
                   )}
                 </div>
@@ -89,6 +106,8 @@ function ReturnTable({ lines, items, isCross, updateReturnLine, fmt }) {
 }
 
 export default function Recovery() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [allSales, setAllSales] = useState([]);
   const [sales, setSales] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -336,16 +355,25 @@ export default function Recovery() {
       }
     }
 
-    // Front-end expiry check: block if batch expiry is within 5 months
+    // Front-end expiry check: block if batch expiry is within 5 months.
+    // Admins may proceed within that 5-month window, but a batch that has
+    // actually passed its expiry month is blocked for everyone.
     for (const retLine of allReturns) {
       if (!parseInt(retLine.qty_returned)) continue;
       if (retLine.exp_date) {
         const expiryStr = String(retLine.exp_date).slice(0, 10);
         const threshold = addMonthsPKT(expiryStr, -5);
         if (todayPKT() > threshold) {
-          return toast.error(
-            `Return blocked for "${retLine.product_name}" (Batch: ${retLine.batch_no}): expires ${formatDatePKT(expiryStr)} — within 5-month return window.`
-          );
+          if (isPastExpiryMonth(expiryStr)) {
+            return toast.error(
+              `Return blocked for "${retLine.product_name}" (Batch: ${retLine.batch_no}): expired ${formatDatePKT(expiryStr)}.`
+            );
+          }
+          if (!isAdmin) {
+            return toast.error(
+              `Return blocked for "${retLine.product_name}" (Batch: ${retLine.batch_no}): expires ${formatDatePKT(expiryStr)} — within 5-month return window.`
+            );
+          }
         }
       }
     }
@@ -668,7 +696,7 @@ export default function Recovery() {
             )}
 
             {activeTab === 'return' && (
-              <ReturnTable lines={returnLines} items={saleDetail.items} isCross={false} updateReturnLine={updateReturnLine} fmt={fmt} />
+              <ReturnTable lines={returnLines} items={saleDetail.items} isCross={false} updateReturnLine={updateReturnLine} fmt={fmt} isAdmin={isAdmin} />
             )}
 
             {activeTab === 'cross-return' && (
@@ -696,7 +724,7 @@ export default function Recovery() {
                       Invoice <strong>{returnInvoiceDetail.invoice_no}</strong> — {fmt(returnInvoiceDetail.total_amount)}
                       {returnInvoiceDetail.is_locked && <span className="badge badge-amber" style={{ marginLeft: 8, fontSize: 10 }}>Locked — credit will apply to current invoice</span>}
                     </div>
-                    <ReturnTable lines={crossReturnLines} items={returnInvoiceDetail.items} isCross={true} updateReturnLine={updateReturnLine} fmt={fmt} />
+                    <ReturnTable lines={crossReturnLines} items={returnInvoiceDetail.items} isCross={true} updateReturnLine={updateReturnLine} fmt={fmt} isAdmin={isAdmin} />
                   </>
                 )}
               </div>
