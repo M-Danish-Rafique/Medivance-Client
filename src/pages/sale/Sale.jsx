@@ -140,7 +140,8 @@ function RateInfoPanel({ rateHistory, activeRowIdx, canViewPurchaseRates }) {
 function SaleFormBody({
   header, setHeader, customers, employees, suppliers, setNewCustModal,
   items, activeRowIdx, setActiveRowIdx, updateItem, selectProduct, removeItem, addItem,
-  setItems, products, rateHistory, canViewPurchaseRates, fmt, colStyle, gridCols, geo
+  setItems, products, rateHistory, canViewPurchaseRates, fmt, colStyle, gridCols, geo,
+  getMaxQtyForItem, usedBatchKeys
 }) {
   return (
     <>
@@ -238,18 +239,27 @@ function SaleFormBody({
           <select className="form-control" style={colStyle} value={item.batch_no}
             onChange={e => updateItem(idx, 'batch_no', e.target.value)} disabled={!item._batches?.length}>
             <option value="">— Batch —</option>
-            {(item._batches || []).map(b => <option key={b.batch_no} value={b.batch_no}>{b.batch_no} (Avail: {b.qty})</option>)}
+            {(() => {
+              const used = usedBatchKeys(items, idx);
+              return (item._batches || [])
+                .filter(b => b.batch_no === item.batch_no || !used.has(`${item.product_id}::${b.batch_no}`))
+                .map(b => <option key={b.batch_no} value={b.batch_no}>{b.batch_no} (Avail: {b.qty})</option>);
+            })()}
           </select>
           {(() => {
-            const batch = (item._batches || []).find(b => b.batch_no === item.batch_no);
-            const maxQty = batch ? batch.qty : Infinity;
-            const totalDispatched = parseFloat(item.qty || 0) + parseFloat(item.bonus || 0);
-            const overQty = totalDispatched > maxQty;
+            const maxQty = getMaxQtyForItem(item);
+            const qtyNum = parseFloat(item.qty);
+            const qtyEntered = item.qty !== '' && item.qty !== null && item.qty !== undefined;
+            const belowMin = qtyEntered && (isNaN(qtyNum) || qtyNum < 1);
+            const totalDispatched = (isNaN(qtyNum) ? 0 : qtyNum) + parseFloat(item.bonus || 0);
+            const overQty = !belowMin && totalDispatched > maxQty;
+            const invalid = belowMin || overQty;
             return (
               <div>
-                <input className="form-control" type="number" style={{ ...colStyle, borderColor: overQty ? 'var(--red)' : undefined }}
+                <input className="form-control" type="number" min="1" style={{ ...colStyle, borderColor: invalid ? 'var(--red)' : undefined }}
                   placeholder="Qty" value={item.qty}
                   onChange={e => updateItem(idx, 'qty', e.target.value)} />
+                {belowMin && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Qty must be at least 1</div>}
                 {overQty && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Qty+Bonus max: {maxQty}</div>}
               </div>
             );
@@ -325,10 +335,15 @@ export default function Sale() {
     Promise.all([
       api.get('/sales'), api.get('/customers'),
       api.get('/employees?role=Salesman'), api.get('/products'),
-      api.get('/geography/geo'), api.get('/employees?role=Supplier')
-    ]).then(([s, c, e, p, g, sup]) => {
+      api.get('/geography/geo'), api.get('/employees?role=Supplier'),
+      api.get('/inventory/active-products')
+    ]).then(([s, c, e, p, g, sup, activeIds]) => {
+      const activeSet = new Set(activeIds.data || []);
       setSales(s.data); setCustomers(c.data); setEmployees(e.data);
-      setProducts(p.data); setGeo(g.data); setSuppliers(sup.data); setLoading(false);
+      // Only list products that currently have at least one active batch
+      // (qty > 0 and not expired) so users can't start a sale for dead stock.
+      setProducts(p.data.filter(prod => activeSet.has(prod.id)));
+      setGeo(g.data); setSuppliers(sup.data); setLoading(false);
     }).catch(() => setLoading(false));
   };
   useEffect(load, []);
@@ -349,9 +364,66 @@ export default function Sale() {
   const loadBatches = async (product_id) => {
     if (!product_id) return [];
     try {
-      const r = await api.get(`/inventory/product/${product_id}`);
+      // active_only: server excludes zero-qty and expired batches (expiry
+      // judged by year+month only — a batch is still valid through the end
+      // of its expiry month).
+      const r = await api.get(`/inventory/product/${product_id}?active_only=1`);
       return r.data.filter(b => b.qty > 0);
     } catch { return []; }
+  };
+
+  // Same as loadBatches, but for edit mode: if the row's originally-saved
+  // batch is no longer "active" (fully depleted or expired since this
+  // invoice was created), keep it in the list anyway so it stays visible/
+  // selectable — this invoice still holds that stock until the edit is saved.
+  const loadBatchesForRow = async (product_id, keepBatchNo) => {
+    const batches = await loadBatches(product_id);
+    if (keepBatchNo && !batches.some(b => b.batch_no === keepBatchNo)) {
+      try {
+        const r = await api.get(`/inventory/check-batch?product_id=${product_id}&batch_no=${keepBatchNo}`);
+        if (r.data) batches.push(r.data);
+      } catch { /* ignore — batch just won't show up */ }
+    }
+    return batches;
+  };
+
+  // Given a product's active batches, decide which one (if any) to
+  // auto-select: the only batch if there's just one, otherwise the batch
+  // with the furthest-out (latest) upcoming expiry date.
+  const pickDefaultBatch = (batches) => {
+    if (!batches || batches.length === 0) return null;
+    if (batches.length === 1) return batches[0];
+    return batches.reduce((best, b) => {
+      if (!best) return b;
+      if (!b.exp_date) return best;
+      if (!best.exp_date) return b;
+      return new Date(b.exp_date) > new Date(best.exp_date) ? b : best;
+    }, null);
+  };
+
+  // product_id+batch_no keys already used by OTHER rows, so a batch can't be
+  // picked twice across the invoice. Excludes the row at `excludeIdx` itself.
+  const usedBatchKeys = (itemsArr, excludeIdx) => new Set(
+    itemsArr
+      .filter((it, i) => i !== excludeIdx && it.product_id && it.batch_no)
+      .map(it => `${it.product_id}::${it.batch_no}`)
+  );
+
+  // Max qty+bonus allowed for a row's currently selected batch. In edit mode,
+  // if the row's batch is unchanged from what this invoice originally had,
+  // the stock this invoice already "owns" (previous qty + previous bonus) is
+  // added back on top of the current available qty, since that stock was
+  // deducted from inventory when the sale was first created and hasn't been
+  // released back yet (only happens on save):
+  //   (Previous Qty + Previous Bonus + Available Qty) >= (New Qty + New Bonus)
+  const getMaxQtyForItem = (item) => {
+    const batch = (item._batches || []).find(b => b.batch_no === item.batch_no);
+    if (!batch) return Infinity;
+    let maxQty = parseFloat(batch.qty) || 0;
+    if (item._original && item._original.batch_no === item.batch_no) {
+      maxQty += (parseFloat(item._original.qty) || 0) + (parseFloat(item._original.bonus) || 0);
+    }
+    return maxQty;
   };
 
   const loadRateHistory = useCallback(async (idx, product_id, customer_id, product_name) => {
@@ -366,6 +438,7 @@ export default function Sale() {
   }, []);
 
   const selectProduct = async (idx, product) => {
+    setActiveRowIdx(idx);
     setItems(prev => {
       const updated = [...prev];
       const it = { ...updated[idx] };
@@ -380,10 +453,20 @@ export default function Sale() {
       updated[idx] = it;
       return updated;
     });
+    loadRateHistory(idx, product.id, header.customer_id, product.name);
     const batches = await loadBatches(product.id);
     setItems(prev => {
       const updated = [...prev];
-      updated[idx] = { ...updated[idx], _batches: batches };
+      const it = { ...updated[idx], _batches: batches };
+      const used = usedBatchKeys(prev, idx);
+      const candidates = batches.filter(b => !used.has(`${product.id}::${b.batch_no}`));
+      const defaultBatch = pickDefaultBatch(candidates);
+      if (defaultBatch) {
+        it.batch_no = defaultBatch.batch_no;
+        if (parseFloat(defaultBatch.sale_rate) > 0) it.sale_rate = defaultBatch.sale_rate;
+      }
+      it.total = calcTotal(it);
+      updated[idx] = it;
       return updated;
     });
   };
@@ -417,14 +500,18 @@ export default function Sale() {
       return updated;
     });
     if (field === 'product_id' && value) {
+      setActiveRowIdx(idx);
       const batches = await loadBatches(value);
       const prod = products.find(p => p.id === parseInt(value));
       setItems(prev => {
         const updated = [...prev];
         updated[idx] = { ...updated[idx], _batches: batches };
-        if (batches.length === 1) {
-          updated[idx].batch_no = batches[0].batch_no;
-          if (parseFloat(batches[0].sale_rate) > 0) updated[idx].sale_rate = batches[0].sale_rate;
+        const used = usedBatchKeys(prev, idx);
+        const candidates = batches.filter(b => !used.has(`${value}::${b.batch_no}`));
+        const defaultBatch = pickDefaultBatch(candidates);
+        if (defaultBatch) {
+          updated[idx].batch_no = defaultBatch.batch_no;
+          if (parseFloat(defaultBatch.sale_rate) > 0) updated[idx].sale_rate = defaultBatch.sale_rate;
         }
         updated[idx].total = calcTotal(updated[idx]);
         return updated;
@@ -457,8 +544,35 @@ export default function Sale() {
   }, [header.customer_id]);
 
   const addItem = () => { setItems(p => [...p, createSaleItem()]); };
-  const removeItem = (idx) => { setItems(p => p.filter((_, i) => i !== idx)); setRateHistory(prev => { const n = { ...prev }; delete n[idx]; return n; }); };
+  const removeItem = (idx) => {
+    setItems(p => p.filter((_, i) => i !== idx));
+    // Re-key rateHistory so it stays aligned with the shifted row indices
+    // instead of leaving stale/misplaced entries behind.
+    setRateHistory(prev => {
+      const next = {};
+      Object.keys(prev).forEach(k => {
+        const i = parseInt(k, 10);
+        if (i < idx) next[i] = prev[k];
+        else if (i > idx) next[i - 1] = prev[k];
+      });
+      return next;
+    });
+    setActiveRowIdx(prev => {
+      if (prev === null) return null;
+      if (prev === idx) return null;
+      return prev > idx ? prev - 1 : prev;
+    });
+  };
   const grandTotal = items.reduce((s, it) => s + (parseFloat(it.total) || 0), 0);
+  // Any row with a qty entered that is less than 1 (0, negative, or non-numeric-but-nonblank), or that exceeds available stock
+  const hasInvalidQty = items.some(it => {
+    if (it.qty === '' || it.qty === null || it.qty === undefined) return false;
+    const qtyNum = parseFloat(it.qty);
+    if (isNaN(qtyNum) || qtyNum < 1) return true;
+    const maxQty = getMaxQtyForItem(it);
+    const totalDispatched = qtyNum + (parseFloat(it.bonus) || 0);
+    return totalDispatched > maxQty;
+  });
 
   const openAdd = () => {
     setSelected(null); setHeader({ customer_id: '', salesman_id: '', delivery_by: '', date: today() });
@@ -473,10 +587,25 @@ export default function Sale() {
       setSelected(r.data);
       setHeader({ customer_id: r.data.customer_id, salesman_id: r.data.salesman_id || '', delivery_by: r.data.delivery_by || '', date: r.data.date.split('T')[0] });
       const mappedItems = await Promise.all(r.data.items.map(async (it) => {
-        const batches = await loadBatches(it.product_id);
-        return { ...createSaleItem(), product_id: it.product_id, product_search: it.product_name || '', product_name: it.product_name, pack_size: it.pack_size || '', batch_no: it.batch_no || '', sale_rate: it.sale_rate, qty: it.qty, bonus: it.bonus || 0, discount_pct: it.discount_pct || 0, tax_pct: it.tax_pct || 0, total: it.total, _batches: batches };
+        const batches = await loadBatchesForRow(it.product_id, it.batch_no);
+        return {
+          ...createSaleItem(), product_id: it.product_id, product_search: it.product_name || '', product_name: it.product_name,
+          pack_size: it.pack_size || '', batch_no: it.batch_no || '', sale_rate: it.sale_rate, qty: it.qty, bonus: it.bonus || 0,
+          discount_pct: it.discount_pct || 0, tax_pct: it.tax_pct || 0, total: it.total, _batches: batches,
+          // Snapshot of what this row's stock impact already is, so qty validation can
+          // add it back to the currently available qty for this same batch.
+          _original: { batch_no: it.batch_no || '', qty: parseFloat(it.qty) || 0, bonus: parseFloat(it.bonus) || 0 }
+        };
       }));
-      setItems(mappedItems); setRateHistory({}); setActiveRowIdx(null);
+      setItems(mappedItems); setRateHistory({});
+      // Load rate info directly rather than relying on the customer-change
+      // effect, since editing back-to-back invoices for the SAME customer
+      // means header.customer_id never actually changes value — that effect
+      // wouldn't fire and rate info would silently stay empty.
+      mappedItems.forEach((it, idx) => {
+        if (it.product_id) loadRateHistory(idx, it.product_id, r.data.customer_id, it.product_name);
+      });
+      setActiveRowIdx(mappedItems.length ? 0 : null);
       setModal('edit');
     } catch { toast.error('Error loading sale'); }
   };
@@ -493,12 +622,30 @@ export default function Sale() {
     if (!header.date) return toast.error('Date is required');
     const validItems = items.filter(it => it.product_id && it.qty && it.sale_rate && it.batch_no);
     if (validItems.length === 0) return toast.error('Add at least one product with batch, qty and rate');
-    // Validate qty+bonus against inventory (both are physically dispatched)
+    // Validate qty is at least 1 (no zero or negative quantities)
     for (const it of validItems) {
-      const batch = (it._batches || []).find(b => b.batch_no === it.batch_no);
+      const qtyNum = parseFloat(it.qty);
+      if (isNaN(qtyNum) || qtyNum < 1) {
+        return toast.error(`Qty for ${it.product_name} must be at least 1`);
+      }
+    }
+    // Prevent the same product+batch being selected in more than one row
+    const seenKeys = new Set();
+    for (const it of validItems) {
+      const key = `${it.product_id}::${it.batch_no}`;
+      if (seenKeys.has(key)) {
+        return toast.error(`${it.product_name} (batch ${it.batch_no}) is selected in more than one row`);
+      }
+      seenKeys.add(key);
+    }
+    // Validate qty+bonus against inventory (both are physically dispatched).
+    // In edit mode, a row's own previously-reserved qty+bonus is folded back
+    // into the available qty for that same batch (see getMaxQtyForItem).
+    for (const it of validItems) {
+      const maxQty = getMaxQtyForItem(it);
       const totalDispatched = parseFloat(it.qty || 0) + parseFloat(it.bonus || 0);
-      if (batch && totalDispatched > batch.qty) {
-        return toast.error(`Qty + Bonus for ${it.product_name} (batch ${it.batch_no}) exceeds available stock (${batch.qty} units)`);
+      if (totalDispatched > maxQty) {
+        return toast.error(`Qty + Bonus for ${it.product_name} (batch ${it.batch_no}) exceeds available stock (${maxQty} units)`);
       }
     }
     setSaving(true);
@@ -612,7 +759,7 @@ export default function Sale() {
             <div style={{ fontWeight: 700, fontSize: 16 }}>Grand Total: <span style={{ color: 'var(--green)' }}>{fmt(grandTotal)}</span></div>
             <div className="flex gap-2">
               <button className="btn btn-outline" onClick={() => setModal(false)}>Cancel</button>
-              <button className="btn btn-success btn-lg" onClick={handleSave} disabled={saving}>
+              <button className="btn btn-success btn-lg" onClick={handleSave} disabled={saving || hasInvalidQty}>
                 {saving ? 'Saving...' : modal === 'edit' ? 'Update Invoice' : 'Save Invoice'}
               </button>
             </div>
@@ -627,6 +774,7 @@ export default function Sale() {
           setItems={setItems}
           products={products} rateHistory={rateHistory} canViewPurchaseRates={canViewPurchaseRates} geo={geo}
           fmt={fmt} colStyle={colStyle} gridCols={gridCols}
+          getMaxQtyForItem={getMaxQtyForItem} usedBatchKeys={usedBatchKeys}
         />
       </Modal>
 
