@@ -389,7 +389,8 @@ export default function Sale() {
 
   // Given a product's active batches, decide which one (if any) to
   // auto-select: the only batch if there's just one, otherwise the batch
-  // with the furthest-out (latest) upcoming expiry date.
+  // with the shortest (minimum/soonest) upcoming expiry date — i.e. the
+  // stock that needs to move first.
   const pickDefaultBatch = (batches) => {
     if (!batches || batches.length === 0) return null;
     if (batches.length === 1) return batches[0];
@@ -397,7 +398,7 @@ export default function Sale() {
       if (!best) return b;
       if (!b.exp_date) return best;
       if (!best.exp_date) return b;
-      return new Date(b.exp_date) > new Date(best.exp_date) ? b : best;
+      return new Date(b.exp_date) < new Date(best.exp_date) ? b : best;
     }, null);
   };
 
