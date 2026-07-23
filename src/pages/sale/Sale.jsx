@@ -141,7 +141,7 @@ function SaleFormBody({
   header, setHeader, customers, employees, suppliers, setNewCustModal,
   items, activeRowIdx, setActiveRowIdx, updateItem, selectProduct, removeItem, addItem,
   setItems, products, rateHistory, canViewPurchaseRates, fmt, colStyle, gridCols, geo,
-  getMaxQtyForItem, usedBatchKeys
+  getMaxQtyForItem, usedBatchKeys, getItemErrors
 }) {
   return (
     <>
@@ -247,34 +247,60 @@ function SaleFormBody({
             })()}
           </select>
           {(() => {
-            const maxQty = getMaxQtyForItem(item);
-            const qtyNum = parseFloat(item.qty);
-            const qtyEntered = item.qty !== '' && item.qty !== null && item.qty !== undefined;
-            const belowMin = qtyEntered && (isNaN(qtyNum) || qtyNum < 1);
-            const totalDispatched = (isNaN(qtyNum) ? 0 : qtyNum) + parseFloat(item.bonus || 0);
-            const overQty = !belowMin && totalDispatched > maxQty;
-            const invalid = belowMin || overQty;
+            const e = getItemErrors(item);
             return (
               <div>
-                <input className="form-control" type="number" min="1" style={{ ...colStyle, borderColor: invalid ? 'var(--red)' : undefined }}
+                <input className="form-control" type="number" min="1" style={{ ...colStyle, borderColor: (e.belowMinQty || e.overQty) ? 'var(--red)' : undefined }}
                   placeholder="Qty" value={item.qty}
-                  onChange={e => updateItem(idx, 'qty', e.target.value)} />
-                {belowMin && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Qty must be at least 1</div>}
-                {overQty && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Qty+Bonus max: {maxQty}</div>}
+                  onChange={ev => updateItem(idx, 'qty', ev.target.value)} />
+                {e.belowMinQty && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Qty must be ≥ 1</div>}
+                {e.overQty && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Qty+Bonus max: {e.maxQty}</div>}
               </div>
             );
           })()}
-          <input className="form-control" type="number" step="0.01" style={colStyle} placeholder="Rate"
-            value={item.sale_rate} onChange={e => updateItem(idx, 'sale_rate', e.target.value)} />
-          <input className="form-control no-spinner" type="number" step="1" min="0" style={colStyle} placeholder="0"
-            value={item.bonus} onChange={e => updateItem(idx, 'bonus', e.target.value)}
-            inputMode="numeric" />
-          <input className="form-control no-spinner" type="number" step="0.5" min="0" style={colStyle} placeholder="0%"
-            value={item.discount_pct} onChange={e => updateItem(idx, 'discount_pct', e.target.value)}
-            inputMode="decimal" />
-          <input className="form-control no-spinner" type="number" step="0.5" min="0" style={colStyle} placeholder="0%"
-            value={item.tax_pct} onChange={e => updateItem(idx, 'tax_pct', e.target.value)}
-            inputMode="decimal" />
+          {(() => {
+            const e = getItemErrors(item);
+            return (
+              <div>
+                <input className="form-control" type="number" step="0.01" min="1" style={{ ...colStyle, borderColor: e.belowMinRate ? 'var(--red)' : undefined }}
+                  placeholder="Rate" value={item.sale_rate} onChange={ev => updateItem(idx, 'sale_rate', ev.target.value)} />
+                {e.belowMinRate && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Rate must be ≥ 1</div>}
+              </div>
+            );
+          })()}
+          {(() => {
+            const e = getItemErrors(item);
+            return (
+              <div>
+                <input className="form-control no-spinner" type="number" step="1" min="0" style={{ ...colStyle, borderColor: e.negBonus ? 'var(--red)' : undefined }}
+                  placeholder="0" value={item.bonus} onChange={ev => updateItem(idx, 'bonus', ev.target.value)}
+                  inputMode="numeric" />
+                {e.negBonus && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Bonus can't be -ve</div>}
+              </div>
+            );
+          })()}
+          {(() => {
+            const e = getItemErrors(item);
+            return (
+              <div>
+                <input className="form-control no-spinner" type="number" step="0.5" min="0" style={{ ...colStyle, borderColor: e.negDisc ? 'var(--red)' : undefined }}
+                  placeholder="0%" value={item.discount_pct} onChange={ev => updateItem(idx, 'discount_pct', ev.target.value)}
+                  inputMode="decimal" />
+                {e.negDisc && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Disc% can't be -ve</div>}
+              </div>
+            );
+          })()}
+          {(() => {
+            const e = getItemErrors(item);
+            return (
+              <div>
+                <input className="form-control no-spinner" type="number" step="0.5" min="0" style={{ ...colStyle, borderColor: e.negTax ? 'var(--red)' : undefined }}
+                  placeholder="0%" value={item.tax_pct} onChange={ev => updateItem(idx, 'tax_pct', ev.target.value)}
+                  inputMode="decimal" />
+                {e.negTax && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Tax% can't be -ve</div>}
+              </div>
+            );
+          })()}
           <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--green)', textAlign: 'right' }}>
             {item.total > 0 ? fmt(item.total) : '—'}
           </div>
@@ -564,15 +590,40 @@ export default function Sale() {
       return prev > idx ? prev - 1 : prev;
     });
   };
+  // Centralized per-row validation so the inline row errors, the Save-button
+  // disable check, and the pre-submit guard all agree on the same rules:
+  //   - Qty must be at least 1 (and, together with bonus, within available stock)
+  //   - Sale Rate must be at least 1
+  //   - Bonus, Disc%, Tax% must not be negative
+  const getItemErrors = (item) => {
+    const num = (v) => (v === '' || v === null || v === undefined) ? null : parseFloat(v);
+
+    const qtyNum = num(item.qty);
+    const belowMinQty = qtyNum !== null && (isNaN(qtyNum) || qtyNum < 1);
+    const maxQty = getMaxQtyForItem(item);
+    const totalDispatched = (qtyNum === null || isNaN(qtyNum) ? 0 : qtyNum) + (parseFloat(item.bonus) || 0);
+    const overQty = !belowMinQty && qtyNum !== null && totalDispatched > maxQty;
+
+    const rateNum = num(item.sale_rate);
+    const belowMinRate = rateNum !== null && (isNaN(rateNum) || rateNum < 1);
+
+    const bonusNum = num(item.bonus);
+    const negBonus = bonusNum !== null && (isNaN(bonusNum) || bonusNum < 0);
+
+    const discNum = num(item.discount_pct);
+    const negDisc = discNum !== null && (isNaN(discNum) || discNum < 0);
+
+    const taxNum = num(item.tax_pct);
+    const negTax = taxNum !== null && (isNaN(taxNum) || taxNum < 0);
+
+    return { belowMinQty, overQty, maxQty, belowMinRate, negBonus, negDisc, negTax };
+  };
+
   const grandTotal = items.reduce((s, it) => s + (parseFloat(it.total) || 0), 0);
-  // Any row with a qty entered that is less than 1 (0, negative, or non-numeric-but-nonblank), or that exceeds available stock
-  const hasInvalidQty = items.some(it => {
-    if (it.qty === '' || it.qty === null || it.qty === undefined) return false;
-    const qtyNum = parseFloat(it.qty);
-    if (isNaN(qtyNum) || qtyNum < 1) return true;
-    const maxQty = getMaxQtyForItem(it);
-    const totalDispatched = qtyNum + (parseFloat(it.bonus) || 0);
-    return totalDispatched > maxQty;
+  // Any row that fails any of the checks above
+  const hasInvalidItems = items.some(it => {
+    const e = getItemErrors(it);
+    return e.belowMinQty || e.overQty || e.belowMinRate || e.negBonus || e.negDisc || e.negTax;
   });
 
   const openAdd = () => {
@@ -623,12 +674,14 @@ export default function Sale() {
     if (!header.date) return toast.error('Date is required');
     const validItems = items.filter(it => it.product_id && it.qty && it.sale_rate && it.batch_no);
     if (validItems.length === 0) return toast.error('Add at least one product with batch, qty and rate');
-    // Validate qty is at least 1 (no zero or negative quantities)
+    // Validate qty, sale rate, bonus, disc%, tax% via the shared per-row rules
     for (const it of validItems) {
-      const qtyNum = parseFloat(it.qty);
-      if (isNaN(qtyNum) || qtyNum < 1) {
-        return toast.error(`Qty for ${it.product_name} must be at least 1`);
-      }
+      const e = getItemErrors(it);
+      if (e.belowMinQty) return toast.error(`Qty for ${it.product_name} must be at least 1`);
+      if (e.belowMinRate) return toast.error(`Sale Rate for ${it.product_name} must be at least 1`);
+      if (e.negBonus) return toast.error(`Bonus for ${it.product_name} cannot be negative`);
+      if (e.negDisc) return toast.error(`Disc% for ${it.product_name} cannot be negative`);
+      if (e.negTax) return toast.error(`Tax% for ${it.product_name} cannot be negative`);
     }
     // Prevent the same product+batch being selected in more than one row
     const seenKeys = new Set();
@@ -760,7 +813,7 @@ export default function Sale() {
             <div style={{ fontWeight: 700, fontSize: 16 }}>Grand Total: <span style={{ color: 'var(--green)' }}>{fmt(grandTotal)}</span></div>
             <div className="flex gap-2">
               <button className="btn btn-outline" onClick={() => setModal(false)}>Cancel</button>
-              <button className="btn btn-success btn-lg" onClick={handleSave} disabled={saving || hasInvalidQty}>
+              <button className="btn btn-success btn-lg" onClick={handleSave} disabled={saving || hasInvalidItems}>
                 {saving ? 'Saving...' : modal === 'edit' ? 'Update Invoice' : 'Save Invoice'}
               </button>
             </div>
@@ -775,7 +828,7 @@ export default function Sale() {
           setItems={setItems}
           products={products} rateHistory={rateHistory} canViewPurchaseRates={canViewPurchaseRates} geo={geo}
           fmt={fmt} colStyle={colStyle} gridCols={gridCols}
-          getMaxQtyForItem={getMaxQtyForItem} usedBatchKeys={usedBatchKeys}
+          getMaxQtyForItem={getMaxQtyForItem} usedBatchKeys={usedBatchKeys} getItemErrors={getItemErrors}
         />
       </Modal>
 
