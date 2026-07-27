@@ -126,6 +126,18 @@ export default function Recovery() {
 
   // Payment history popup (click on an invoice row)
   const [historyModal, setHistoryModal] = useState(false);
+
+  // Edit Recovery modal — admin only, reachable from Payment History regardless
+  // of whether the invoice is already settled.
+  const [editModal, setEditModal] = useState(false);
+  const [editLoading, setEditLoading] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editDate, setEditDate] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+  const [editAmountRecovered, setEditAmountRecovered] = useState('');
+  const [editRecoveryLines, setEditRecoveryLines] = useState([]);
+  const [editReturnLines, setEditReturnLines] = useState([]);
   const [historySale, setHistorySale] = useState(null);
   const [historyList, setHistoryList] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -252,6 +264,61 @@ export default function Recovery() {
       setHistoryList(r.data);
     } catch { toast.error('Error loading payment history'); }
     setHistoryLoading(false);
+  };
+
+  /* ── Open a past recovery entry for editing (admin only) ── */
+  const openEditRecovery = async (recoveryId) => {
+    setEditModal(true);
+    setEditLoading(true);
+    try {
+      const r = await api.get(`/recoveries/${recoveryId}`);
+      const d = r.data;
+      setEditingId(d.id);
+      setEditDate(String(d.date).slice(0, 10));
+      setEditNotes(d.notes || '');
+      setEditAmountRecovered(String(d.net_collected ?? 0));
+      setEditRecoveryLines((d.recovery_items || []).map(i => ({
+        sale_item_id: i.sale_item_id, product_id: i.product_id, batch_no: i.batch_no,
+        product_name: i.product_name, original_total: i.original_total,
+        discount_given: String(i.discount_given || 0),
+      })));
+      setEditReturnLines((d.return_items || []).map(i => ({
+        row_id: `edit-ret-${i.id}`, sale_id: i.sale_id, sale_item_id: i.sale_item_id,
+        product_id: i.product_id, batch_no: i.batch_no, product_name: i.product_name,
+        source_invoice: i.source_invoice, qty_returned: String(i.qty_returned),
+        return_rate: String(i.return_rate),
+      })));
+    } catch { toast.error('Error loading recovery for edit'); setEditModal(false); }
+    setEditLoading(false);
+  };
+
+  const handleEditSave = async () => {
+    if (!editDate) return toast.error('Date required');
+    const validRecovery = editRecoveryLines.filter(l => parseFloat(l.discount_given || 0) > 0).map(l => ({
+      ...l, discount_given: parseFloat(l.discount_given),
+      final_amount: parseFloat(l.original_total) - parseFloat(l.discount_given),
+    }));
+    const validReturns = editReturnLines.filter(l => parseInt(l.qty_returned || 0) > 0).map(l => ({
+      ...l, qty_returned: parseInt(l.qty_returned), return_rate: parseFloat(l.return_rate),
+      return_amount: parseInt(l.qty_returned) * parseFloat(l.return_rate),
+    }));
+    const recovered = parseFloat(editAmountRecovered || 0);
+    if (Number.isNaN(recovered) || recovered < 0) return toast.error('Enter a valid recovered amount');
+
+    setEditSaving(true);
+    try {
+      await api.put(`/recoveries/${editingId}`, {
+        date: editDate, notes: editNotes,
+        recovery_items: validRecovery, return_items: validReturns,
+        amount_recovered: recovered,
+      });
+      toast.success('Recovery entry updated.');
+      setEditModal(false);
+      if (historySale) openHistory(historySale);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Error updating recovery');
+    } finally { setEditSaving(false); }
   };
 
   /* ── Load other pending invoices for the current customer (for the "(Other) Pending Invoices" tab) ── */
@@ -544,7 +611,9 @@ export default function Recovery() {
                         <td style={{ fontWeight: 600, color: pending > 0 ? 'var(--amber)' : 'var(--gray-400)' }}>{fmt(pending)}</td>
                         <td style={{ textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                           {isCompleted
-                            ? <span style={{ fontSize: 12, color: 'var(--gray-400)', padding: '5px 8px' }}>Settled</span>
+                            ? <span style={{ fontSize: 12, color: 'var(--gray-400)', padding: '5px 8px' }}>
+                                {isAdmin ? 'Settled' : 'Settled'}
+                              </span>
                             : <button className="btn btn-primary btn-sm" onClick={() => openRecovery(s)}>
                                 {s.is_locked ? 'Collect Payment' : 'Recovery / Return'}
                               </button>}
@@ -828,21 +897,129 @@ export default function Recovery() {
               </div>
             ) : (
               <div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1.4fr', gap: 6, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6, fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
-                  <span>Date</span><span>Discount</span><span>Return</span><span>Collected</span><span>Pending After</span><span>Notes</span>
+                <div style={{ display: 'grid', gridTemplateColumns: isAdmin ? '1fr 1fr 1fr 1fr 1fr 1.4fr 0.7fr' : '1fr 1fr 1fr 1fr 1fr 1.4fr', gap: 6, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6, fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
+                  <span>Date</span><span>Discount</span><span>Return</span><span>Collected</span><span>Pending After</span><span>Notes</span>{isAdmin && <span>Actions</span>}
                 </div>
                 {historyList.map(h => (
-                  <div key={h.id} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1.4fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: 'white', border: '1.5px solid var(--gray-200)', borderRadius: 8 }}>
+                  <div key={h.id} style={{ display: 'grid', gridTemplateColumns: isAdmin ? '1fr 1fr 1fr 1fr 1fr 1.4fr 0.7fr' : '1fr 1fr 1fr 1fr 1fr 1.4fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: 'white', border: '1.5px solid var(--gray-200)', borderRadius: 8 }}>
                     <div>{formatDatePKT(h.date)}</div>
                     <div style={{ color: parseFloat(h.total_discount) > 0 ? 'var(--amber)' : 'var(--gray-400)' }}>{fmt(h.total_discount)}</div>
                     <div style={{ color: parseFloat(h.total_return_amount) > 0 ? 'var(--amber)' : 'var(--gray-400)' }}>{fmt(h.total_return_amount)}</div>
                     <div style={{ fontWeight: 700, color: 'var(--green)' }}>{fmt(h.net_collected)}</div>
                     <div style={{ fontWeight: 600, color: parseFloat(h.pending_amount) > 0 ? 'var(--amber)' : 'var(--green)' }}>{fmt(h.pending_amount)}</div>
                     <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>{h.notes || (h.salesman_name ? `Collected by ${h.salesman_name}` : '—')}</div>
+                    {isAdmin && (
+                      <div>
+                        <button className="btn btn-outline btn-sm" style={{ fontSize: 11, padding: '4px 8px' }}
+                          onClick={() => openEditRecovery(h.id)}>
+                          Edit
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
             )}
+          </div>
+        )}
+      </Modal>
+
+      {/* Edit Recovery Modal — Admin only. Reachable even when the invoice is settled. */}
+      <Modal isOpen={editModal} onClose={() => setEditModal(false)}
+        title="Edit Recovery Entry (Admin)" size="lg"
+        footer={
+          <div className="flex gap-2" style={{ justifyContent: 'flex-end', width: '100%' }}>
+            <button className="btn btn-outline" onClick={() => setEditModal(false)}>Cancel</button>
+            <button className="btn btn-primary" onClick={handleEditSave} disabled={editSaving || editLoading}>
+              {editSaving ? 'Saving...' : 'Save Changes'}
+            </button>
+          </div>
+        }>
+        {editLoading ? (
+          <div className="loading-center"><div className="spinner" /></div>
+        ) : (
+          <div>
+            <div className="alert alert-warning" style={{ marginBottom: 14 }}>
+              Saving here reverts this entry's original effect on inventory and the customer ledger, then re-applies the corrected values below. Available to admin accounts only.
+            </div>
+
+            <div className="form-grid form-grid-2" style={{ marginBottom: 16 }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Date *</label>
+                <input className="form-control" type="date" value={editDate}
+                  onChange={e => setEditDate(e.target.value)} />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Notes</label>
+                <input className="form-control" placeholder="Optional notes" value={editNotes}
+                  onChange={e => setEditNotes(e.target.value)} />
+              </div>
+            </div>
+
+            {editRecoveryLines.length > 0 && (
+              <>
+                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Discounts</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 6, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6, fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
+                  <span>Product</span><span>Batch</span><span>Invoice Amt</span><span>Discount Given</span>
+                </div>
+                {editRecoveryLines.map((l, idx) => (
+                  <div key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: 'white', border: '1.5px solid var(--gray-200)', borderRadius: 8 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{l.product_name}</div>
+                    <div><span className="mono badge badge-gray" style={{ fontSize: 11 }}>{l.batch_no || '—'}</span></div>
+                    <div style={{ fontWeight: 700 }}>{fmt(l.original_total)}</div>
+                    <input className="form-control" type="number" step="0.01" min="0" max={l.original_total}
+                      style={{ fontSize: 12, padding: '5px 8px' }} value={l.discount_given}
+                      onChange={e => setEditRecoveryLines(prev => {
+                        const u = [...prev]; u[idx] = { ...u[idx], discount_given: e.target.value }; return u;
+                      })}
+                      onWheel={blockWheelChange} />
+                  </div>
+                ))}
+                <div className="divider" />
+              </>
+            )}
+
+            {editReturnLines.length > 0 && (
+              <>
+                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Returns</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 6, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6, fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
+                  <span>Product / Invoice</span><span>Batch</span><span>Return Qty</span><span>Rate</span><span>Return Amt</span>
+                </div>
+                {editReturnLines.map((l, idx) => (
+                  <div key={l.row_id} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: 'white', border: '1.5px solid var(--gray-200)', borderRadius: 8 }}>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>{l.product_name}</div>
+                      <div style={{ fontSize: 10, color: 'var(--gray-500)' }}>{l.source_invoice}</div>
+                    </div>
+                    <div><span className="mono badge badge-gray" style={{ fontSize: 11 }}>{l.batch_no || '—'}</span></div>
+                    <input className="form-control" type="number" step="1" min="0"
+                      style={{ fontSize: 12, padding: '5px 8px' }} value={l.qty_returned}
+                      onChange={e => setEditReturnLines(prev => {
+                        const u = [...prev]; u[idx] = { ...u[idx], qty_returned: e.target.value }; return u;
+                      })}
+                      onWheel={blockWheelChange} />
+                    <input className="form-control" type="number" step="0.01" min="0"
+                      style={{ fontSize: 12, padding: '5px 8px' }} value={l.return_rate}
+                      onChange={e => setEditReturnLines(prev => {
+                        const u = [...prev]; u[idx] = { ...u[idx], return_rate: e.target.value }; return u;
+                      })}
+                      onWheel={blockWheelChange} />
+                    <div style={{ fontWeight: 700, color: 'var(--amber)' }}>
+                      {fmt((parseFloat(l.qty_returned || 0)) * (parseFloat(l.return_rate || 0)))}
+                    </div>
+                  </div>
+                ))}
+                <div className="divider" />
+              </>
+            )}
+
+            <div className="form-group">
+              <label className="form-label">Amount Recovered (Cash)</label>
+              <input className="form-control" type="number" step="1" min="0"
+                value={editAmountRecovered}
+                onChange={e => setEditAmountRecovered(e.target.value)}
+                onWheel={blockWheelChange} />
+            </div>
           </div>
         )}
       </Modal>
