@@ -22,6 +22,20 @@ const fmt = formatCurrency;
 // and the page still scrolls normally underneath the cursor.
 const blockWheelChange = (e) => e.target.blur();
 
+// Returns a human-readable error for a numeric field, or null when it's valid.
+// Never modifies the raw value — callers keep whatever the user actually typed
+// and use this only to decide whether to show an error / red border / disable Save.
+const fieldError = (raw, max, label, maxLabel) => {
+  if (raw === '' || raw === null || raw === undefined) return null;
+  const n = parseFloat(raw);
+  if (Number.isNaN(n)) return `Enter a valid number for ${label}`;
+  if (n < 0) return `${label} cannot be negative`;
+  if (max !== undefined && max !== null && !Number.isNaN(max) && n > max + 0.009) {
+    return `${label} cannot exceed ${maxLabel}`;
+  }
+  return null;
+};
+
 // Falls back gracefully for invoices saved before the recovery_status column existed.
 const getRecoveryStatus = (sale) => {
   if (sale.recovery_status) return sale.recovery_status;
@@ -36,7 +50,7 @@ const getRecoveredAmount = (sale) => {
   return sale.is_locked ? parseFloat(sale.total_amount || 0) : 0;
 };
 
-function ReturnTable({ lines, items, isCross, updateReturnLine, fmt, isAdmin }) {
+function ReturnTable({ lines, items, isCross, updateReturnLine, fmt, isAdmin, errors = [] }) {
   return (
     <div>
       {lines.length === 0 ? (
@@ -50,6 +64,7 @@ function ReturnTable({ lines, items, isCross, updateReturnLine, fmt, isAdmin }) 
           </div>
           {lines.map((line, idx) => {
             const retAmt = parseFloat(line.return_amount || 0);
+            const err = errors[idx];
             let expiryBlocked = false;   // hard stop — nobody can return this, admin included
             let expiryWarning = false;   // inside the 5-month window, but admin is allowed through
             let expiryLabel = null;
@@ -69,33 +84,41 @@ function ReturnTable({ lines, items, isCross, updateReturnLine, fmt, isAdmin }) 
               }
             }
             const rowBg = expiryBlocked ? '#fef2f2' : expiryWarning ? '#fffbeb' : 'white';
-            const rowBorder = expiryBlocked ? 'var(--red)' : expiryWarning ? '#f59e0b' : 'var(--gray-200)';
+            const rowBorder = err ? 'var(--red)' : expiryBlocked ? 'var(--red)' : expiryWarning ? '#f59e0b' : 'var(--gray-200)';
             return (
-              <div key={line.row_id || idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: rowBg, border: `1.5px solid ${rowBorder}`, borderRadius: 8 }}>
-                <div style={{ fontWeight: 600, fontSize: 13 }}>{line.product_name}</div>
-                <div>
-                  <span className="mono badge badge-gray" style={{ fontSize: 11 }}>{line.batch_no || '—'}</span>
-                  {expiryLabel && (
-                    <div style={{ fontSize: 10, marginTop: 2, color: expiryBlocked ? 'var(--red)' : expiryWarning ? '#b45309' : 'var(--gray-500)' }}>
-                      {expiryBlocked ? '⛔ Return window expired' : expiryWarning ? '⚠️ Within 5-month window (admin override)' : `Exp: ${expiryLabel}`}
-                    </div>
-                  )}
+              <div key={line.row_id || idx} style={{ marginBottom: 5 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', background: rowBg, border: `1.5px solid ${rowBorder}`, borderRadius: 8 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{line.product_name}</div>
+                  <div>
+                    <span className="mono badge badge-gray" style={{ fontSize: 11 }}>{line.batch_no || '—'}</span>
+                    {expiryLabel && (
+                      <div style={{ fontSize: 10, marginTop: 2, display: 'flex', alignItems: 'center', gap: 4, color: expiryBlocked ? 'var(--red)' : expiryWarning ? '#b45309' : 'var(--gray-500)' }}>
+                        {expiryBlocked ? (
+                          <span className="material-symbols-outlined" style={{ fontSize: 12, lineHeight: 1 }} aria-hidden="true">cancel</span>
+                        ) : expiryWarning ? (
+                          <span className="material-symbols-outlined" style={{ fontSize: 12, lineHeight: 1 }} aria-hidden="true">warning</span>
+                        ) : null}
+                        {expiryBlocked ? 'Return window expired' : expiryWarning ? 'Within 5-month window (admin override)' : `Exp: ${expiryLabel}`}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ color: 'var(--gray-600)' }}>{line.original_qty ?? '—'}</div>
+                  <input className="form-control" type="number" step="1"
+                    style={{ fontSize: 12, padding: '5px 8px', opacity: expiryBlocked ? 0.4 : 1, borderColor: err ? 'var(--red)' : undefined }}
+                    placeholder="0" value={line.qty_returned} disabled={expiryBlocked}
+                    onChange={e => updateReturnLine(idx, 'qty_returned', e.target.value, line, isCross)}
+                    onWheel={blockWheelChange}
+                    inputMode="numeric" />
+                  <input className="form-control" type="number" step="0.01"
+                    style={{ fontSize: 12, padding: '5px 8px', opacity: expiryBlocked ? 0.4 : 1 }}
+                    value={line.return_rate} disabled={expiryBlocked}
+                    onChange={e => updateReturnLine(idx, 'return_rate', e.target.value, line, isCross)}
+                    onWheel={blockWheelChange} />
+                  <div style={{ fontWeight: 700, color: retAmt > 0 ? 'var(--amber)' : 'var(--gray-400)' }}>
+                    {retAmt > 0 ? fmt(retAmt) : '—'}
+                  </div>
                 </div>
-                <div style={{ color: 'var(--gray-600)' }}>{line.original_qty ?? '—'}</div>
-                <input className="form-control" type="number" step="1" min="0" max={line.original_qty}
-                  style={{ fontSize: 12, padding: '5px 8px', opacity: expiryBlocked ? 0.4 : 1 }}
-                  placeholder="0" value={line.qty_returned} disabled={expiryBlocked}
-                  onChange={e => updateReturnLine(idx, 'qty_returned', e.target.value, line, isCross)}
-                  onWheel={blockWheelChange}
-                  inputMode="numeric" />
-                <input className="form-control" type="number" step="0.01"
-                  style={{ fontSize: 12, padding: '5px 8px', opacity: expiryBlocked ? 0.4 : 1 }}
-                  value={line.return_rate} disabled={expiryBlocked}
-                  onChange={e => updateReturnLine(idx, 'return_rate', e.target.value, line, isCross)}
-                  onWheel={blockWheelChange} />
-                <div style={{ fontWeight: 700, color: retAmt > 0 ? 'var(--amber)' : 'var(--gray-400)' }}>
-                  {retAmt > 0 ? fmt(retAmt) : '—'}
-                </div>
+                {err && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 2, paddingLeft: 4 }}>{err}</div>}
               </div>
             );
           })}
@@ -138,6 +161,7 @@ export default function Recovery() {
   const [editAmountRecovered, setEditAmountRecovered] = useState('');
   const [editRecoveryLines, setEditRecoveryLines] = useState([]);
   const [editReturnLines, setEditReturnLines] = useState([]);
+  const [editBaseline, setEditBaseline] = useState({ pendingBefore: 0, discount: 0, returnAmt: 0 });
   const [historySale, setHistorySale] = useState(null);
   const [historyList, setHistoryList] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -156,9 +180,13 @@ export default function Recovery() {
     product_name: item.product_name, original_qty: item.qty, exp_date: item.exp_date
   });
   const [amountRecovered, setAmountRecovered] = useState('');
-  const [amountRecoveredTouched, setAmountRecoveredTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState('recovery');
+
+  // Confirmation step shown after "Save" is pressed, before the recovery is
+  // actually submitted — used by both the add-recovery flow and the admin edit flow.
+  const [confirmModal, setConfirmModal] = useState(false);
+  const [pendingAction, setPendingAction] = useState(null); // { type: 'add' | 'edit', payload, summary }
 
   // Cross-invoice return state
   const [selectedReturnInvoiceId, setSelectedReturnInvoiceId] = useState('');
@@ -207,6 +235,8 @@ export default function Recovery() {
     if (filterCustomer) filtered = filtered.filter(s => String(s.customer_id) === String(filterCustomer));
     if (filterStatus === 'pending') {
       filtered = filtered.filter(s => getRecoveryStatus(s) !== 'completed');
+    } else if (filterStatus === 'settled') {
+      filtered = filtered.filter(s => getRecoveryStatus(s) === 'completed');
     }
     setSales(filtered);
   }, [filterCity, filterArea, filterTerritory, filterSalesman, filterCustomer, filterStatus, allSales, customers]);
@@ -243,9 +273,15 @@ export default function Recovery() {
       setCrossReturnLines([]);
       setSelectedReturnInvoiceId('');
       setReturnInvoiceDetail(null);
-      setRecHeader({ date: today(), salesman_id: sale.salesman_id || '', notes: '' });
+      // Sale invoice stores the supplier in delivery_by (Delivery By on the Sale form) —
+      // same approach as Sale.jsx's openEdit, which is confirmed working.
+      const invoiceSupplierId = r.data.delivery_by ?? sale.delivery_by;
+      setRecHeader({
+        date: today(),
+        salesman_id: invoiceSupplierId || '',
+        notes: '',
+      });
       setAmountRecovered('');
-      setAmountRecoveredTouched(false);
       setOtherPayments({});
       setOtherPendingInvoices([]);
       setActiveTab('recovery');
@@ -277,6 +313,13 @@ export default function Recovery() {
       setEditDate(String(d.date).slice(0, 10));
       setEditNotes(d.notes || '');
       setEditAmountRecovered(String(d.net_collected ?? 0));
+      // Snapshot of what was collectible/owed right when this entry originally happened —
+      // used to derive a live "Pending Amount" as the admin edits discount/return/cash below.
+      setEditBaseline({
+        pendingBefore: parseFloat(d.pending_amount || 0) + parseFloat(d.net_collected || 0),
+        discount: parseFloat(d.total_discount || 0),
+        returnAmt: parseFloat(d.total_return_amount || 0),
+      });
       setEditRecoveryLines((d.recovery_items || []).map(i => ({
         sale_item_id: i.sale_item_id, product_id: i.product_id, batch_no: i.batch_no,
         product_name: i.product_name, original_total: i.original_total,
@@ -287,12 +330,16 @@ export default function Recovery() {
         product_id: i.product_id, batch_no: i.batch_no, product_name: i.product_name,
         source_invoice: i.source_invoice, qty_returned: String(i.qty_returned),
         return_rate: String(i.return_rate),
+        // Upper bound for the qty this line could be edited up to — the qty currently
+        // still on the source invoice plus what this entry itself already returned.
+        max_qty: (i.current_sold_qty === null || i.current_sold_qty === undefined)
+          ? undefined : parseFloat(i.current_sold_qty) + parseFloat(i.qty_returned || 0),
       })));
     } catch { toast.error('Error loading recovery for edit'); setEditModal(false); }
     setEditLoading(false);
   };
 
-  const handleEditSave = async () => {
+  const handleEditSaveClick = () => {
     if (!editDate) return toast.error('Date required');
     const validRecovery = editRecoveryLines.filter(l => parseFloat(l.discount_given || 0) > 0).map(l => ({
       ...l, discount_given: parseFloat(l.discount_given),
@@ -302,9 +349,28 @@ export default function Recovery() {
       ...l, qty_returned: parseInt(l.qty_returned), return_rate: parseFloat(l.return_rate),
       return_amount: parseInt(l.qty_returned) * parseFloat(l.return_rate),
     }));
-    const recovered = parseFloat(editAmountRecovered || 0);
-    if (Number.isNaN(recovered) || recovered < 0) return toast.error('Enter a valid recovered amount');
+    // Amount recovered is manual only — reflects exactly what's typed.
+    const recovered = Number.isNaN(parseFloat(editAmountRecovered)) ? 0 : parseFloat(editAmountRecovered || 0);
+    if (recovered < 0) return toast.error('Amount recovered cannot be negative');
+    if (recovered > editPendingBeforePayment) {
+      return toast.error(`Recovered amount cannot exceed pending balance (${fmt(editPendingBeforePayment)})`);
+    }
 
+    setPendingAction({
+      type: 'edit',
+      payload: { validRecovery, validReturns, recovered },
+      summary: {
+        discount: editDiscountTotal,
+        returns: editReturnTotal,
+        recovered,
+        pending: Math.max(0, editPendingBeforePayment - recovered),
+      },
+    });
+    setConfirmModal(true);
+  };
+
+  const performEditSave = async () => {
+    const { validRecovery, validReturns, recovered } = pendingAction.payload;
     setEditSaving(true);
     try {
       await api.put(`/recoveries/${editingId}`, {
@@ -313,6 +379,7 @@ export default function Recovery() {
         amount_recovered: recovered,
       });
       toast.success('Recovery entry updated.');
+      setConfirmModal(false); setPendingAction(null);
       setEditModal(false);
       if (historySale) openHistory(historySale);
       load();
@@ -377,13 +444,67 @@ export default function Recovery() {
   const priorRecovered = saleDetail ? parseFloat(saleDetail.total_recovered || 0) : 0;
   const netCollectible = Math.max(0, invoiceTotal - (priorDiscount + totalDiscount) - (priorReturn + totalReturnAmt));
   const pendingBeforeThisPayment = Math.max(0, netCollectible - priorRecovered);
-  const recoveredValue = amountRecoveredTouched
-    ? parseFloat(amountRecovered || 0)
-    : pendingBeforeThisPayment;
-  const pendingAmount = Math.max(0, pendingBeforeThisPayment - (Number.isNaN(recoveredValue) ? 0 : recoveredValue));
+  // Amount recovered is entered manually — no auto-fill; this only reflects
+  // whatever the user has actually typed so far.
+  const recoveredValue = Number.isNaN(parseFloat(amountRecovered)) ? 0 : parseFloat(amountRecovered || 0);
+  const pendingAmount = Math.max(0, pendingBeforeThisPayment - recoveredValue);
   const otherPaymentsTotal = Object.values(otherPayments).reduce((s, v) => s + (parseFloat(v) || 0), 0);
 
-  const handleSave = async () => {
+  // Edit-modal derived totals — mirrors the main modal's logic, scoped to
+  // just the single entry being edited.
+  const editDiscountTotal = editRecoveryLines.reduce((s, l) => s + parseFloat(l.discount_given || 0), 0);
+  const editReturnTotal = editReturnLines.reduce((s, l) => s + parseInt(l.qty_returned || 0) * parseFloat(l.return_rate || 0), 0);
+  const editPendingBeforePayment = Math.max(0, editBaseline.pendingBefore
+    + (editBaseline.discount - editDiscountTotal) + (editBaseline.returnAmt - editReturnTotal));
+  const editRecoveredValue = Number.isNaN(parseFloat(editAmountRecovered)) ? 0 : parseFloat(editAmountRecovered || 0);
+  const editPendingAmount = Math.max(0, editPendingBeforePayment - editRecoveredValue);
+
+  // ── Validation errors — computed live from current field values, never mutate
+  //    what the user typed. Used to show inline messages/red borders and to
+  //    gate the Save buttons. ──────────────────────────────────────────────
+  const recoveryLineErrors = recoveryLines.map(l =>
+    fieldError(l.discount_given, parseFloat(l.original_total), 'Discount given', `the invoice amount (${fmt(l.original_total)})`)
+  );
+  const returnLineErrors = returnLines.map(l =>
+    fieldError(l.qty_returned, parseFloat(l.original_qty), 'Return qty', `the sold qty (${l.original_qty})`)
+  );
+  const crossReturnLineErrors = crossReturnLines.map(l =>
+    fieldError(l.qty_returned, parseFloat(l.original_qty), 'Return qty', `the sold qty (${l.original_qty})`)
+  );
+  const amountRecoveredError = fieldError(
+    amountRecovered, pendingBeforeThisPayment, 'Amount recovered', `the pending balance (${fmt(pendingBeforeThisPayment)})`
+  );
+  const otherPaymentErrors = {};
+  for (const inv of otherPendingInvoices) {
+    otherPaymentErrors[inv.id] = fieldError(
+      otherPayments[inv.id], parseFloat(inv.pending_amount), 'Amount', `its pending balance (${fmt(inv.pending_amount)})`
+    );
+  }
+  const hasFieldErrors =
+    recoveryLineErrors.some(Boolean) || returnLineErrors.some(Boolean) || crossReturnLineErrors.some(Boolean) ||
+    !!amountRecoveredError || Object.values(otherPaymentErrors).some(Boolean);
+  // Nothing entered yet is not a "field error" but there's still nothing to save.
+  const hasAnyEntry =
+    recoveryLines.some(l => parseFloat(l.discount_given || 0) > 0) ||
+    returnLines.some(l => parseInt(l.qty_returned || 0) > 0) ||
+    crossReturnLines.some(l => parseInt(l.qty_returned || 0) > 0) ||
+    recoveredValue > 0 || otherPaymentsTotal > 0;
+  const canSaveRecovery = hasAnyEntry && !hasFieldErrors;
+
+  const editRecoveryLineErrors = editRecoveryLines.map(l =>
+    fieldError(l.discount_given, parseFloat(l.original_total), 'Discount given', `the invoice amount (${fmt(l.original_total)})`)
+  );
+  const editReturnLineErrors = editReturnLines.map(l =>
+    fieldError(l.qty_returned, l.max_qty, 'Return qty', `the sold qty (${l.max_qty ?? '—'})`)
+  );
+  const editAmountRecoveredError = fieldError(
+    editAmountRecovered, editPendingBeforePayment, 'Amount recovered', `the pending balance (${fmt(editPendingBeforePayment)})`
+  );
+  const canSaveEdit =
+    !editRecoveryLineErrors.some(Boolean) && !editReturnLineErrors.some(Boolean) && !editAmountRecoveredError;
+
+
+  const handleSaveClick = () => {
     if (!recHeader.date) return toast.error('Date required');
     const validRecovery = recoveryLines.filter(l => parseFloat(l.discount_given || 0) > 0).map(l => ({
       ...l, discount_given: parseFloat(l.discount_given),
@@ -400,9 +521,10 @@ export default function Recovery() {
       return_amount: parseInt(l.qty_returned) * parseFloat(l.return_rate)
     }));
     const allReturns = [...validCurrentReturns, ...validCrossReturns];
-    const recovered = amountRecoveredTouched ? parseFloat(amountRecovered || 0) : pendingBeforeThisPayment;
-    if (Number.isNaN(recovered) || recovered < 0) {
-      return toast.error('Enter a valid recovered amount');
+    // Amount recovered is always whatever the user manually typed — never auto-filled.
+    const recovered = Number.isNaN(parseFloat(amountRecovered)) ? 0 : parseFloat(amountRecovered || 0);
+    if (recovered < 0) {
+      return toast.error('Amount recovered cannot be negative');
     }
     if (recovered > pendingBeforeThisPayment) {
       return toast.error(`Recovered amount cannot exceed pending balance (${fmt(pendingBeforeThisPayment)})`);
@@ -417,6 +539,9 @@ export default function Recovery() {
       .filter(p => p.amount > 0);
     for (const p of otherPaymentEntries) {
       const inv = otherPendingInvoices.find(i => i.id === p.saleId);
+      if (p.amount < 0) {
+        return toast.error(`Amount for ${inv?.invoice_no || 'invoice'} cannot be negative`);
+      }
       if (inv && p.amount > parseFloat(inv.pending_amount)) {
         return toast.error(`Amount for ${inv.invoice_no} cannot exceed its pending balance (${fmt(inv.pending_amount)})`);
       }
@@ -445,6 +570,24 @@ export default function Recovery() {
       }
     }
 
+    setPendingAction({
+      type: 'add',
+      payload: { validRecovery, allReturns, recovered, otherPaymentEntries },
+      summary: {
+        invoiceNo: selectedSale?.invoice_no,
+        discount: totalDiscount,
+        returns: totalReturnAmt,
+        recovered,
+        pending: Math.max(0, pendingBeforeThisPayment - recovered),
+        otherPaymentsTotal,
+        otherCount: otherPaymentEntries.length,
+      },
+    });
+    setConfirmModal(true);
+  };
+
+  const performSaveRecovery = async () => {
+    const { validRecovery, allReturns, recovered, otherPaymentEntries } = pendingAction.payload;
     setSaving(true);
     try {
       await api.post('/recoveries', {
@@ -474,6 +617,7 @@ export default function Recovery() {
       toast.success((pendingAmount > 0
         ? `Recovery saved! ${fmt(recovered)} collected, ${fmt(pendingAmount)} still pending on this invoice.`
         : 'Recovery saved! Invoice fully recovered.') + otherMsg);
+      setConfirmModal(false); setPendingAction(null);
       setModal(false); load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Error saving recovery');
@@ -572,6 +716,19 @@ export default function Recovery() {
             <button
               className="btn btn-sm"
               style={{
+                background: filterStatus === 'settled' ? 'white' : 'transparent',
+                boxShadow: filterStatus === 'settled' ? 'var(--shadow-sm)' : 'none',
+                color: filterStatus === 'settled' ? 'var(--navy)' : 'var(--gray-500)',
+                fontWeight: filterStatus === 'settled' ? 700 : 500,
+                border: 'none', borderRadius: 6, padding: '5px 14px'
+              }}
+              onClick={() => setFilterStatus('settled')}
+            >
+              Settled Only
+            </button>
+            <button
+              className="btn btn-sm"
+              style={{
                 background: filterStatus === 'all' ? 'white' : 'transparent',
                 boxShadow: filterStatus === 'all' ? 'var(--shadow-sm)' : 'none',
                 color: filterStatus === 'all' ? 'var(--navy)' : 'var(--gray-500)',
@@ -639,7 +796,7 @@ export default function Recovery() {
               <div>Discount: <strong style={{ color: 'var(--amber)' }}>−{fmt(totalDiscount)}</strong></div>
               <div>Returns: <strong style={{ color: 'var(--amber)' }}>−{fmt(totalReturnAmt)}</strong></div>
               <div style={{ paddingLeft: 12, borderLeft: '2px solid var(--gray-200)' }}>
-                Net Collectible: <strong style={{ fontSize: 15, color: 'var(--green)' }}>{fmt(netCollectible)}</strong>
+                Net Collectible: <strong style={{ color: 'var(--green)' }}>{fmt(netCollectible)}</strong>
               </div>
               <div>Recovered: <strong style={{ color: 'var(--blue)' }}>{fmt(Number.isNaN(recoveredValue) ? 0 : recoveredValue)}</strong></div>
               {pendingAmount > 0 && (
@@ -648,7 +805,7 @@ export default function Recovery() {
             </div>
             <div className="flex gap-2">
               <button className="btn btn-outline" onClick={() => setModal(false)}>Cancel</button>
-              <button className="btn btn-primary btn-lg" onClick={handleSave} disabled={saving}>
+              <button className="btn btn-primary btn-lg" onClick={handleSaveClick} disabled={saving || !canSaveRecovery}>
                 {saving ? 'Saving...' : 'Save Recovery'}
               </button>
             </div>
@@ -674,10 +831,15 @@ export default function Recovery() {
               </div>
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label">Supplier</label>
-                <select className="form-control" value={recHeader.salesman_id}
-                  onChange={e => setRecHeader(p => ({ ...p, salesman_id: e.target.value }))}>
+                <select
+                  className="form-control"
+                  value={recHeader.salesman_id || ''}
+                  onChange={e => setRecHeader(p => ({ ...p, salesman_id: e.target.value }))}
+                >
                   <option value="">— Select —</option>
-                  {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                  {employees.map(emp => (
+                    <option key={emp.id} value={emp.id}>{emp.name}</option>
+                  ))}
                 </select>
               </div>
               <div className="form-group" style={{ margin: 0 }}>
@@ -695,21 +857,24 @@ export default function Recovery() {
                   className="form-control"
                   type="number"
                   step="1"
-                  min="1"
-                  max={pendingBeforeThisPayment}
-                  placeholder={pendingBeforeThisPayment.toFixed(2)}
-                  value={amountRecoveredTouched ? amountRecovered : (pendingBeforeThisPayment ? String(pendingBeforeThisPayment) : '')}
-                  onChange={e => { setAmountRecoveredTouched(true); setAmountRecovered(e.target.value); }}
+                  placeholder="Enter amount collected"
+                  style={{ borderColor: amountRecoveredError ? 'var(--red)' : undefined }}
+                  value={amountRecovered}
+                  onChange={e => setAmountRecovered(e.target.value)}
                   onWheel={blockWheelChange}
                 />
-                <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 4 }}>
-                  {priorRecovered > 0
-                    ? `${fmt(priorRecovered)} already collected on this invoice. Pending balance stays on ledger.`
-                    : 'Pending balance stays on ledger.'}
-                </div>
+                {amountRecoveredError ? (
+                  <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4 }}>{amountRecoveredError}</div>
+                ) : (
+                  <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 4 }}>
+                    {priorRecovered > 0
+                      ? `${fmt(priorRecovered)} already collected on this invoice. Max collectible now: ${fmt(pendingBeforeThisPayment)}.`
+                      : `Max collectible now: ${fmt(pendingBeforeThisPayment)}.`}
+                  </div>
+                )}
               </div>
               <div className="form-group" style={{ margin: 0 }}>
-                <label className="form-label">Pending Amount</label>
+                <label className="form-label">Pending Amount (remaining after this entry)</label>
                 <div style={{ padding: '10px 12px', background: 'var(--gray-50)', borderRadius: 8, fontWeight: 700, fontSize: 16, color: pendingAmount > 0 ? 'var(--amber)' : 'var(--green)' }}>
                   {fmt(pendingAmount)}
                 </div>
@@ -745,19 +910,24 @@ export default function Recovery() {
                 {(saleDetail.items || []).map((item, idx) => {
                   const line = recoveryLines[idx] || { discount_given: '' };
                   const finalAmt = parseFloat(item.total) - parseFloat(line.discount_given || 0);
+                  const err = recoveryLineErrors[idx];
                   return (
-                    <div key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: 'white', border: '1.5px solid var(--gray-200)', borderRadius: 8 }}>
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>{item.product_name}</div>
-                      <div><span className="mono badge badge-gray" style={{ fontSize: 11 }}>{item.batch_no || '—'}</span></div>
-                      <div style={{ fontWeight: 700 }}>{fmt(item.total)}</div>
-                      <input className="form-control" type="number" step="0.01" min="0" max={item.total}
-                        style={{ fontSize: 12, padding: '5px 8px' }} placeholder="0.00"
-                        value={line.discount_given}
-                        onChange={e => updateRecoveryLine(idx, 'discount_given', e.target.value, item)}
-                        onWheel={blockWheelChange} />
-                      <div style={{ fontWeight: 700, color: finalAmt < 0 ? 'var(--red)' : 'var(--green)' }}>
-                        {fmt(Math.max(0, finalAmt))}
+                    <div key={idx} style={{ marginBottom: 5 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', background: 'white', border: `1.5px solid ${err ? 'var(--red)' : 'var(--gray-200)'}`, borderRadius: 8 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>{item.product_name}</div>
+                        <div><span className="mono badge badge-gray" style={{ fontSize: 11 }}>{item.batch_no || '—'}</span></div>
+                        <div style={{ fontWeight: 700 }}>{fmt(item.total)}</div>
+                        <input className="form-control" type="number" step="0.01"
+                          style={{ fontSize: 12, padding: '5px 8px', borderColor: err ? 'var(--red)' : undefined }}
+                          placeholder="0.00"
+                          value={line.discount_given}
+                          onChange={e => updateRecoveryLine(idx, 'discount_given', e.target.value, item)}
+                          onWheel={blockWheelChange} />
+                        <div style={{ fontWeight: 700, color: finalAmt < 0 ? 'var(--red)' : 'var(--green)' }}>
+                          {fmt(Math.max(0, finalAmt))}
+                        </div>
                       </div>
+                      {err && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 2, paddingLeft: 4 }}>{err}</div>}
                     </div>
                   );
                 })}
@@ -765,14 +935,11 @@ export default function Recovery() {
             )}
 
             {activeTab === 'return' && (
-              <ReturnTable lines={returnLines} items={saleDetail.items} isCross={false} updateReturnLine={updateReturnLine} fmt={fmt} isAdmin={isAdmin} />
+              <ReturnTable lines={returnLines} items={saleDetail.items} isCross={false} updateReturnLine={updateReturnLine} fmt={fmt} isAdmin={isAdmin} errors={returnLineErrors} />
             )}
 
             {activeTab === 'cross-return' && (
               <div>
-                <div className="alert alert-info" style={{ marginBottom: 14 }}>
-                  Select a previous invoice to return products from it. If that invoice is unpaid, its qty and ledger will be updated. If it is locked (paid), the credit will be applied to the current invoice.
-                </div>
                 <div className="form-group" style={{ marginBottom: 14 }}>
                   <label className="form-label">Select Previous Invoice *</label>
                   <select className="form-control" style={{ maxWidth: 400 }}
@@ -793,7 +960,7 @@ export default function Recovery() {
                       Invoice <strong>{returnInvoiceDetail.invoice_no}</strong> — {fmt(returnInvoiceDetail.total_amount)}
                       {returnInvoiceDetail.is_locked && <span className="badge badge-amber" style={{ marginLeft: 8, fontSize: 10 }}>Locked — credit will apply to current invoice</span>}
                     </div>
-                    <ReturnTable lines={crossReturnLines} items={returnInvoiceDetail.items} isCross={true} updateReturnLine={updateReturnLine} fmt={fmt} isAdmin={isAdmin} />
+                    <ReturnTable lines={crossReturnLines} items={returnInvoiceDetail.items} isCross={true} updateReturnLine={updateReturnLine} fmt={fmt} isAdmin={isAdmin} errors={crossReturnLineErrors} />
                   </>
                 )}
               </div>
@@ -801,10 +968,6 @@ export default function Recovery() {
 
             {activeTab === 'other-pending' && (
               <div>
-                <div className="alert alert-info" style={{ marginBottom: 14 }}>
-                  This customer's other unpaid invoices are listed below. Enter an amount here to collect payment
-                  towards any of them in the same visit — each is saved as its own recovery entry.
-                </div>
                 {loadingOtherPending ? (
                   <div className="loading-center"><div className="spinner" /></div>
                 ) : otherPendingInvoices.length === 0 ? (
@@ -819,18 +982,22 @@ export default function Recovery() {
                     {otherPendingInvoices.map(inv => {
                       const pend = parseFloat(inv.pending_amount);
                       const val = otherPayments[inv.id] ?? '';
+                      const err = otherPaymentErrors[inv.id];
                       return (
-                        <div key={inv.id} style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1fr 1fr 1.2fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: 'white', border: '1.5px solid var(--gray-200)', borderRadius: 8 }}>
-                          <div className="mono" style={{ fontWeight: 600, fontSize: 13 }}>{inv.invoice_no}</div>
-                          <div>{formatDatePKT(inv.date)}</div>
-                          <div style={{ fontWeight: 700 }}>{fmt(inv.total_amount)}</div>
-                          <div style={{ color: 'var(--green)' }}>{fmt(inv.total_recovered)}</div>
-                          <div style={{ fontWeight: 700, color: 'var(--amber)' }}>{fmt(pend)}</div>
-                          <input className="form-control" type="number" step="1" min="0" max={pend}
-                            style={{ fontSize: 12, padding: '5px 8px' }} placeholder="0"
-                            value={val}
-                            onChange={e => setOtherPayments(prev => ({ ...prev, [inv.id]: e.target.value }))}
-                            onWheel={blockWheelChange} />
+                        <div key={inv.id} style={{ marginBottom: 5 }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1fr 1fr 1.2fr', gap: 6, alignItems: 'center', padding: '7px 8px', background: 'white', border: `1.5px solid ${err ? 'var(--red)' : 'var(--gray-200)'}`, borderRadius: 8 }}>
+                            <div className="mono" style={{ fontWeight: 600, fontSize: 13 }}>{inv.invoice_no}</div>
+                            <div>{formatDatePKT(inv.date)}</div>
+                            <div style={{ fontWeight: 700 }}>{fmt(inv.total_amount)}</div>
+                            <div style={{ color: 'var(--green)' }}>{fmt(inv.total_recovered)}</div>
+                            <div style={{ fontWeight: 700, color: 'var(--amber)' }}>{fmt(pend)}</div>
+                            <input className="form-control" type="number" step="1"
+                              style={{ fontSize: 12, padding: '5px 8px', borderColor: err ? 'var(--red)' : undefined }} placeholder="0"
+                              value={val}
+                              onChange={e => setOtherPayments(prev => ({ ...prev, [inv.id]: e.target.value }))}
+                              onWheel={blockWheelChange} />
+                          </div>
+                          {err && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 2, paddingLeft: 4 }}>{err}</div>}
                         </div>
                       );
                     })}
@@ -838,41 +1005,6 @@ export default function Recovery() {
                 )}
               </div>
             )}
-
-            {/* Net summary */}
-            <div style={{
-              marginTop: 18, padding: '12px 16px',
-              background: '#f0fdf4',
-              border: '1.5px solid #bbf7d0',
-              borderRadius: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center'
-            }}>
-              <div>
-                <div style={{ fontSize: 12, color: 'var(--gray-500)', marginBottom: 3 }}>Amount to record in ledger as payment</div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--green)' }}>
-                  {fmt(Number.isNaN(recoveredValue) ? 0 : recoveredValue)}
-                </div>
-                {pendingAmount > 0 && (
-                  <div style={{ fontSize: 12, color: 'var(--amber)', marginTop: 4, fontWeight: 600 }}>
-                    Pending balance: {fmt(pendingAmount)}
-                  </div>
-                )}
-              </div>
-              <div style={{ textAlign: 'right', fontSize: 12, color: 'var(--gray-500)' }}>
-                <div>Invoice: <strong>{fmt(invoiceTotal)}</strong></div>
-                <div>− Discounts: <strong style={{ color: 'var(--amber)' }}>{fmt(totalDiscount)}</strong></div>
-                <div>− Returns: <strong style={{ color: 'var(--amber)' }}>{fmt(totalReturnAmt)}</strong></div>
-                <div>Net Collectible: <strong>{fmt(netCollectible)}</strong></div>
-              </div>
-            </div>
-            {otherPaymentsTotal > 0 && (
-              <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--gray-50)', borderRadius: 8, fontSize: 12 }}>
-                Also collecting <strong style={{ color: 'var(--green)' }}>{fmt(otherPaymentsTotal)}</strong> against other pending invoices — see the "(Other) Pending Invoices" tab.
-              </div>
-            )}
-            <div className="alert alert-warning" style={{ marginTop: 12 }}>
-              <span style={{ fontWeight: 700, marginRight: 8 }}>Note:</span>
-              <span>After saving, this invoice's line items will be <strong>locked</strong>. Only the recovered amount is credited in the customer ledger; any pending balance stays open on this invoice's recovery until it's fully collected — you can come back and add another payment later.</span>
-            </div>
           </div>
         )}
       </Modal>
@@ -930,7 +1062,7 @@ export default function Recovery() {
         footer={
           <div className="flex gap-2" style={{ justifyContent: 'flex-end', width: '100%' }}>
             <button className="btn btn-outline" onClick={() => setEditModal(false)}>Cancel</button>
-            <button className="btn btn-primary" onClick={handleEditSave} disabled={editSaving || editLoading}>
+            <button className="btn btn-primary" onClick={handleEditSaveClick} disabled={editSaving || editLoading || !canSaveEdit}>
               {editSaving ? 'Saving...' : 'Save Changes'}
             </button>
           </div>
@@ -962,19 +1094,25 @@ export default function Recovery() {
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 6, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6, fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
                   <span>Product</span><span>Batch</span><span>Invoice Amt</span><span>Discount Given</span>
                 </div>
-                {editRecoveryLines.map((l, idx) => (
-                  <div key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: 'white', border: '1.5px solid var(--gray-200)', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13 }}>{l.product_name}</div>
-                    <div><span className="mono badge badge-gray" style={{ fontSize: 11 }}>{l.batch_no || '—'}</span></div>
-                    <div style={{ fontWeight: 700 }}>{fmt(l.original_total)}</div>
-                    <input className="form-control" type="number" step="0.01" min="0" max={l.original_total}
-                      style={{ fontSize: 12, padding: '5px 8px' }} value={l.discount_given}
-                      onChange={e => setEditRecoveryLines(prev => {
-                        const u = [...prev]; u[idx] = { ...u[idx], discount_given: e.target.value }; return u;
-                      })}
-                      onWheel={blockWheelChange} />
-                  </div>
-                ))}
+                {editRecoveryLines.map((l, idx) => {
+                  const err = editRecoveryLineErrors[idx];
+                  return (
+                    <div key={idx} style={{ marginBottom: 5 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', background: 'white', border: `1.5px solid ${err ? 'var(--red)' : 'var(--gray-200)'}`, borderRadius: 8 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>{l.product_name}</div>
+                        <div><span className="mono badge badge-gray" style={{ fontSize: 11 }}>{l.batch_no || '—'}</span></div>
+                        <div style={{ fontWeight: 700 }}>{fmt(l.original_total)}</div>
+                        <input className="form-control" type="number" step="0.01"
+                          style={{ fontSize: 12, padding: '5px 8px', borderColor: err ? 'var(--red)' : undefined }} value={l.discount_given}
+                          onChange={e => setEditRecoveryLines(prev => {
+                            const u = [...prev]; u[idx] = { ...u[idx], discount_given: e.target.value }; return u;
+                          })}
+                          onWheel={blockWheelChange} />
+                      </div>
+                      {err && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 2, paddingLeft: 4 }}>{err}</div>}
+                    </div>
+                  );
+                })}
                 <div className="divider" />
               </>
             )}
@@ -985,41 +1123,117 @@ export default function Recovery() {
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 6, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6, fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
                   <span>Product / Invoice</span><span>Batch</span><span>Return Qty</span><span>Rate</span><span>Return Amt</span>
                 </div>
-                {editReturnLines.map((l, idx) => (
-                  <div key={l.row_id} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5, background: 'white', border: '1.5px solid var(--gray-200)', borderRadius: 8 }}>
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>{l.product_name}</div>
-                      <div style={{ fontSize: 10, color: 'var(--gray-500)' }}>{l.source_invoice}</div>
+                {editReturnLines.map((l, idx) => {
+                  const err = editReturnLineErrors[idx];
+                  return (
+                    <div key={l.row_id} style={{ marginBottom: 5 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', background: 'white', border: `1.5px solid ${err ? 'var(--red)' : 'var(--gray-200)'}`, borderRadius: 8 }}>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>{l.product_name}</div>
+                          <div style={{ fontSize: 10, color: 'var(--gray-500)' }}>{l.source_invoice}</div>
+                        </div>
+                        <div><span className="mono badge badge-gray" style={{ fontSize: 11 }}>{l.batch_no || '—'}</span></div>
+                        <input className="form-control" type="number" step="1"
+                          style={{ fontSize: 12, padding: '5px 8px', borderColor: err ? 'var(--red)' : undefined }} value={l.qty_returned}
+                          onChange={e => setEditReturnLines(prev => {
+                            const u = [...prev]; u[idx] = { ...u[idx], qty_returned: e.target.value }; return u;
+                          })}
+                          onWheel={blockWheelChange} />
+                        <input className="form-control" type="number" step="0.01" min="0"
+                          style={{ fontSize: 12, padding: '5px 8px' }} value={l.return_rate}
+                          onChange={e => setEditReturnLines(prev => {
+                            const u = [...prev]; u[idx] = { ...u[idx], return_rate: e.target.value }; return u;
+                          })}
+                          onWheel={blockWheelChange} />
+                        <div style={{ fontWeight: 700, color: 'var(--amber)' }}>
+                          {fmt((parseFloat(l.qty_returned || 0)) * (parseFloat(l.return_rate || 0)))}
+                        </div>
+                      </div>
+                      {err && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 2, paddingLeft: 4 }}>{err}</div>}
                     </div>
-                    <div><span className="mono badge badge-gray" style={{ fontSize: 11 }}>{l.batch_no || '—'}</span></div>
-                    <input className="form-control" type="number" step="1" min="0"
-                      style={{ fontSize: 12, padding: '5px 8px' }} value={l.qty_returned}
-                      onChange={e => setEditReturnLines(prev => {
-                        const u = [...prev]; u[idx] = { ...u[idx], qty_returned: e.target.value }; return u;
-                      })}
-                      onWheel={blockWheelChange} />
-                    <input className="form-control" type="number" step="0.01" min="0"
-                      style={{ fontSize: 12, padding: '5px 8px' }} value={l.return_rate}
-                      onChange={e => setEditReturnLines(prev => {
-                        const u = [...prev]; u[idx] = { ...u[idx], return_rate: e.target.value }; return u;
-                      })}
-                      onWheel={blockWheelChange} />
-                    <div style={{ fontWeight: 700, color: 'var(--amber)' }}>
-                      {fmt((parseFloat(l.qty_returned || 0)) * (parseFloat(l.return_rate || 0)))}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
                 <div className="divider" />
               </>
             )}
 
-            <div className="form-group">
-              <label className="form-label">Amount Recovered (Cash)</label>
-              <input className="form-control" type="number" step="1" min="0"
-                value={editAmountRecovered}
-                onChange={e => setEditAmountRecovered(e.target.value)}
-                onWheel={blockWheelChange} />
+            <div className="form-grid form-grid-2">
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Amount Recovered (Cash)</label>
+                <input className="form-control" type="number" step="1"
+                  placeholder="Enter amount collected"
+                  style={{ borderColor: editAmountRecoveredError ? 'var(--red)' : undefined }}
+                  value={editAmountRecovered}
+                  onChange={e => setEditAmountRecovered(e.target.value)}
+                  onWheel={blockWheelChange} />
+                {editAmountRecoveredError ? (
+                  <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4 }}>{editAmountRecoveredError}</div>
+                ) : (
+                  <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 4 }}>
+                    Max collectible for this entry: {fmt(editPendingBeforePayment)}.
+                  </div>
+                )}
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Pending Amount (remaining after this entry)</label>
+                <div style={{ padding: '10px 12px', background: 'var(--gray-50)', borderRadius: 8, fontWeight: 700, fontSize: 16, color: editPendingAmount > 0 ? 'var(--amber)' : 'var(--green)' }}>
+                  {fmt(editPendingAmount)}
+                </div>
+              </div>
             </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Confirm Recovery — shown after "Save" is pressed, before anything is submitted. */}
+      <Modal isOpen={confirmModal} onClose={() => { setConfirmModal(false); setPendingAction(null); }}
+        title={pendingAction?.type === 'edit' ? 'Confirm Recovery Edit' : 'Confirm Recovery'}
+        footer={
+          <div className="flex gap-2" style={{ justifyContent: 'flex-end', width: '100%' }}>
+            <button className="btn btn-outline" onClick={() => { setConfirmModal(false); setPendingAction(null); }}>
+              Back
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={() => pendingAction?.type === 'edit' ? performEditSave() : performSaveRecovery()}
+              disabled={saving || editSaving}
+            >
+              {(saving || editSaving) ? 'Saving...' : 'Confirm & Save'}
+            </button>
+          </div>
+        }>
+        {pendingAction && (
+          <div>
+            <div style={{ fontSize: 13, color: 'var(--gray-600)', marginBottom: 14 }}>
+              {pendingAction.type === 'edit'
+                ? 'Please review the corrected entry below before saving.'
+                : `Please review this recovery for invoice ${pendingAction.summary.invoiceNo || ''} before saving.`}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div style={{ padding: '10px 12px', background: 'var(--gray-50)', borderRadius: 8 }}>
+                <div style={{ fontSize: 11, color: 'var(--gray-500)', textTransform: 'uppercase', fontWeight: 700 }}>Discount</div>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>{fmt(pendingAction.summary.discount)}</div>
+              </div>
+              <div style={{ padding: '10px 12px', background: 'var(--gray-50)', borderRadius: 8 }}>
+                <div style={{ fontSize: 11, color: 'var(--gray-500)', textTransform: 'uppercase', fontWeight: 700 }}>Returns</div>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>{fmt(pendingAction.summary.returns)}</div>
+              </div>
+              <div style={{ padding: '10px 12px', background: 'var(--gray-50)', borderRadius: 8 }}>
+                <div style={{ fontSize: 11, color: 'var(--gray-500)', textTransform: 'uppercase', fontWeight: 700 }}>Amount Recovered</div>
+                <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--green)' }}>{fmt(pendingAction.summary.recovered)}</div>
+              </div>
+              <div style={{ padding: '10px 12px', background: 'var(--gray-50)', borderRadius: 8 }}>
+                <div style={{ fontSize: 11, color: 'var(--gray-500)', textTransform: 'uppercase', fontWeight: 700 }}>Pending After</div>
+                <div style={{ fontWeight: 700, fontSize: 16, color: pendingAction.summary.pending > 0 ? 'var(--amber)' : 'var(--green)' }}>
+                  {fmt(pendingAction.summary.pending)}
+                </div>
+              </div>
+            </div>
+            {pendingAction.type === 'add' && pendingAction.summary.otherCount > 0 && (
+              <div style={{ marginTop: 10, fontSize: 12, color: 'var(--gray-500)' }}>
+                Plus {fmt(pendingAction.summary.otherPaymentsTotal)} collected against {pendingAction.summary.otherCount} other invoice(s).
+              </div>
+            )}
           </div>
         )}
       </Modal>
