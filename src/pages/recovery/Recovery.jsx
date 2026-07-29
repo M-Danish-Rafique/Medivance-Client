@@ -14,6 +14,21 @@ import { useAuth } from '../../context/AuthContext';
 // a batch is only truly "expired" once the calendar month has rolled past its expiry month.
 const isPastExpiryMonth = (expiryStr) => todayPKT().slice(0, 7) > expiryStr.slice(0, 7);
 
+// Shared expiry classification for a return line, used both by the row-level
+// display logic in ReturnTable and by the "Return Full Invoice" bulk-fill
+// handler, so the two never disagree about which lines are blocked.
+const getExpiryStatus = (exp_date, isAdmin) => {
+  if (!exp_date) return { blocked: false, warning: false, label: null };
+  const expiryStr = String(exp_date).slice(0, 10);
+  const threshold = addMonthsPKT(expiryStr, -5);
+  const withinWindow = todayPKT() > threshold;
+  const label = formatDatePKT(expiryStr);
+  if (!withinWindow) return { blocked: false, warning: false, label };
+  if (isPastExpiryMonth(expiryStr)) return { blocked: true, warning: false, label };
+  if (isAdmin) return { blocked: false, warning: true, label };
+  return { blocked: true, warning: false, label };
+};
+
 const today = () => todayPKT();
 const fmt = formatCurrency;
 
@@ -194,6 +209,11 @@ export default function Recovery() {
   const [loadingReturnInvoice, setLoadingReturnInvoice] = useState(false);
   const [crossReturnLines, setCrossReturnLines] = useState([]);
 
+  // "Return Full Invoice" checkbox state — one for the current-invoice return
+  // tab, one for the previous-invoice (cross) return tab.
+  const [fullReturnCurrent, setFullReturnCurrent] = useState(false);
+  const [fullReturnCross, setFullReturnCross] = useState(false);
+
   // (Other) Pending Invoices tab — collect payment for other unpaid invoices of the same customer
   const [otherPendingInvoices, setOtherPendingInvoices] = useState([]);
   const [loadingOtherPending, setLoadingOtherPending] = useState(false);
@@ -273,6 +293,8 @@ export default function Recovery() {
       setCrossReturnLines([]);
       setSelectedReturnInvoiceId('');
       setReturnInvoiceDetail(null);
+      setFullReturnCurrent(false);
+      setFullReturnCross(false);
       // Sale invoice stores the supplier in delivery_by (Delivery By on the Sale form) —
       // same approach as Sale.jsx's openEdit, which is confirmed working.
       const invoiceSupplierId = r.data.delivery_by ?? sale.delivery_by;
@@ -401,6 +423,7 @@ export default function Recovery() {
   /* ── Load cross-invoice return detail ── */
   const loadReturnInvoice = async (invoiceId) => {
     setSelectedReturnInvoiceId(invoiceId);
+    setFullReturnCross(false);
     if (!invoiceId) { setReturnInvoiceDetail(null); setCrossReturnLines([]); return; }
     setLoadingReturnInvoice(true);
     try {
@@ -431,6 +454,64 @@ export default function Recovery() {
       updated[idx].return_amount = qty * rate;
       return updated;
     });
+  };
+
+  // "Return Full Invoice" checkbox — checking it fills every eligible line's
+  // Return Qty with its full Sold Qty (100% return), recomputing return_amount
+  // at the line's current rate. Unchecking clears those lines back to blank.
+  // Lines whose batch is outright expired (hard-blocked regardless of role)
+  // are left untouched either way, since they can never be returned.
+  const returnFullInvoice = (isCross, checked) => {
+    const setter = isCross ? setCrossReturnLines : setReturnLines;
+    setter(prev => prev.map(line => {
+      const { blocked } = getExpiryStatus(line.exp_date, isAdmin);
+      if (blocked) return line;
+      if (!checked) {
+        return { ...line, qty_returned: '', return_amount: 0 };
+      }
+      const qty = parseFloat(line.original_qty || 0);
+      if (!qty) return line;
+      const rate = parseFloat(line.return_rate || 0);
+      return { ...line, qty_returned: String(qty), return_amount: qty * rate };
+    }));
+  };
+
+  const handleFullReturnToggle = (isCross, checked) => {
+    if (isCross) setFullReturnCross(checked); else setFullReturnCurrent(checked);
+    returnFullInvoice(isCross, checked);
+  };
+
+  // Unchecking "Return Full Invoice" clears the quantities it filled in
+  // (expiry-blocked lines are left untouched either way, since they were
+  // never part of the full-return fill in the first place).
+  const clearInvoiceReturns = (isCross) => {
+    const setter = isCross ? setCrossReturnLines : setReturnLines;
+    setter(prev => prev.map(line => {
+      const { blocked } = getExpiryStatus(line.exp_date, isAdmin);
+      if (blocked) return line;
+      return { ...line, qty_returned: '', return_amount: 0 };
+    }));
+  };
+
+  const toggleFullInvoiceReturn = (isCross, checked) => {
+    if (checked) returnFullInvoice(isCross);
+    else clearInvoiceReturns(isCross);
+  };
+
+  // Whether every eligible (non-blocked) line on a given return-lines array
+  // is currently at its full sold quantity — drives the checkbox's checked state.
+  const isInvoiceFullyReturned = (lines) => {
+    if (!lines.length) return false;
+    let anyEligible = false;
+    for (const line of lines) {
+      const { blocked } = getExpiryStatus(line.exp_date, isAdmin);
+      if (blocked) continue;
+      const qty = parseFloat(line.original_qty || 0);
+      if (!qty) continue;
+      anyEligible = true;
+      if (parseFloat(line.qty_returned || 0) !== qty) return false;
+    }
+    return anyEligible;
   };
 
   const totalDiscount = recoveryLines.reduce((s, l) => s + parseFloat(l.discount_given || 0), 0);
@@ -790,19 +871,49 @@ export default function Recovery() {
       <Modal isOpen={modal} onClose={() => setModal(false)}
         title={`Recovery & Return — ${selectedSale?.invoice_no}`} size="xl"
         footer={
-          <div className="flex items-center justify-between w-full">
-            <div style={{ display: 'flex', gap: 20, fontSize: 13 }}>
-              <div>Invoice: <strong>{fmt(invoiceTotal)}</strong></div>
-              <div>Discount: <strong style={{ color: 'var(--amber)' }}>−{fmt(totalDiscount)}</strong></div>
-              <div>Returns: <strong style={{ color: 'var(--amber)' }}>−{fmt(totalReturnAmt)}</strong></div>
-              <div style={{ paddingLeft: 12, borderLeft: '2px solid var(--gray-200)' }}>
-                Net Collectible: <strong style={{ color: 'var(--green)' }}>{fmt(netCollectible)}</strong>
+          <div className="flex items-center w-full" style={{ gap: 32 }}>
+            <div style={{ display: 'flex', flex: 1, alignItems: 'center' }}>
+              {/* Group 1: Invoice, Discount, Returns */}
+              <div style={{ display: 'flex', flex: 1, justifyContent: 'space-between', paddingRight: 24 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontSize: 11, color: 'var(--gray-500)' }}>Invoice</span>
+                  <strong>{fmt(invoiceTotal)}</strong>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontSize: 11, color: 'var(--gray-500)' }}>Discount</span>
+                  <strong style={{ color: 'var(--amber)' }}>{fmt(totalDiscount)}</strong>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontSize: 11, color: 'var(--gray-500)' }}>Returns</span>
+                  <strong style={{ color: 'var(--amber)' }}>{fmt(totalReturnAmt)}</strong>
+                </div>
               </div>
-              <div>Recovered: <strong style={{ color: 'var(--blue)' }}>{fmt(Number.isNaN(recoveredValue) ? 0 : recoveredValue)}</strong></div>
-              {pendingAmount > 0 && (
-                <div>Pending: <strong style={{ color: 'var(--amber)' }}>{fmt(pendingAmount)}</strong></div>
-              )}
+
+              {/* Group 2: Net Collectible, Recovered, Pending */}
+              <div style={{
+                display: 'flex', flex: 1, justifyContent: 'space-between',
+                paddingLeft: 24, borderLeft: '2px solid var(--gray-200)'
+              }}>
+                <div style={{ display: 'flex', flexDirection: 'column', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontSize: 11, color: 'var(--gray-500)' }}>Net Collectible</span>
+                  <strong style={{ color: 'var(--green)' }}>{fmt(netCollectible)}</strong>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontSize: 11, color: 'var(--gray-500)' }}>Recovered</span>
+                  <strong style={{ color: 'var(--blue)' }}>{fmt(Number.isNaN(recoveredValue) ? 0 : recoveredValue)}</strong>
+                </div>
+                {pendingAmount > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: 11, color: 'var(--gray-500)' }}>Pending</span>
+                    <strong style={{ color: 'var(--amber)' }}>{fmt(pendingAmount)}</strong>
+                  </div>
+                ) : (
+                  // keeps the 3-item spacing consistent in group 2 when Pending is hidden
+                  <div style={{ visibility: 'hidden' }} />
+                )}
+              </div>
             </div>
+
             <div className="flex gap-2">
               <button className="btn btn-outline" onClick={() => setModal(false)}>Cancel</button>
               <button className="btn btn-primary btn-lg" onClick={handleSaveClick} disabled={saving || !canSaveRecovery}>
@@ -935,7 +1046,17 @@ export default function Recovery() {
             )}
 
             {activeTab === 'return' && (
-              <ReturnTable lines={returnLines} items={saleDetail.items} isCross={false} updateReturnLine={updateReturnLine} fmt={fmt} isAdmin={isAdmin} errors={returnLineErrors} />
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--gray-600)', cursor: returnLines.length === 0 ? 'default' : 'pointer' }}>
+                    <input type="checkbox" checked={fullReturnCurrent}
+                      disabled={returnLines.length === 0}
+                      onChange={e => handleFullReturnToggle(false, e.target.checked)} />
+                    Return Full Invoice
+                  </label>
+                </div>
+                <ReturnTable lines={returnLines} items={saleDetail.items} isCross={false} updateReturnLine={updateReturnLine} fmt={fmt} isAdmin={isAdmin} errors={returnLineErrors} />
+              </div>
             )}
 
             {activeTab === 'cross-return' && (
@@ -956,9 +1077,17 @@ export default function Recovery() {
                 {loadingReturnInvoice && <div className="loading-center"><div className="spinner" /></div>}
                 {returnInvoiceDetail && !loadingReturnInvoice && (
                   <>
-                    <div style={{ marginBottom: 10, padding: '8px 12px', background: 'var(--gray-50)', borderRadius: 8, fontSize: 12 }}>
-                      Invoice <strong>{returnInvoiceDetail.invoice_no}</strong> — {fmt(returnInvoiceDetail.total_amount)}
-                      {returnInvoiceDetail.is_locked && <span className="badge badge-amber" style={{ marginLeft: 8, fontSize: 10 }}>Locked — credit will apply to current invoice</span>}
+                    <div style={{ marginBottom: 10, padding: '8px 12px', background: 'var(--gray-50)', borderRadius: 8, fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                      <span>
+                        Invoice <strong>{returnInvoiceDetail.invoice_no}</strong> — {fmt(returnInvoiceDetail.total_amount)}
+                        {returnInvoiceDetail.is_locked && <span className="badge badge-amber" style={{ marginLeft: 8, fontSize: 10 }}>Locked — credit will apply to current invoice</span>}
+                      </span>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--gray-600)', cursor: crossReturnLines.length === 0 ? 'default' : 'pointer' }}>
+                        <input type="checkbox" checked={fullReturnCross}
+                          disabled={crossReturnLines.length === 0}
+                          onChange={e => handleFullReturnToggle(true, e.target.checked)} />
+                        Return Full Invoice
+                      </label>
                     </div>
                     <ReturnTable lines={crossReturnLines} items={returnInvoiceDetail.items} isCross={true} updateReturnLine={updateReturnLine} fmt={fmt} isAdmin={isAdmin} errors={crossReturnLineErrors} />
                   </>
@@ -1058,7 +1187,7 @@ export default function Recovery() {
 
       {/* Edit Recovery Modal — Admin only. Reachable even when the invoice is settled. */}
       <Modal isOpen={editModal} onClose={() => setEditModal(false)}
-        title="Edit Recovery Entry (Admin)" size="lg"
+        title={`Edit Recovery Entry — ${selectedSale?.invoice_no}`} size="lg"
         footer={
           <div className="flex gap-2" style={{ justifyContent: 'flex-end', width: '100%' }}>
             <button className="btn btn-outline" onClick={() => setEditModal(false)}>Cancel</button>
@@ -1071,10 +1200,6 @@ export default function Recovery() {
           <div className="loading-center"><div className="spinner" /></div>
         ) : (
           <div>
-            <div className="alert alert-warning" style={{ marginBottom: 14 }}>
-              Saving here reverts this entry's original effect on inventory and the customer ledger, then re-applies the corrected values below. Available to admin accounts only.
-            </div>
-
             <div className="form-grid form-grid-2" style={{ marginBottom: 16 }}>
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label">Date *</label>
