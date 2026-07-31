@@ -850,7 +850,7 @@ export default function Recovery() {
                         <td style={{ textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                           {isCompleted
                             ? <span style={{ fontSize: 12, color: 'var(--gray-400)', padding: '5px 8px' }}>
-                                {isAdmin ? 'Settled' : 'Settled'}
+                                'Settled'
                               </span>
                             : <button className="btn btn-primary btn-sm" onClick={() => openRecovery(s)}>
                                 {s.is_locked ? 'Collect Payment' : 'Recovery / Return'}
@@ -974,15 +974,7 @@ export default function Recovery() {
                   onChange={e => setAmountRecovered(e.target.value)}
                   onWheel={blockWheelChange}
                 />
-                {amountRecoveredError ? (
-                  <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4 }}>{amountRecoveredError}</div>
-                ) : (
-                  <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 4 }}>
-                    {priorRecovered > 0
-                      ? `${fmt(priorRecovered)} already collected on this invoice. Max collectible now: ${fmt(pendingBeforeThisPayment)}.`
-                      : `Max collectible now: ${fmt(pendingBeforeThisPayment)}.`}
-                  </div>
-                )}
+                { amountRecoveredError && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4 }}>{amountRecoveredError}</div> }
               </div>
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label">Pending Amount (remaining after this entry)</label>
