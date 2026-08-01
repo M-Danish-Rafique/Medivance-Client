@@ -363,6 +363,9 @@ input.no-spinner[type=number] {
 .btn-success { background: var(--green); color: white; }
 .btn-success:hover:not(:disabled) { background: #047857; }
 
+.btn-amber { background: var(--amber); color: white; }
+.btn-amber:hover:not(:disabled) { background: #b45309; box-shadow: 0 4px 12px rgba(217, 119, 6, 0.25); }
+
 .btn-danger { background: var(--red); color: white; }
 .btn-danger:hover:not(:disabled) { background: #b91c1c; }
 
@@ -633,6 +636,8 @@ textarea.form-control { resize: vertical; min-height: 80px; line-height: 1.5; }
 .search-bar input::placeholder { color: var(--gray-400); }
 
 /* Loading */
+.spin { animation: spin 0.8s linear infinite; }
+
 .spinner {
   width: 36px; height: 36px;
   border: 3px solid var(--gray-200);

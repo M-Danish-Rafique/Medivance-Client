@@ -555,8 +555,8 @@ export default function Recovery() {
         filteredAreas={filteredAreas}
         filteredTerritories={filteredTerritories}
         filteredCustomers={filteredCustomers}
-        areas={areas}
-        territories={territories}
+                areas={areas}
+                territories={territories}
         employees={employees}
         filterCity={filterCity}
         filterArea={filterArea}

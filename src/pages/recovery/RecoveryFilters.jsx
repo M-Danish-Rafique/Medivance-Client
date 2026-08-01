@@ -1,4 +1,6 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
+import { Zap } from 'lucide-react';
 import CustomerAutocomplete from '../../components/common/CustomerAutocomplete';
 
 export default function RecoveryFilters({
@@ -23,12 +25,18 @@ export default function RecoveryFilters({
 }) {
   return (
     <div className="card" style={{ marginBottom: 20 }}>
-      <div className="card-header">
+      <div className="card-header" style={{ padding: '14px 22px', minHeight: 0 }}>
         <div className="card-title">Filter Invoices</div>
-        <button className="btn btn-ghost btn-sm" onClick={onReset} style={{ color: 'var(--gray-500)' }}>↺ Reset</button>
+        <Link to="/recovery/quick" className="btn" style={{ flexShrink: 0 }}>
+          <Zap size={14} />
+          Quick Recovery
+        </Link>
       </div>
-      <div className="card-body" style={{ paddingTop: 0 }}>
-        <div className="form-grid form-grid-3" style={{ marginBottom: 10 }}>
+      <div className="card-body" style={{ paddingTop: 16 }}>
+        <div
+          className="form-grid"
+          style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: 14 }}
+        >
           <div className="form-group" style={{ margin: 0 }}>
             <label className="form-label">City</label>
             <select className="form-control" value={filterCity}
@@ -56,7 +64,10 @@ export default function RecoveryFilters({
             </select>
           </div>
         </div>
-        <div className="form-grid form-grid-2">
+        <div
+          className="form-grid"
+          style={{ gridTemplateColumns: '1fr 1fr auto', alignItems: 'end', gap: 16 }}
+        >
           <div className="form-group" style={{ margin: 0 }}>
             <label className="form-label">Salesman</label>
             <select className="form-control" value={filterSalesman} onChange={e => onSalesmanChange(e.target.value)}>
@@ -77,6 +88,14 @@ export default function RecoveryFilters({
               clearLabel="All Customers"
             />
           </div>
+          <button
+            type="button"
+            className="btn btn-outline"
+            onClick={onReset}
+            style={{ flexShrink: 0, height: 38, color: 'var(--gray-600)' }}
+          >
+            Reset
+          </button>
         </div>
       </div>
     </div>

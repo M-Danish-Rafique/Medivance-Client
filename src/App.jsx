@@ -22,6 +22,7 @@ import Inventory from './pages/inventory/Inventory';
 import Finance from './pages/finance/Finance';
 import Reports from './pages/reports/Reports';
 import Recovery from './pages/recovery/Recovery';
+import QuickRecovery from './pages/recovery/QuickRecovery';
 import RawMaterials from './pages/manufacturing/RawMaterials';
 import Batches from './pages/manufacturing/Batches';
 import Yields from './pages/manufacturing/Yields';
@@ -75,6 +76,7 @@ export default function App() {
                 <Route path="/finance" element={<Finance />} />
                 <Route path="/reports" element={<Reports />} />
                 <Route path="/recovery" element={<Recovery />} />
+                <Route path="/recovery/quick" element={<QuickRecovery />} />
                 <Route path="/manufacturing/raw-materials" element={<RawMaterials />} />
                 <Route path="/manufacturing/batches" element={<Batches />} />
                 <Route path="/manufacturing/yields" element={<Yields />} />
