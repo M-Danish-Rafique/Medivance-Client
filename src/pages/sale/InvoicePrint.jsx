@@ -131,13 +131,11 @@ function InvoiceDocument({ saleData, type, customerBalance, company, printedAt }
           </div>
           <div className="invoice-header-right">
             <div className="invoice-doc-title">INVOICE</div>
-            <table className="invoice-meta-table">
-              <tbody>
-                <tr><td>Invoice No:</td><td><strong>{invoice_no}</strong></td></tr>
-                <tr><td>Date:</td><td><strong>{fmtDate(date)}</strong></td></tr>
-                <tr><td>Page:</td><td>1 of 1</td></tr>
-              </tbody>
-            </table>
+            <div className="invoice-meta-table">
+              <div className="invoice-meta-row"><span>Invoice No:</span><strong>{invoice_no}</strong></div>
+              <div className="invoice-meta-row"><span>Date:</span><strong>{fmtDate(date)}</strong></div>
+              <div className="invoice-meta-row"><span>Page:</span><span>1 of 1</span></div>
+            </div>
           </div>
         </div>
 
@@ -383,10 +381,21 @@ export default function InvoicePrint() {
         .invoice-meta { font-size: 7.5px; margin-top: 2px; }
         .invoice-header-right { text-align: right; min-width: 145px; }
         .invoice-doc-title { font-size: 16px; font-weight: 700; letter-spacing: 2px; margin-bottom: 5px; }
-        .invoice-meta-table { font-size: 8px; margin-left: auto; border-collapse: collapse; }
-        .invoice-meta-table td { padding: 1px 0; }
-        .invoice-meta-table td:first-child { padding-right: 10px; text-align: right; font-weight: 400; }
-        .invoice-meta-table td:last-child { text-align: left; font-weight: 700; }
+        .invoice-meta-table {
+          font-size: 8px;
+          margin-left: auto;
+        }
+        .invoice-meta-row {
+          display: flex;
+          justify-content: flex-end;
+          align-items: baseline;
+          gap: 4px;
+          padding: 1px 0;
+          font-weight: 400;
+        }
+        .invoice-meta-row strong {
+          font-weight: 700;
+        }
         .invoice-party-box {
           border: 1px solid #000;
           padding: 7px 10px;
@@ -419,6 +428,8 @@ export default function InvoicePrint() {
           border-collapse: collapse;
           font-size: 8px;
           margin-bottom: 0;
+          color: #000;
+          border-color: #000;
         }
         .invoice-table thead tr {
           border-top: 1.5px solid #000;
@@ -430,9 +441,16 @@ export default function InvoicePrint() {
           font-weight: 700;
           font-size: 7.5px;
           color: #000;
+          border-color: #000;
           white-space: nowrap;
         }
-        .invoice-table td { padding: 3px 2px; text-align: center; vertical-align: top; }
+        .invoice-table td {
+          padding: 3px 2px;
+          text-align: center;
+          vertical-align: top;
+          color: #000;
+          border-color: #000;
+        }
         .invoice-table .left { text-align: left; }
         .invoice-table .bold { font-weight: 700; }
         .invoice-summary-panel {
