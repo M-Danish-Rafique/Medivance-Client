@@ -350,7 +350,7 @@ export default function InvoicePrint() {
           max-height: 297mm;
           padding: 8mm 10mm 12mm;
           font-family: Arial, Helvetica, sans-serif;
-          font-size: 8.5px;
+          font-size: 9.5pt;
           color: #000;
           background: #fff;
           box-sizing: border-box;
@@ -377,12 +377,12 @@ export default function InvoicePrint() {
           gap: 10px;
         }
         .invoice-brand-text { line-height: 1.3; }
-        .invoice-company-name { font-size: 14px; font-weight: 700; }
-        .invoice-meta { font-size: 7.5px; margin-top: 2px; }
-        .invoice-header-right { text-align: right; min-width: 145px; }
-        .invoice-doc-title { font-size: 16px; font-weight: 700; letter-spacing: 2px; margin-bottom: 5px; }
+        .invoice-company-name { font-size: 16pt; font-weight: 700; }
+        .invoice-meta { font-size: 9pt; margin-top: 2px; }
+        .invoice-header-right { text-align: right; min-width: 160px; }
+        .invoice-doc-title { font-size: 18pt; font-weight: 700; letter-spacing: 2px; margin-bottom: 6px; }
         .invoice-meta-table {
-          font-size: 8px;
+          font-size: 9.2pt;
           margin-left: auto;
         }
         .invoice-meta-row {
@@ -404,7 +404,7 @@ export default function InvoicePrint() {
           justify-content: space-between;
           align-items: flex-start;
           gap: 24px;
-          font-size: 8px;
+          font-size: 9pt;
         }
         .invoice-party-customer { flex: 1.6; min-width: 0; }
         .invoice-party-staff {
@@ -426,7 +426,7 @@ export default function InvoicePrint() {
         .invoice-table {
           width: 100%;
           border-collapse: collapse;
-          font-size: 8px;
+          font-size: 9pt;
           margin-bottom: 0;
           color: #000;
           border-color: #000;
@@ -436,16 +436,16 @@ export default function InvoicePrint() {
           border-bottom: 1.5px solid #000;
         }
         .invoice-table th {
-          padding: 4px 2px;
+          padding: 5px 3px;
           text-align: center;
           font-weight: 700;
-          font-size: 7.5px;
+          font-size: 8.2pt;
           color: #000;
           border-color: #000;
           white-space: nowrap;
         }
         .invoice-table td {
-          padding: 3px 2px;
+          padding: 4px 3px;
           text-align: center;
           vertical-align: top;
           color: #000;
@@ -459,7 +459,7 @@ export default function InvoicePrint() {
           display: flex;
           padding: 7px 2px;
           margin-top: 5px;
-          font-size: 8px;
+          font-size: 9.2pt;
           gap: 12px;
         }
         .summary-col { flex: 1; }
@@ -467,7 +467,7 @@ export default function InvoicePrint() {
         .summary-col-mid { flex: 0.95; padding: 0 10px; }
         .summary-col-right { flex: 1.15; }
         .summary-ref { margin-top: 4px; }
-        .summary-words { margin-top: 5px; font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.2px; }
+        .summary-words { margin-top: 5px; font-size: 9.5pt; text-transform: uppercase; letter-spacing: 0.2px; }
         .summary-line {
           display: flex;
           justify-content: space-between;
@@ -482,19 +482,19 @@ export default function InvoicePrint() {
           padding-top: 4px;
         }
         .summary-net span { font-weight: 700 !important; }
-        .warranty-section { margin-top: 7px; font-size: 7.5px; line-height: 1.42; }
+        .warranty-section { margin-top: 7px; font-size: 8.5pt; line-height: 1.42; }
         .warranty-expiry { font-weight: 700; font-style: italic; margin-bottom: 4px; }
         .warranty-drug-row { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 6px; }
         .warranty-drug-text { flex: 1.65; }
         .warranty-heading { font-weight: 700; margin: 2px 0; }
         .warranty-body { text-align: justify; }
         .warranty-note { margin-top: 3px; }
-        .warranty-sign { flex: 0.75; text-align: center; padding-top: 30px; font-size: 8px; }
+        .warranty-sign { flex: 0.75; text-align: center; padding-top: 100px; font-size: 9pt; }
         .warranty-sign-line { border-top: 1px solid #000; width: 78%; margin: 0 auto 4px; }
         .drap-box {
           border: 1px solid #000;
           padding: 5px 8px;
-          font-size: 7.5px;
+          font-size: 8.5pt;
           line-height: 1.42;
         }
         .invoice-page-footer {
@@ -504,7 +504,7 @@ export default function InvoicePrint() {
           right: 10mm;
           border-top: 1px solid #000;
           padding-top: 5px;
-          font-size: 7.5px;
+          font-size: 8pt;
           display: flex;
           justify-content: space-between;
           align-items: center;
