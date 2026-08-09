@@ -12,6 +12,7 @@ import {
   fieldError,
   getRecoveryStatus,
   createRecoveryReturnLine,
+  getCrossReturnCap,
 } from './recoveryUtils';
 import RecoveryFilters from './RecoveryFilters';
 import InvoiceTable from './InvoiceTable';
@@ -85,11 +86,6 @@ export default function Recovery() {
   const [fullReturnCurrent, setFullReturnCurrent] = useState(false);
   const [fullReturnCross, setFullReturnCross] = useState(false);
 
-  // (Other) Pending Invoices tab — collect payment for other unpaid invoices of the same customer
-  const [otherPendingInvoices, setOtherPendingInvoices] = useState([]);
-  const [loadingOtherPending, setLoadingOtherPending] = useState(false);
-  const [otherPayments, setOtherPayments] = useState({}); // { [saleId]: amountString }
-
   const load = useCallback(() => {
     setLoading(true);
     Promise.all([
@@ -143,9 +139,12 @@ export default function Recovery() {
     return true;
   });
 
-  // All non-locked sales for the same customer (for cross-invoice return dropdown)
+  // Only FULLY SETTLED invoices are eligible for the "Previous Invoice" cross
+  // return — a still-pending invoice's return belongs in that invoice's own
+  // Current Invoice tab (opened directly on that invoice), not linked here.
   const eligibleReturnInvoices = allSales.filter(s =>
-    saleDetail && s.customer_id === saleDetail.customer_id && s.id !== selectedSale?.id
+    saleDetail && s.customer_id === saleDetail.customer_id && s.id !== selectedSale?.id &&
+    getRecoveryStatus(s) === 'completed'
   );
 
   /* ── Open recovery modal ── */
@@ -175,11 +174,8 @@ export default function Recovery() {
         notes: '',
       });
       setAmountRecovered('');
-      setOtherPayments({});
-      setOtherPendingInvoices([]);
       setActiveTab('recovery');
       setModal(true);
-      loadOtherPendingInvoices(r.data.customer_id, sale.id);
     } catch { toast.error('Error loading invoice'); }
   };
 
@@ -223,10 +219,13 @@ export default function Recovery() {
         product_id: i.product_id, batch_no: i.batch_no, product_name: i.product_name,
         source_invoice: i.source_invoice, qty_returned: String(i.qty_returned),
         return_rate: String(i.return_rate),
-        // Upper bound for the qty this line could be edited up to — the qty currently
-        // still on the source invoice plus what this entry itself already returned.
+        // Upper bound for the qty this line could be edited up to: the sale
+        // item's original sold qty, minus whatever's already returned against
+        // it in OTHER recovery entries. Excludes this entry's own old value
+        // (server does the same — it deletes this entry's old return_items
+        // before re-validating).
         max_qty: (i.current_sold_qty === null || i.current_sold_qty === undefined)
-          ? undefined : parseFloat(i.current_sold_qty) + parseFloat(i.qty_returned || 0),
+          ? undefined : Math.max(0, parseFloat(i.current_sold_qty) - parseFloat(i.already_returned_elsewhere || 0)),
       })));
     } catch { toast.error('Error loading recovery for edit'); setEditModal(false); }
     setEditLoading(false);
@@ -279,16 +278,6 @@ export default function Recovery() {
     } catch (err) {
       toast.error(err.response?.data?.message || 'Error updating recovery');
     } finally { setEditSaving(false); }
-  };
-
-  /* ── Load other pending invoices for the current customer (for the "(Other) Pending Invoices" tab) ── */
-  const loadOtherPendingInvoices = async (customerId, excludeSaleId) => {
-    setLoadingOtherPending(true);
-    try {
-      const r = await api.get(`/recoveries/pending-invoices/${customerId}?exclude=${excludeSaleId}`);
-      setOtherPendingInvoices(r.data);
-    } catch { toast.error('Error loading pending invoices'); }
-    setLoadingOtherPending(false);
   };
 
   /* ── Load cross-invoice return detail ── */
@@ -367,7 +356,6 @@ export default function Recovery() {
   // whatever the user has actually typed so far.
   const recoveredValue = Number.isNaN(parseFloat(amountRecovered)) ? 0 : parseFloat(amountRecovered || 0);
   const pendingAmount = Math.max(0, pendingBeforeThisPayment - recoveredValue);
-  const otherPaymentsTotal = Object.values(otherPayments).reduce((s, v) => s + (parseFloat(v) || 0), 0);
 
   // Edit-modal derived totals — mirrors the main modal's logic, scoped to
   // just the single entry being edited.
@@ -384,29 +372,31 @@ export default function Recovery() {
     fieldError(l.discount_given, parseFloat(l.original_total), 'Discount given', `the invoice amount (${formatCurrency(l.original_total)})`)
   );
   const returnLineErrors = returnLines.map(l =>
-    fieldError(l.qty_returned, parseFloat(l.original_qty), 'Return qty', `the sold qty (${l.original_qty})`)
+    fieldError(l.qty_returned, parseFloat(l.original_qty), 'Return qty', `the returnable qty (${l.original_qty})`)
   );
   const crossReturnLineErrors = crossReturnLines.map(l =>
-    fieldError(l.qty_returned, parseFloat(l.original_qty), 'Return qty', `the sold qty (${l.original_qty})`)
+    fieldError(l.qty_returned, parseFloat(l.original_qty), 'Return qty', `the returnable qty (${l.original_qty})`)
   );
+  // If the previously-selected invoice is already fully recovered, its return
+  // becomes a credit note against the CURRENT invoice — no cap tied to it. If
+  // it's still pending, the return can only reduce ITS OWN pending balance,
+  // so it's capped there (mirrors the backend's classifyReturnLine branch).
+  const crossReturnCap = getCrossReturnCap(returnInvoiceDetail);
+  const crossReturnCapError = returnInvoiceDetail && crossReturnAmt > crossReturnCap + 0.009
+    ? `Return total (${formatCurrency(crossReturnAmt)}) exceeds Invoice ${returnInvoiceDetail.invoice_no}'s pending balance (${formatCurrency(crossReturnCap)})`
+    : null;
   const amountRecoveredError = fieldError(
     amountRecovered, pendingBeforeThisPayment, 'Amount recovered', `the pending balance (${formatCurrency(pendingBeforeThisPayment)})`
   );
-  const otherPaymentErrors = {};
-  for (const inv of otherPendingInvoices) {
-    otherPaymentErrors[inv.id] = fieldError(
-      otherPayments[inv.id], parseFloat(inv.pending_amount), 'Amount', `its pending balance (${formatCurrency(inv.pending_amount)})`
-    );
-  }
   const hasFieldErrors =
     recoveryLineErrors.some(Boolean) || returnLineErrors.some(Boolean) || crossReturnLineErrors.some(Boolean) ||
-    !!amountRecoveredError || Object.values(otherPaymentErrors).some(Boolean);
+    !!crossReturnCapError || !!amountRecoveredError;
   // Nothing entered yet is not a "field error" but there's still nothing to save.
   const hasAnyEntry =
     recoveryLines.some(l => parseFloat(l.discount_given || 0) > 0) ||
     returnLines.some(l => parseInt(l.qty_returned || 0) > 0) ||
     crossReturnLines.some(l => parseInt(l.qty_returned || 0) > 0) ||
-    recoveredValue > 0 || otherPaymentsTotal > 0;
+    recoveredValue > 0;
   const canSaveRecovery = hasAnyEntry && !hasFieldErrors;
 
   const editRecoveryLineErrors = editRecoveryLines.map(l =>
@@ -447,22 +437,8 @@ export default function Recovery() {
     if (recovered > pendingBeforeThisPayment) {
       return toast.error(`Recovered amount cannot exceed pending balance (${formatCurrency(pendingBeforeThisPayment)})`);
     }
-    if (!validRecovery.length && !allReturns.length && recovered <= 0 && otherPaymentsTotal <= 0) {
+    if (!validRecovery.length && !allReturns.length && recovered <= 0) {
       return toast.error('Enter at least one discount, return, or recovered amount');
-    }
-
-    // Validate any payments entered for OTHER pending invoices of this customer
-    const otherPaymentEntries = Object.entries(otherPayments)
-      .map(([saleId, amt]) => ({ saleId: parseInt(saleId), amount: parseFloat(amt || 0) }))
-      .filter(p => p.amount > 0);
-    for (const p of otherPaymentEntries) {
-      const inv = otherPendingInvoices.find(i => i.id === p.saleId);
-      if (p.amount < 0) {
-        return toast.error(`Amount for ${inv?.invoice_no || 'invoice'} cannot be negative`);
-      }
-      if (inv && p.amount > parseFloat(inv.pending_amount)) {
-        return toast.error(`Amount for ${inv.invoice_no} cannot exceed its pending balance (${formatCurrency(inv.pending_amount)})`);
-      }
     }
 
     // Front-end expiry check: block if batch expiry is within 5 months.
@@ -490,22 +466,20 @@ export default function Recovery() {
 
     setPendingAction({
       type: 'add',
-      payload: { validRecovery, allReturns, recovered, otherPaymentEntries },
+      payload: { validRecovery, allReturns, recovered },
       summary: {
         invoiceNo: selectedSale?.invoice_no,
         discount: totalDiscount,
         returns: totalReturnAmt,
         recovered,
         pending: Math.max(0, pendingBeforeThisPayment - recovered),
-        otherPaymentsTotal,
-        otherCount: otherPaymentEntries.length,
       },
     });
     setConfirmModal(true);
   };
 
   const performSaveRecovery = async () => {
-    const { validRecovery, allReturns, recovered, otherPaymentEntries } = pendingAction.payload;
+    const { validRecovery, allReturns, recovered } = pendingAction.payload;
     setSaving(true);
     try {
       await api.post('/recoveries', {
@@ -517,23 +491,9 @@ export default function Recovery() {
         amount_recovered: recovered,
       });
 
-      // Record any payments entered for OTHER pending invoices of this customer
-      for (const p of otherPaymentEntries) {
-        await api.post('/recoveries', {
-          sale_id: p.saleId,
-          salesman_id: recHeader.salesman_id || null,
-          date: recHeader.date,
-          notes: `Payment collected alongside ${selectedSale.invoice_no}${recHeader.notes ? ' — ' + recHeader.notes : ''}`,
-          recovery_items: [],
-          return_items: [],
-          amount_recovered: p.amount,
-        });
-      }
-
-      const otherMsg = otherPaymentEntries.length ? ` Plus ${formatCurrency(otherPaymentsTotal)} collected against ${otherPaymentEntries.length} other invoice(s).` : '';
-      toast.success((pendingAmount > 0
+      toast.success(pendingAmount > 0
         ? `Recovery saved! ${formatCurrency(recovered)} collected, ${formatCurrency(pendingAmount)} still pending on this invoice.`
-        : 'Recovery saved! Invoice fully recovered.') + otherMsg);
+        : 'Recovery saved! Invoice fully recovered.');
       setConfirmModal(false); setPendingAction(null);
       setModal(false); load();
     } catch (err) {
@@ -606,7 +566,6 @@ export default function Recovery() {
         recoveredValue={recoveredValue}
         currentReturnAmt={currentReturnAmt}
         crossReturnAmt={crossReturnAmt}
-        otherPaymentsTotal={otherPaymentsTotal}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         recoveryLines={recoveryLines}
@@ -625,12 +584,9 @@ export default function Recovery() {
         returnInvoiceDetail={returnInvoiceDetail}
         crossReturnLines={crossReturnLines}
         crossReturnLineErrors={crossReturnLineErrors}
+        crossReturnCap={crossReturnCap}
+        crossReturnCapError={crossReturnCapError}
         fullReturnCross={fullReturnCross}
-        otherPendingInvoices={otherPendingInvoices}
-        loadingOtherPending={loadingOtherPending}
-        otherPayments={otherPayments}
-        setOtherPayments={setOtherPayments}
-        otherPaymentErrors={otherPaymentErrors}
         saving={saving}
         canSaveRecovery={canSaveRecovery}
         onSave={handleSaveClick}

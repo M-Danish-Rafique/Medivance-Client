@@ -24,7 +24,6 @@ export default function RecoveryModal({
   recoveredValue,
   currentReturnAmt,
   crossReturnAmt,
-  otherPaymentsTotal,
   activeTab,
   setActiveTab,
   recoveryLines,
@@ -43,12 +42,8 @@ export default function RecoveryModal({
   returnInvoiceDetail,
   crossReturnLines,
   crossReturnLineErrors,
+  crossReturnCapError,
   fullReturnCross,
-  otherPendingInvoices,
-  loadingOtherPending,
-  otherPayments,
-  setOtherPayments,
-  otherPaymentErrors,
   saving,
   canSaveRecovery,
   onSave,
@@ -185,10 +180,6 @@ export default function RecoveryModal({
               Returns — Previous Invoice
               {crossReturnAmt > 0 && <span className="badge badge-amber" style={{ marginLeft: 6, fontSize: 10 }}>{formatCurrency(crossReturnAmt)}</span>}
             </button>
-            <button className={`tab-btn ${activeTab === 'other-pending' ? 'active' : ''}`} onClick={() => setActiveTab('other-pending')}>
-              (Other) Pending Invoices
-              {otherPaymentsTotal > 0 && <span className="badge badge-amber" style={{ marginLeft: 6, fontSize: 10 }}>{formatCurrency(otherPaymentsTotal)}</span>}
-            </button>
           </div>
 
           {activeTab === 'recovery' && (
@@ -247,7 +238,8 @@ export default function RecoveryModal({
                   <option value="">— Select Invoice —</option>
                   {eligibleReturnInvoices.map(s => (
                     <option key={s.id} value={s.id}>
-                      {s.invoice_no} — {formatDatePKT(s.date)} — {formatCurrency(s.total_amount)}{s.is_locked ? ' (Locked)' : ''}
+                      {s.invoice_no} — {formatDatePKT(s.date)} — {formatCurrency(s.total_amount)}
+                      {s.recovery_status === 'completed' ? ' (Settled)' : s.is_locked ? ' (Pending)' : ''}
                     </option>
                   ))}
                 </select>
@@ -258,7 +250,14 @@ export default function RecoveryModal({
                   <div style={{ marginBottom: 10, padding: '8px 12px', background: 'var(--gray-50)', borderRadius: 8, fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
                     <span>
                       Invoice <strong>{returnInvoiceDetail.invoice_no}</strong> — {formatCurrency(returnInvoiceDetail.total_amount)}
-                      {returnInvoiceDetail.is_locked && <span className="badge badge-amber" style={{ marginLeft: 8, fontSize: 10 }}>Locked — credit will apply to current invoice</span>}
+                      {returnInvoiceDetail.is_locked && returnInvoiceDetail.recovery_status === 'completed' && (
+                        <span className="badge badge-amber" style={{ marginLeft: 8, fontSize: 10 }}>Fully recovered — credit will apply to current invoice</span>
+                      )}
+                      {returnInvoiceDetail.is_locked && returnInvoiceDetail.recovery_status !== 'completed' && (
+                        <span className="badge badge-amber" style={{ marginLeft: 8, fontSize: 10 }}>
+                          Still pending — return reduces this invoice's own balance (up to {formatCurrency(returnInvoiceDetail.pending_amount)})
+                        </span>
+                      )}
                     </span>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--gray-600)', cursor: crossReturnLines.length === 0 ? 'default' : 'pointer' }}>
                       <input type="checkbox" checked={fullReturnCross}
@@ -268,50 +267,14 @@ export default function RecoveryModal({
                     </label>
                   </div>
                   <ReturnTable lines={crossReturnLines} isCross={true} updateReturnLine={updateReturnLine} isAdmin={isAdmin} errors={crossReturnLineErrors} />
+                  {crossReturnCapError && (
+                    <div style={{ marginTop: 8, fontSize: 12, color: 'var(--red)', fontWeight: 600 }}>{crossReturnCapError}</div>
+                  )}
                 </>
               )}
             </div>
           )}
 
-          {activeTab === 'other-pending' && (
-            <div>
-              {loadingOtherPending ? (
-                <div className="loading-center"><div className="spinner" /></div>
-              ) : otherPendingInvoices.length === 0 ? (
-                <div className="empty-state" style={{ padding: 24 }}>
-                  <div className="empty-state-desc">No other pending invoices for this customer.</div>
-                </div>
-              ) : (
-                <>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1fr 1fr 1.2fr', gap: 6, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6, fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
-                    <span>Invoice No</span><span>Date</span><span>Total</span><span>Paid</span><span>Pending</span><span>Recover Now</span>
-                  </div>
-                  {otherPendingInvoices.map(inv => {
-                    const pend = parseFloat(inv.pending_amount);
-                    const val = otherPayments[inv.id] ?? '';
-                    const err = otherPaymentErrors[inv.id];
-                    return (
-                      <div key={inv.id} style={{ marginBottom: 5 }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1fr 1fr 1.2fr', gap: 6, alignItems: 'center', padding: '7px 8px', background: 'white', border: `1.5px solid ${err ? 'var(--red)' : 'var(--gray-200)'}`, borderRadius: 8 }}>
-                          <div className="mono" style={{ fontWeight: 600, fontSize: 13 }}>{inv.invoice_no}</div>
-                          <div>{formatDatePKT(inv.date)}</div>
-                          <div style={{ fontWeight: 700 }}>{formatCurrency(inv.total_amount)}</div>
-                          <div style={{ color: 'var(--green)' }}>{formatCurrency(inv.total_recovered)}</div>
-                          <div style={{ fontWeight: 700, color: 'var(--amber)' }}>{formatCurrency(pend)}</div>
-                          <input className="form-control" type="number" step="1"
-                            style={{ fontSize: 12, padding: '5px 8px', borderColor: err ? 'var(--red)' : undefined }} placeholder="0"
-                            value={val}
-                            onChange={e => setOtherPayments(prev => ({ ...prev, [inv.id]: e.target.value }))}
-                            onWheel={blockWheelChange} />
-                        </div>
-                        {err && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 2, paddingLeft: 4 }}>{err}</div>}
-                      </div>
-                    );
-                  })}
-                </>
-              )}
-            </div>
-          )}
         </div>
       )}
     </Modal>

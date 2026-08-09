@@ -54,9 +54,29 @@ export const getRecoveredAmount = (sale) => {
   return sale.is_locked ? parseFloat(sale.total_amount || 0) : 0;
 };
 
+// "Returnable" qty is what's left to return on this line, not what was
+// originally sold — sale_items.qty stays frozen at the original sold qty once
+// an invoice is locked, so already-returned quantity (from any past recovery
+// event, tracked via return_items) has to be subtracted here. Matches the
+// server-side guard in recoveries.js exactly — keep the two in sync.
+export const getReturnableQty = (item) =>
+  Math.max(0, parseInt(item.qty || 0, 10) - parseInt(item.already_returned || 0, 10));
+
 export const createRecoveryReturnLine = (item) => ({
   row_id: `return-${item.id}-${Math.random().toString(16).slice(2)}`,
   sale_item_id: item.id, sale_id: item.sale_id || null, product_id: item.product_id,
   batch_no: item.batch_no, qty_returned: '', return_rate: item.sale_rate, return_amount: 0,
-  product_name: item.product_name, original_qty: item.qty, exp_date: item.exp_date
+  product_name: item.product_name, original_qty: getReturnableQty(item), exp_date: item.exp_date
 });
+
+// For a cross-invoice return: if the source invoice is already fully
+// recovered, the return becomes a credit note against the invoice currently
+// being settled (no cap tied to the source invoice's own balance). If the
+// source invoice is still pending, the return can only reduce ITS OWN
+// pending balance — so it's capped there. Mirrors the backend's branch logic
+// in classifyReturnLine (recoveries.js).
+export const getCrossReturnCap = (sourceSale) => {
+  if (!sourceSale) return Infinity;
+  if (getRecoveryStatus(sourceSale) === 'completed') return Infinity;
+  return parseFloat(sourceSale.pending_amount || 0);
+};

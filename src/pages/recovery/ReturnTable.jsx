@@ -12,7 +12,7 @@ export default function ReturnTable({ lines, isCross, updateReturnLine, isAdmin,
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', gap: 6, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6, fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
-            <span>Product</span><span>Batch / Expiry</span><span>Sold Qty</span><span>Return Qty</span><span>Rate</span><span>Return Amt</span>
+            <span>Product</span><span>Batch / Expiry</span><span>Returnable Qty</span><span>Return Qty</span><span>Rate</span><span>Return Amt</span>
           </div>
           {lines.map((line, idx) => {
             const retAmt = parseFloat(line.return_amount || 0);
