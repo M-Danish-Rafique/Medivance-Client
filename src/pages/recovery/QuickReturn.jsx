@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import Modal from '../../components/common/Modal';
+import CustomerAutocomplete from '../../components/common/CustomerAutocomplete';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { formatCurrency } from '../../utils/formatters';
@@ -29,9 +30,13 @@ export default function QuickReturn() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
 
-  const [q, setQ] = useState('');
+  const [customerId, setCustomerId] = useState('');
+  const [invoiceNo, setInvoiceNo] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [customers, setCustomers] = useState([]);
+  const [areas, setAreas] = useState([]);
+  const [territories, setTerritories] = useState([]);
   const [salesmen, setSalesmen] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [filterSalesman, setFilterSalesman] = useState('');
@@ -52,6 +57,8 @@ export default function QuickReturn() {
   const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
+    api.get('/customers').then(r => setCustomers(r.data)).catch(() => {});
+    api.get('/geography/geo').then(r => { setAreas(r.data.areas); setTerritories(r.data.territories); }).catch(() => {});
     api.get('/employees?role=Salesman').then(r => setSalesmen(r.data)).catch(() => {});
     api.get('/employees?role=Supplier').then(r => setSuppliers(r.data)).catch(() => {});
   }, []);
@@ -60,7 +67,8 @@ export default function QuickReturn() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (q.trim()) params.set('q', q.trim());
+      if (customerId) params.set('customer_id', customerId);
+      if (invoiceNo.trim()) params.set('invoice_no', invoiceNo.trim());
       if (dateFrom) params.set('date_from', dateFrom);
       if (dateTo) params.set('date_to', dateTo);
       if (filterSalesman) params.set('salesman_id', filterSalesman);
@@ -73,7 +81,7 @@ export default function QuickReturn() {
     } finally {
       setLoading(false);
     }
-  }, [q, dateFrom, dateTo, filterSalesman, filterSupplier]);
+  }, [customerId, invoiceNo, dateFrom, dateTo, filterSalesman, filterSupplier]);
 
   const handleSearchKeyDown = (e) => {
     if (e.key === 'Enter') { e.preventDefault(); if (!loading) fetchInvoices(); }
@@ -208,12 +216,27 @@ export default function QuickReturn() {
           </button>
         </div>
         <div className="card-body" style={{ paddingTop: 16 }}>
-          <div className="form-grid" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr auto', alignItems: 'end', gap: 16 }}>
+          <div className="form-grid" style={{ gridTemplateColumns: '2fr 1fr', alignItems: 'end', gap: 16, marginBottom: 14 }}>
             <div className="form-group" style={{ margin: 0 }}>
-              <label className="form-label">Invoice # or Customer</label>
-              <input type="text" className="form-control" placeholder="e.g. S26-00123 or customer name"
-                value={q} onChange={e => setQ(e.target.value)} onKeyDown={handleSearchKeyDown} />
+              <label className="form-label">Customer</label>
+              <CustomerAutocomplete
+                customers={customers}
+                areas={areas}
+                territories={territories}
+                value={customerId}
+                onChange={setCustomerId}
+                placeholder="Search customer by name…"
+                allowClear
+                clearLabel="All Customers"
+              />
             </div>
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label">Invoice #</label>
+              <input type="text" className="form-control" placeholder="e.g. S26-00123"
+                value={invoiceNo} onChange={e => setInvoiceNo(e.target.value)} onKeyDown={handleSearchKeyDown} />
+            </div>
+          </div>
+          <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr auto', alignItems: 'end', gap: 16 }}>
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">From Date</label>
               <input type="date" className="form-control" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
@@ -251,8 +274,8 @@ export default function QuickReturn() {
             <Search size={32} style={{ marginBottom: 8, color: 'var(--gray-300)' }} />
             <div className="empty-state-title">Ready to search</div>
             <div className="empty-state-desc">
-              Search by invoice number or customer name, or set a date range, then click Search.
-              Only fully-settled invoices show up here.
+                Search by invoice number or customer name, or set a date range, then click Search.
+                Only fully-settled invoices show up here.
             </div>
           </div>
         </div>
