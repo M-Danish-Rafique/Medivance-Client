@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Zap } from 'lucide-react';
+import { Zap, PackageX  } from 'lucide-react';
 import CustomerAutocomplete from '../../components/common/CustomerAutocomplete';
 
 export default function RecoveryFilters({
@@ -25,13 +25,22 @@ export default function RecoveryFilters({
 }) {
   return (
     <div className="card" style={{ marginBottom: 20 }}>
-      <div className="card-header" style={{ padding: '14px 22px', minHeight: 0 }}>
-        <div className="card-title">Filter Invoices</div>
-        <Link to="/recovery/quick" className="btn" style={{ flexShrink: 0 }}>
+    <div className="card-header" style={{ padding: '14px 22px', minHeight: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="card-title">Filter Invoices</div>
+      
+      {/* Right-aligned side-by-side button group */}
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <Link to="/recovery/quick" className="btn" style={{ flexShrink: 0, color: 'var(--green-light)' }}>
           <Zap size={14} />
           Quick Recovery
         </Link>
+
+        <Link to="/recovery/quick-return"  className="btn" style={{ flexShrink: 0, color: 'var(--navy-mid)' }}>
+          <PackageX size={14} />
+          Returns
+        </Link>
       </div>
+    </div>
       <div className="card-body" style={{ paddingTop: 16 }}>
         <div
           className="form-grid"

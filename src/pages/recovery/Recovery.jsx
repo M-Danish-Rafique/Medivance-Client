@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
@@ -23,6 +24,7 @@ import ConfirmRecoveryModal from './ConfirmRecoveryModal';
 
 export default function Recovery() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const isAdmin = user?.role === 'admin';
   const [allSales, setAllSales] = useState([]);
   const [sales, setSales] = useState([]);
@@ -515,8 +517,8 @@ export default function Recovery() {
         filteredAreas={filteredAreas}
         filteredTerritories={filteredTerritories}
         filteredCustomers={filteredCustomers}
-                areas={areas}
-                territories={territories}
+        areas={areas}
+        territories={territories}
         employees={employees}
         filterCity={filterCity}
         filterArea={filterArea}
