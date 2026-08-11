@@ -43,8 +43,22 @@ export default function Products() {
     setModal(true);
   };
 
+  const isDuplicateProduct = (name, packSize, excludeId) => {
+    const n = name.trim().toLowerCase();
+    const ps = (packSize || '').trim().toLowerCase();
+    return data.some(p =>
+      p.id !== excludeId &&
+      p.name.trim().toLowerCase() === n &&
+      (p.pack_size || '').trim().toLowerCase() === ps
+    );
+  };
+
   const handleSave = async () => {
     if (!form.name) return toast.error('Product name is required');
+    if (!form.pack_size || !form.pack_size.trim()) return toast.error('Pack size is required');
+    if (isDuplicateProduct(form.name, form.pack_size, selected?.id)) {
+      return toast.error('A product with this name and pack size already exists');
+    }
     setSaving(true);
     try {
       if (selected) {
@@ -147,8 +161,8 @@ export default function Products() {
         </div>
         <div className="form-grid form-grid-2">
           <div className="form-group">
-            <label className="form-label">Pack Size</label>
-            <input className="form-control" placeholder="e.g. 10 tablets" value={form.pack_size} onChange={e => setForm(p => ({ ...p, pack_size: e.target.value }))} />
+            <label className="form-label">Pack Size *</label>
+            <input className="form-control" placeholder="e.g. 10 tablets" value={form.pack_size} required onChange={e => setForm(p => ({ ...p, pack_size: e.target.value }))} />
           </div>
           <div className="form-group">
             <label className="form-label">Company</label>
