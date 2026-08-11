@@ -227,9 +227,15 @@ function SaleFormBody({
                   <button key={prod.id} type="button" onMouseDown={() => selectProduct(idx, prod)}
                     style={{
                       width: '100%', textAlign: 'left', padding: '9px 12px', border: 'none',
-                      background: 'white', cursor: 'pointer', fontSize: 13, color: 'var(--gray-900)'
+                      background: 'white', cursor: 'pointer', fontSize: 13, color: 'var(--gray-900)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10
                     }}>
-                    {prod.name}
+                    <span>{prod.name}</span>
+                    {prod.pack_size && (
+                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--gray-500)', whiteSpace: 'nowrap' }}>
+                        {prod.pack_size}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -745,7 +751,11 @@ export default function Sale() {
 
   const fmt = formatCurrency;
   const colStyle = { fontSize: 12, padding: '6px 8px' };
-  const gridCols = '2fr 1fr 1.2fr 0.8fr 1fr 0.6fr 0.6fr 0.6fr 1fr 36px';
+  // Product | Pack Size | Batch No | Qty | Sale Rate | Bonus | Disc% | Tax% | Total | remove
+  // Pack Size reduced ~35% and Qty trimmed ~18% off its widened value; both
+  // give their freed space to Batch No, which needs the most room to fit
+  // batch numbers.
+  const gridCols = '2fr 0.65fr 1.57fr 0.78fr 1fr 0.6fr 0.6fr 0.6fr 1fr 36px';
 
   return (
     <Layout title="Sale">
