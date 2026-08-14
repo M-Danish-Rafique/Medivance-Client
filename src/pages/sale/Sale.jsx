@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Layout from '../../components/layout/Layout';
 import Modal from '../../components/common/Modal';
 import ConfirmModal from '../../components/common/ConfirmModal';
@@ -330,7 +330,43 @@ function SaleFormBody({
 export default function Sale() {
   const { user, can } = useAuth();
   const [sales, setSales] = useState([]);
-  const { page, setPage, pageSize, setPageSize, totalPages, totalItems, pageItems: pagedSales } = usePagination(sales, 25);
+
+  // Filters — collapsed and inactive by default.
+  // `draftFilters` is what the fields in the open panel edit; it only takes
+  // effect on `filters` (which actually drives filteredSales) once the user
+  // hits Apply — so typing/selecting doesn't refilter the table on every
+  // keystroke.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const emptyFilters = { customer_id: '', salesman_id: '', delivery_by: '', date_from: '', date_to: '', status: 'all', invoice_no: '' };
+  const [filters, setFilters] = useState(emptyFilters);
+  const [draftFilters, setDraftFilters] = useState(emptyFilters);
+  const isEmptyFilters = (f) => Object.entries(f).every(([k, v]) => k === 'status' ? v === 'all' : !v);
+  const activeFilterCount = Object.entries(filters).filter(([k, v]) => k === 'status' ? v !== 'all' : !!v).length;
+  const clearFilters = () => { setDraftFilters(emptyFilters); setFilters(emptyFilters); };
+  const applyFilters = () => { setFilters(draftFilters); setFiltersOpen(false); };
+
+  const filteredSales = useMemo(() => {
+    const invoiceQuery = filters.invoice_no.trim().toLowerCase();
+    return sales.filter(s => {
+      if (filters.customer_id && String(s.customer_id) !== String(filters.customer_id)) return false;
+      if (filters.salesman_id && String(s.salesman_id) !== String(filters.salesman_id)) return false;
+      if (filters.delivery_by && String(s.delivery_by) !== String(filters.delivery_by)) return false;
+      if (filters.date_from && s.date < filters.date_from) return false;
+      if (filters.date_to && s.date > filters.date_to) return false;
+      if (filters.status === 'open' && s.is_locked) return false;
+      if (filters.status === 'locked' && !s.is_locked) return false;
+      if (invoiceQuery && !(s.invoice_no || '').toLowerCase().includes(invoiceQuery)) return false;
+      return true;
+    });
+  }, [sales, filters]);
+
+  // --- Pagination is disabled for now (client-side slicing doesn't make
+  // sense once the backend paginates too). Left in place, commented, so it
+  // can be reactivated as soon as GET /sales accepts page & pageSize and
+  // returns { rows, totalItems } instead of the full array. ---
+  // const { page, setPage, pageSize, setPageSize, totalPages, totalItems, pageItems: pagedSales } = usePagination(filteredSales, 25);
+  // useEffect(() => { setPage(1); }, [filters]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pagedSales = filteredSales;
   const [customers, setCustomers] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [products, setProducts] = useState([]);
@@ -763,13 +799,182 @@ export default function Sale() {
         <div className="card-header">
           <div>
             <div className="card-title">Sales Invoices</div>
-            <div className="text-sm text-muted mt-1">{sales.length} invoices</div>
+            <div className="text-sm text-muted mt-1">
+              {activeFilterCount > 0 ? `${filteredSales.length} of ${sales.length} invoices` : `${sales.length} invoices`}
+            </div>
           </div>
-          <button className="btn btn-primary" onClick={openAdd}>+ New Sale Invoice</button>
+          <div className="flex gap-2">
+            <button
+              className="btn btn-outline"
+              onClick={() => setFiltersOpen(o => !o)}
+              style={{
+                justifyContent: 'center',
+                padding: '9px 12px',
+                background: '#fff',
+                color: 'var(--gray-500)',
+                borderColor: 'var(--gray-200)',
+                fontWeight: 550
+              }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: 'middle', marginRight: 0, color: 'var(--gray-400)' }}>filter_list</span>
+              Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+              <span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: 'middle', marginLeft: 0, color: 'var(--gray-400)' }}>
+                {filtersOpen ? 'expand_less' : 'expand_more'}
+              </span>
+            </button>
+            <button className="btn btn-primary" onClick={openAdd}>+ New Sale Invoice</button>
+          </div>
         </div>
+
+        <div
+          style={{
+            maxHeight: filtersOpen ? 420 : 0,
+            opacity: filtersOpen ? 1 : 0,
+            overflow: 'hidden',
+            background: '#fff',
+            borderTop: filtersOpen ? '1px solid var(--gray-200)' : 'none',
+            borderBottom: filtersOpen ? '1px solid var(--gray-200)' : 'none',
+            transition: 'max-height 0.32s ease, opacity 0.24s ease, border-color 0.24s ease'
+          }}
+        >
+          <div style={{ padding: '18px 20px' }}>
+            <div className="form-grid form-grid-4" style={{ marginBottom: 14 }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Customer</label>
+                <CustomerAutocomplete
+                  customers={customers}
+                  areas={geo?.areas}
+                  territories={geo?.territories}
+                  value={draftFilters.customer_id}
+                  onChange={id => setDraftFilters(p => ({ ...p, customer_id: id }))}
+                  placeholder="Search customer…"
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Salesman</label>
+                <select className="form-control" value={draftFilters.salesman_id}
+                  onChange={e => setDraftFilters(p => ({ ...p, salesman_id: e.target.value }))}>
+                  <option value="">— All Salesmen —</option>
+                  {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                </select>
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Delivery By</label>
+                <select className="form-control" value={draftFilters.delivery_by}
+                  onChange={e => setDraftFilters(p => ({ ...p, delivery_by: e.target.value }))}>
+                  <option value="">— All Suppliers —</option>
+                  {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Invoice No</label>
+                <input className="form-control" placeholder="Search invoice no…" value={draftFilters.invoice_no}
+                  onChange={e => setDraftFilters(p => ({ ...p, invoice_no: e.target.value }))} />
+              </div>
+            </div>
+            <div className="form-grid form-grid-4">
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Date From</label>
+                <input className="form-control" type="date" value={draftFilters.date_from}
+                  onChange={e => setDraftFilters(p => ({ ...p, date_from: e.target.value }))} />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Date To</label>
+                <input className="form-control" type="date" value={draftFilters.date_to}
+                  onChange={e => setDraftFilters(p => ({ ...p, date_to: e.target.value }))} />
+              </div>
+              <div className="form-group" style={{ margin: 0, gridColumn: 'span 2' }}>
+                <label className="form-label">Status</label>
+                {(() => {
+                  const statusOptions = [{ v: 'open', l: 'Pending Only' }, { v: 'locked', l: 'Settled Only' }, { v: 'all', l: 'All Invoices' }];
+                  const activeIndex = Math.max(0, statusOptions.findIndex(o => o.v === draftFilters.status));
+                  return (
+                    <div style={{
+                      position: 'relative',
+                      display: 'flex',
+                      background: 'var(--gray-100)',
+                      borderRadius: 12,
+                      padding: 4,
+                      marginTop: 5
+                    }}>
+                      {/* sliding active-segment thumb */}
+                      <div style={{
+                        position: 'absolute',
+                        top: 4,
+                        bottom: 4,
+                        left: 4,
+                        width: `calc((100% - 8px) / ${statusOptions.length})`,
+                        borderRadius: 9,
+                        background: '#fff',
+                        boxShadow: '0 2px 6px rgba(15, 23, 42, 0.10)',
+                        transform: `translateX(${activeIndex * 100}%)`,
+                        transition: 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1)'
+                      }} />
+                      {statusOptions.map(opt => {
+                        const active = draftFilters.status === opt.v;
+                        return (
+                          <button key={opt.v} type="button"
+                            onClick={() => setDraftFilters(p => ({ ...p, status: opt.v }))}
+                            style={{
+                              position: 'relative',
+                              zIndex: 1,
+                              flex: 1,
+                              border: 'none',
+                              borderRadius: 9,
+                              padding: '9px 10px',
+                              fontSize: 13,
+                              fontWeight: active ? 550 : 500,
+                              color: active ? 'var(--gray-900)' : 'var(--gray-500)',
+                              background: 'transparent',
+                              cursor: 'pointer',
+                              transition: 'color 0.28s ease, font-weight 0.28s ease'
+                            }}>
+                            {opt.l}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginTop: 16,
+              paddingTop: 14,
+              borderTop: '1px solid var(--gray-100)'
+            }}>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={clearFilters}
+                disabled={isEmptyFilters(draftFilters) && isEmptyFilters(filters)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--gray-500)', fontWeight: 600, padding: '8px 4px' }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 16, verticalAlign: 'middle', marginRight: 4 }}>filter_alt_off</span>
+                Clear Filters
+              </button>
+              <button type="button" className="btn btn-primary" onClick={applyFilters}>
+                <span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: 'middle', marginRight: 6 }}>search</span>
+                Apply Filters
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div className="table-wrap">
           {loading ? <div className="loading-center"><div className="spinner" /></div>
             : sales.length === 0 ? <div className="empty-state"><div className="empty-state-icon"><span className="material-symbols-outlined" style={{ fontSize: 28 }}>sell</span></div><div className="empty-state-title">No sales yet</div></div>
+            : filteredSales.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-state-icon"><span className="material-symbols-outlined" style={{ fontSize: 28 }}>filter_alt_off</span></div>
+                <div className="empty-state-title">No invoices match your filters</div>
+                <button className="btn btn-outline btn-sm" style={{ marginTop: 10 }} onClick={clearFilters}>Clear Filters</button>
+              </div>
+            )
             : (
               <table>
                 <thead>
@@ -811,8 +1016,11 @@ export default function Sale() {
               </table>
             )}
         </div>
+        {/* Pagination disabled until GET /sales supports server-side page & pageSize.
+            Re-enable by restoring the usePagination destructure above and uncommenting this:
         <Pagination page={page} totalPages={totalPages} totalItems={totalItems}
           pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
+        */}
       </div>
 
       {/* Add/Edit Sale Modal */}
