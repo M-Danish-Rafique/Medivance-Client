@@ -8,6 +8,48 @@ import { formatDatePKT } from '../../utils/dateUtils';
 
 const fmt = formatCurrency;
 
+// Entities available for the layered Sale Summary report, in the order
+// they're offered when a layer slot is open.
+const SUMMARY_ENTITY_OPTIONS = [
+  { key: 'salesman', label: 'Sales Man' },
+  { key: 'company', label: 'Company' },
+  { key: 'product', label: 'Product' },
+  { key: 'customer', label: 'Customer' },
+];
+const SUMMARY_ENTITY_LABEL = Object.fromEntries(SUMMARY_ENTITY_OPTIONS.map(o => [o.key, o.label]));
+
+// Given the flat, already-sorted rows returned by the API (sorted by
+// layer1..layerN, matching the SQL ORDER BY), work out which cells should
+// be merged (rowSpan) so repeated outer-group values show once instead of
+// on every row — the standard "grouped ledger" look.
+function buildSummarySpans(rows, nLayers) {
+  const key = (row, i) => Array.from({ length: i + 1 }, (_, k) => row[`layer${k + 1}`] || '').join('\u241F');
+  return rows.map((row, r) => Array.from({ length: nLayers }, (_, i) => {
+    const isStart = r === 0 || key(row, i) !== key(rows[r - 1], i);
+    if (!isStart) return { show: false, span: 0 };
+    let span = 1;
+    while (r + span < rows.length && key(rows[r + span], i) === key(row, i)) span++;
+    return { show: true, span };
+  }));
+}
+
+// Inline emphasis for the UI-only subtotal row (kept out of the printed
+// PDF per feedback) — everything else uses the same .report-table /
+// .report-tfoot-* classes as the other report tabs for visual consistency.
+const summarySubtotalStyle = { fontWeight: 700, background: 'var(--gray-50, #f7f9fb)' };
+
+// Vertical divider rule for the Sale Summary table body: with a single
+// layer, no dividers at all (not even after Sr). With 2+ layers, a divider
+// after Sr and after every layer column except the last one — e.g. with 3
+// layers: Sr | L1 | L2 | L3 (dividers after Sr, L1, L2; none after L3).
+// colIndex: 0 = Sr, 1..nLayers = L1..Ln. The header row never gets these —
+// it stays completely free of vertical rules.
+function summaryVLine(colIndex, nLayers) {
+  if (nLayers <= 1) return false;
+  return colIndex < nLayers;
+}
+const VLINE_STYLE = { borderRight: '1px solid var(--gray-300, #d7dee6)' };
+
 function ReportFilterLayout({ fields, loading, onGenerate, onDownload, hasData, generateDisabled }) {
   return (
     <div className="report-filter-layout">
@@ -71,6 +113,13 @@ export default function Reports() {
   const [recSupplier, setRecSupplier] = useState('');
   const [recRows, setRecRows] = useState(null);
   const [recLoading, setRecLoading] = useState(false);
+
+  // Sale Summary report state
+  const [summaryFrom, setSummaryFrom] = useState('');
+  const [summaryTo, setSummaryTo] = useState('');
+  const [summaryLayers, setSummaryLayers] = useState([]); // ordered array of entity keys, e.g. ['salesman','company']
+  const [summaryData, setSummaryData] = useState(null);   // { rows, layers }
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -186,6 +235,48 @@ export default function Reports() {
     }
   };
 
+  // Sets/clears the layer at `index`, truncating any layers chosen after it
+  // (choosing an earlier layer differently invalidates later selections).
+  const setSummaryLayerAt = (index, key) => {
+    setSummaryLayers(prev => {
+      const next = prev.slice(0, index);
+      if (key) next.push(key);
+      return next;
+    });
+    setSummaryData(null);
+  };
+
+  const fetchSaleSummary = async () => {
+    if (summaryLayers.length === 0) return toast.error('Please select at least Layer 1');
+    setSummaryLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (summaryFrom) params.append('from_date', summaryFrom);
+      if (summaryTo) params.append('to_date', summaryTo);
+      params.append('layers', summaryLayers.join(','));
+      const r = await api.get(`/reports/sale-summary?${params}`);
+      setSummaryData(r.data);
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Error fetching sale summary');
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
+  const downloadSaleSummaryPDF = async () => {
+    if (summaryLayers.length === 0) return toast.error('Please select at least Layer 1');
+    const params = new URLSearchParams();
+    if (summaryFrom) params.append('from_date', summaryFrom);
+    if (summaryTo) params.append('to_date', summaryTo);
+    params.append('layers', summaryLayers.join(','));
+    try {
+      const res = await api.get(`/reports/sale-summary/pdf?${params}`, { responseType: 'blob' });
+      downloadBlob(res, 'sale-summary-report.pdf');
+    } catch {
+      toast.error('Error downloading PDF');
+    }
+  };
+
   const ledgerEntity = ledger?.customer || ledger?.supplier;
   const ledgerRows = ledger?.ledger || [];
   const ob = parseFloat(ledger?.openingBalance || 0);
@@ -211,6 +302,16 @@ export default function Reports() {
     pending: t.pending + parseFloat(r.net_pending || 0),
   }), { gross: 0, rec: 0, rd: 0, pending: 0 });
 
+  const summaryRows = summaryData?.rows || [];
+  const summaryLayerLabels = summaryData?.layers?.map(l => l.label) || summaryLayers.map(k => SUMMARY_ENTITY_LABEL[k]);
+  const summaryTotals = summaryRows.reduce((t, r) => ({
+    gross: t.gross + parseFloat(r.gross_amount || 0),
+    ret: t.ret + parseFloat(r.return_amount || 0),
+    net: t.net + parseFloat(r.net_amount || 0),
+    disc: t.disc + parseFloat(r.discount || 0),
+    rec: t.rec + parseFloat(r.recovered_amount || 0),
+  }), { gross: 0, ret: 0, net: 0, disc: 0, rec: 0 });
+
   if (dataLoading) {
     return (
       <Layout title="Reports">
@@ -226,6 +327,7 @@ export default function Reports() {
           { id: 'ledger', label: 'Ledger Reports', icon: 'account_balance' },
           { id: 'sales', label: 'Sales Report', icon: 'sell' },
           { id: 'recovery', label: 'Recovery Report', icon: 'account_balance_wallet' },
+          { id: 'summary', label: 'Sale Summary', icon: 'layers' },
         ].map(tab => (
           <button
             key={tab.id}
@@ -513,6 +615,176 @@ export default function Reports() {
               </div>
             </div>
           )}
+        </>
+      )}
+
+      {/* ── Sale Summary Report (layered / multi-level) ── */}
+      {reportTab === 'summary' && (
+        <>
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div className="card-header"><div className="card-title">Sale Summary Report</div></div>
+            <div className="card-body">
+              <div className="form-grid form-grid-4" style={{ marginBottom: 20 }}>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">From Date</label>
+                  <input className="form-control" type="date" value={summaryFrom}
+                    onChange={e => { setSummaryFrom(e.target.value); setSummaryData(null); }} />
+                </div>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">To Date</label>
+                  <input className="form-control" type="date" value={summaryTo}
+                    onChange={e => { setSummaryTo(e.target.value); setSummaryData(null); }} />
+                </div>
+              </div>
+
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--gray-500)', marginBottom: 10 }}>
+                Choose how to group your sales — add up to 4 grouping levels.
+              </div>
+
+              <div className="form-grid form-grid-4">
+                {[0, 1, 2, 3].map(idx => {
+                  // Only render this slot if it's the first ("Group By"), or
+                  // the previous slot has already been filled in.
+                  if (idx > 0 && summaryLayers.length < idx) return null;
+                  const usedElsewhere = summaryLayers.slice(0, idx);
+                  const availableOptions = SUMMARY_ENTITY_OPTIONS.filter(o => !usedElsewhere.includes(o.key));
+                  const currentValue = summaryLayers[idx] || '';
+                  return (
+                    <div className="form-group" style={{ margin: 0 }} key={idx}>
+                      <label className="form-label">{idx === 0 ? 'Group By *' : 'Then By'}</label>
+                      <select
+                        className="form-control"
+                        value={currentValue}
+                        onChange={e => setSummaryLayerAt(idx, e.target.value)}
+                      >
+                        {idx === 0 && <option value="">— Select —</option>}
+                        {idx > 0 && <option value="">— None —</option>}
+                        {availableOptions.map(o => (
+                          <option key={o.key} value={o.key}>{o.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+                <button className="btn btn-primary" onClick={fetchSaleSummary}
+                  disabled={summaryLoading || summaryLayers.length === 0}>
+                  {summaryLoading ? 'Loading...' : 'Generate'}
+                </button>
+                {summaryData && (
+                  <button className="btn btn-outline" onClick={downloadSaleSummaryPDF}>
+                    <span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: 'middle', marginRight: 6 }}>download</span>
+                    Download PDF
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {summaryData && (() => {
+            const nLayers = summaryLayerLabels.length;
+            const spans = buildSummarySpans(summaryRows, nLayers);
+            let runningSubtotal = { gross: 0, ret: 0, net: 0, disc: 0, rec: 0 };
+
+            return (
+              <div className="card">
+                <div className="card-header">
+                  <div className="card-title">
+                    {summaryRows.length} group{summaryRows.length !== 1 ? 's' : ''}
+                    <span style={{ fontWeight: 400, color: 'var(--gray-500)', marginLeft: 8 }}>
+                      (Grouped By: {summaryLayerLabels.join(', ')})
+                    </span>
+                  </div>
+                </div>
+                <div className="table-wrap">
+                  {summaryRows.length === 0 ? (
+                    <div className="empty-state"><div className="empty-state-title">No sales in selected period</div></div>
+                  ) : (
+                    <table className="report-table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: '4%' }}>Sr</th>
+                          {summaryLayerLabels.map((lbl, i) => <th key={i}>{lbl}</th>)}
+                          <th style={{ width: '11%', textAlign: 'right' }}>Gross Sale</th>
+                          <th style={{ width: '10%', textAlign: 'right' }}>Return</th>
+                          <th style={{ width: '11%', textAlign: 'right' }}>Net Sale</th>
+                          <th style={{ width: '10%', textAlign: 'right' }}>Dis</th>
+                          <th style={{ width: '11%', textAlign: 'right' }}>Recovered</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {summaryRows.map((row, r) => {
+                          const gross = parseFloat(row.gross_amount) || 0;
+                          const ret = parseFloat(row.return_amount) || 0;
+                          const net = parseFloat(row.net_amount) || 0;
+                          const disc = parseFloat(row.discount) || 0;
+                          const rec = parseFloat(row.recovered_amount) || 0;
+                          runningSubtotal = {
+                            gross: runningSubtotal.gross + gross, ret: runningSubtotal.ret + ret,
+                            net: runningSubtotal.net + net, disc: runningSubtotal.disc + disc, rec: runningSubtotal.rec + rec,
+                          };
+
+                          const isLastRow = r === summaryRows.length - 1;
+                          const layer1Ends = nLayers > 1 && (isLastRow || (row.layer1 || '') !== (summaryRows[r + 1].layer1 || ''));
+                          const subtotalToRender = layer1Ends ? runningSubtotal : null;
+                          if (layer1Ends) runningSubtotal = { gross: 0, ret: 0, net: 0, disc: 0, rec: 0 };
+
+                          return (
+                            <React.Fragment key={r}>
+                              <tr>
+                                <td style={{ verticalAlign: 'top', ...(summaryVLine(0, nLayers) ? VLINE_STYLE : null) }}>{r + 1}</td>
+                                {Array.from({ length: nLayers }, (_, li) => (
+                                  spans[r][li].show ? (
+                                    <td key={li} rowSpan={spans[r][li].span}
+                                      style={{
+                                        verticalAlign: 'top',
+                                        fontWeight: li === 0 ? 600 : undefined,
+                                        ...(summaryVLine(li + 1, nLayers) ? VLINE_STYLE : null),
+                                      }}>
+                                      {row[`layer${li + 1}`] || '—'}
+                                    </td>
+                                  ) : null
+                                ))}
+                                <td style={{ textAlign: 'right', verticalAlign: 'top' }}>{fmt(row.gross_amount)}</td>
+                                <td style={{ textAlign: 'right', verticalAlign: 'top' }}>{ret > 0 ? fmt(row.return_amount) : '—'}</td>
+                                <td style={{ textAlign: 'right', verticalAlign: 'top', fontWeight: 700 }}>{fmt(row.net_amount)}</td>
+                                <td style={{ textAlign: 'right', verticalAlign: 'top' }}>{disc > 0 ? fmt(row.discount) : '—'}</td>
+                                <td style={{ textAlign: 'right', verticalAlign: 'top' }}>{rec > 0 ? fmt(row.recovered_amount) : '—'}</td>
+                              </tr>
+                              {subtotalToRender && (
+                                <tr style={summarySubtotalStyle}>
+                                  <td colSpan={1 + nLayers} style={summarySubtotalStyle}>
+                                    {row.layer1 ? `Subtotal — ${row.layer1}` : 'Subtotal'}
+                                  </td>
+                                  <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{fmt(subtotalToRender.gross)}</td>
+                                  <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{subtotalToRender.ret > 0 ? fmt(subtotalToRender.ret) : '—'}</td>
+                                  <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{fmt(subtotalToRender.net)}</td>
+                                  <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{subtotalToRender.disc > 0 ? fmt(subtotalToRender.disc) : '—'}</td>
+                                  <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{fmt(subtotalToRender.rec)}</td>
+                                </tr>
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={1 + nLayers} className="report-tfoot-label">Grand Total</td>
+                          <td className="report-tfoot-num">{fmt(summaryTotals.gross)}</td>
+                          <td className="report-tfoot-num">{summaryTotals.ret > 0 ? fmt(summaryTotals.ret) : '—'}</td>
+                          <td className="report-tfoot-num">{fmt(summaryTotals.net)}</td>
+                          <td className="report-tfoot-num">{summaryTotals.disc > 0 ? fmt(summaryTotals.disc) : '—'}</td>
+                          <td className="report-tfoot-num">{fmt(summaryTotals.rec)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
         </>
       )}
     </Layout>
