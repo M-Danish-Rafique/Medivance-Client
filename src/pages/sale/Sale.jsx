@@ -327,6 +327,81 @@ function SaleFormBody({
   );
 }
 
+// Standalone searchable product-filter field for the invoice-table filter panel.
+// Mirrors the product search UX used inside the Add/Edit Invoice modal
+// (getProductSuggestions), but is deliberately backed by the FULL product
+// list (not the active-batch-only list) so users can filter by a product
+// that no longer has active stock but still appears on old invoices.
+function ProductFilterAutocomplete({ products, value, onChange, placeholder }) {
+  const [search, setSearch] = useState('');
+  const [open, setOpen] = useState(false);
+
+  // Keep the visible text in sync with an externally-set value (e.g. Clear Filters)
+  useEffect(() => {
+    if (!value) { setSearch(''); return; }
+    const prod = products.find(p => p.id === value || p.id === parseInt(value));
+    if (prod) setSearch(prod.name);
+  }, [value, products]);
+
+  const suggestions = getProductSuggestions(products, search);
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        className="form-control"
+        placeholder={placeholder}
+        autoComplete="off"
+        value={search}
+        onChange={e => {
+          setSearch(e.target.value);
+          setOpen(true);
+          if (value) onChange('');
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+      />
+      {value && (
+        <button
+          type="button"
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => { onChange(''); setSearch(''); }}
+          title="Clear"
+          style={{
+            position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+            border: 'none', background: 'transparent', cursor: 'pointer',
+            color: 'var(--gray-400)', fontSize: 16, lineHeight: 1, padding: 2
+          }}
+        >×</button>
+      )}
+      {open && search && !value && (
+        <div style={{
+          position: 'absolute', top: 38, left: 0, right: 0, zIndex: 60,
+          background: 'white', border: '1px solid var(--gray-200)', borderRadius: 8,
+          boxShadow: '0 10px 20px rgba(0,0,0,0.08)', maxHeight: 220, overflowY: 'auto'
+        }}>
+          {suggestions.length === 0 ? (
+            <div style={{ padding: '9px 12px', fontSize: 12, color: 'var(--gray-400)' }}>No products found</div>
+          ) : suggestions.map(prod => (
+            <button key={prod.id} type="button" onMouseDown={() => { onChange(prod.id); setSearch(prod.name); setOpen(false); }}
+              style={{
+                width: '100%', textAlign: 'left', padding: '9px 12px', border: 'none',
+                background: 'white', cursor: 'pointer', fontSize: 13, color: 'var(--gray-900)',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10
+              }}>
+              <span>{prod.name}</span>
+              {prod.pack_size && (
+                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--gray-500)', whiteSpace: 'nowrap' }}>
+                  {prod.pack_size}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Sale() {
   const { user, can } = useAuth();
   const [sales, setSales] = useState([]);
@@ -337,7 +412,7 @@ export default function Sale() {
   // hits Apply — so typing/selecting doesn't refilter the table on every
   // keystroke.
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const emptyFilters = { customer_id: '', salesman_id: '', delivery_by: '', date_from: '', date_to: '', status: 'all', invoice_no: '' };
+  const emptyFilters = { customer_id: '', salesman_id: '', delivery_by: '', date_from: '', date_to: '', status: 'all', invoice_no: '', product_id: '' };
   const [filters, setFilters] = useState(emptyFilters);
   const [draftFilters, setDraftFilters] = useState(emptyFilters);
   const isEmptyFilters = (f) => Object.entries(f).every(([k, v]) => k === 'status' ? v === 'all' : !v);
@@ -347,6 +422,7 @@ export default function Sale() {
 
   const filteredSales = useMemo(() => {
     const invoiceQuery = filters.invoice_no.trim().toLowerCase();
+    const productFilterId = filters.product_id ? String(filters.product_id) : '';
     return sales.filter(s => {
       if (filters.customer_id && String(s.customer_id) !== String(filters.customer_id)) return false;
       if (filters.salesman_id && String(s.salesman_id) !== String(filters.salesman_id)) return false;
@@ -356,6 +432,12 @@ export default function Sale() {
       if (filters.status === 'open' && s.is_locked) return false;
       if (filters.status === 'locked' && !s.is_locked) return false;
       if (invoiceQuery && !(s.invoice_no || '').toLowerCase().includes(invoiceQuery)) return false;
+      if (productFilterId) {
+        // product_ids comes from the backend as a comma-separated string of
+        // every distinct product_id sold on that invoice (see GET /sales).
+        const productIds = (s.product_ids || '').split(',').filter(Boolean);
+        if (!productIds.includes(productFilterId)) return false;
+      }
       return true;
     });
   }, [sales, filters]);
@@ -370,6 +452,11 @@ export default function Sale() {
   const [customers, setCustomers] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [products, setProducts] = useState([]);
+  // Unfiltered product list (all products, regardless of active-batch stock),
+  // used only by the invoice-table Product filter — a product with no current
+  // stock can still legitimately appear on old invoices and should stay
+  // filterable.
+  const [allProducts, setAllProducts] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [geo, setGeo] = useState({ cities: [], areas: [], territories: [] });
   const [loading, setLoading] = useState(true);
@@ -408,6 +495,10 @@ export default function Sale() {
     ]).then(([s, c, e, p, g, sup, activeIds]) => {
       const activeSet = new Set(activeIds.data || []);
       setSales(s.data); setCustomers(c.data); setEmployees(e.data);
+      // Full product list — used by the invoice-table Product filter, which
+      // needs to match against products on old invoices even if those
+      // products have since gone out of stock.
+      setAllProducts(p.data);
       // Only list products that currently have at least one active batch
       // (qty > 0 and not expired) so users can't start a sale for dead stock.
       setProducts(p.data.filter(prod => activeSet.has(prod.id)));
@@ -827,13 +918,19 @@ export default function Sale() {
 
         <div
           style={{
-            maxHeight: filtersOpen ? 420 : 0,
+            maxHeight: filtersOpen ? 520 : 0,
             opacity: filtersOpen ? 1 : 0,
-            overflow: 'hidden',
+            // Once open, allow the product-filter dropdown to escape this
+            // container's bounds instead of being clipped by it.
+            overflow: filtersOpen ? 'visible' : 'hidden',
             background: '#fff',
             borderTop: filtersOpen ? '1px solid var(--gray-200)' : 'none',
             borderBottom: filtersOpen ? '1px solid var(--gray-200)' : 'none',
-            transition: 'max-height 0.32s ease, opacity 0.24s ease, border-color 0.24s ease'
+            transition: 'max-height 0.32s ease, opacity 0.24s ease, border-color 0.24s ease',
+            // Establish a stacking context above the table below so the
+            // dropdown suggestion list always paints on top of it.
+            position: 'relative',
+            zIndex: 30
           }}
         >
           <div style={{ padding: '18px 20px' }}>
@@ -882,10 +979,10 @@ export default function Sale() {
                 <input className="form-control" type="date" value={draftFilters.date_to}
                   onChange={e => setDraftFilters(p => ({ ...p, date_to: e.target.value }))} />
               </div>
-              <div className="form-group" style={{ margin: 0, gridColumn: 'span 2' }}>
+              <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label">Status</label>
                 {(() => {
-                  const statusOptions = [{ v: 'open', l: 'Open' }, { v: 'locked', l: 'Locked' }, { v: 'all', l: 'All Invoices' }];
+                  const statusOptions = [{ v: 'open', l: 'Open' }, { v: 'locked', l: 'Locked' }, { v: 'all', l: 'All' }];
                   const activeIndex = Math.max(0, statusOptions.findIndex(o => o.v === draftFilters.status));
                   return (
                     <div style={{
@@ -920,8 +1017,8 @@ export default function Sale() {
                               flex: 1,
                               border: 'none',
                               borderRadius: 9,
-                              padding: '9px 10px',
-                              fontSize: 13,
+                              padding: '9px 6px',
+                              fontSize: 12.5,
                               fontWeight: active ? 550 : 500,
                               color: active ? 'var(--gray-900)' : 'var(--gray-500)',
                               background: 'transparent',
@@ -935,6 +1032,15 @@ export default function Sale() {
                     </div>
                   );
                 })()}
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Product</label>
+                <ProductFilterAutocomplete
+                  products={allProducts}
+                  value={draftFilters.product_id}
+                  onChange={id => setDraftFilters(p => ({ ...p, product_id: id }))}
+                  placeholder="Search product…"
+                />
               </div>
             </div>
 
