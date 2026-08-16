@@ -3,8 +3,9 @@ import Layout from '../../components/layout/Layout';
 import ConfirmModal from '../../components/common/ConfirmModal';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
+import { formatCurrency } from '../../utils/formatters';
 import { formatDatePKT } from '../../utils/dateUtils';
-import { fetchInvoicePdfBlob, pickDirectory, writeBlobToDirectory } from '../../utils/printQueuePdf';
+import { generateInvoicePdfBlob, saveBlobsToDirectory } from '../../utils/printQueuePdf';
 
 const INVOICE_TYPES = [
   { key: 'warranty', label: 'Warranty' },
@@ -76,29 +77,27 @@ export default function PrintQueue() {
 
   const handleExportToFolder = async () => {
     if (selectedRows.length === 0) return toast.error('Select at least one invoice first');
-
-    // Ask for the folder FIRST — don't make the user wait through PDF
-    // generation before finding out where files will go.
-    let dirHandle;
-    try {
-      dirHandle = await pickDirectory();
-    } catch (err) {
-      if (err.name === 'AbortError') return; // user cancelled the picker
-      return toast.error(err.message || 'Could not access that folder');
+    if (!window.showDirectoryPicker) {
+      return toast.error('Choosing a folder isn\u2019t supported in this browser. Please use Chrome or Edge on desktop.');
     }
-
     setExporting(true);
     setExportProgress({ done: 0, total: selectedRows.length });
     try {
+      const files = [];
       for (const row of selectedRows) {
-        const blob = await fetchInvoicePdfBlob(row.sale_id, row.invoice_type);
-        await writeBlobToDirectory(dirHandle, row.pdf_name, blob);
+        const blob = await generateInvoicePdfBlob(row.sale_id, row.invoice_type);
+        files.push({ name: row.pdf_name, blob });
         setExportProgress(p => ({ done: (p?.done || 0) + 1, total: selectedRows.length }));
       }
-      toast.success(`${selectedRows.length} invoice(s) saved`);
+      await saveBlobsToDirectory(files);
+      toast.success(`${files.length} invoice(s) saved`);
       setPostAction({ ids: selectedRows.map(r => r.id), verb: 'saved' });
     } catch (err) {
-      toast.error(err.message || 'Error saving PDFs');
+      if (err?.name === 'AbortError') {
+        // user cancelled the folder picker — no error toast needed
+      } else {
+        toast.error(err.message || 'Error saving PDFs');
+      }
     } finally {
       setExporting(false);
       setExportProgress(null);
@@ -168,6 +167,7 @@ export default function PrintQueue() {
                     <th>Invoice No</th>
                     <th>Customer</th>
                     <th>Date</th>
+                    <th style={{ textAlign: 'right' }}>Total</th>
                     <th style={{ minWidth: 260 }}>PDF File Name</th>
                     <th>Invoice Type</th>
                     <th style={{ textAlign: 'right' }}>Actions</th>
@@ -183,6 +183,7 @@ export default function PrintQueue() {
                       <td className="mono" style={{ color: 'var(--gray-700)' }}>{row.invoice_no}</td>
                       <td>{row.customer_name}</td>
                       <td>{formatDatePKT(row.sale_date)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--green)' }}>{formatCurrency(row.total_amount)}</td>
                       <td>
                         <input className="form-control" style={{ fontSize: 12, padding: '6px 8px' }}
                           value={row.pdf_name}
