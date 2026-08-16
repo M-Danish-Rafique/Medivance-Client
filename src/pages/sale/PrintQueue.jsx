@@ -166,8 +166,8 @@ export default function PrintQueue() {
                     </th>
                     <th>Invoice No</th>
                     <th>Customer</th>
-                    <th>Date</th>
-                    <th style={{ textAlign: 'right' }}>Total</th>
+                    <th style={{ width: 96 }}>Date</th>
+                    {/* <th style={{ textAlign: 'right' }}>Total</th> */}
                     <th style={{ minWidth: 260 }}>PDF File Name</th>
                     <th>Invoice Type</th>
                     <th style={{ textAlign: 'right' }}>Actions</th>
@@ -183,7 +183,7 @@ export default function PrintQueue() {
                       <td className="mono" style={{ color: 'var(--gray-700)' }}>{row.invoice_no}</td>
                       <td>{row.customer_name}</td>
                       <td>{formatDatePKT(row.sale_date)}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--green)' }}>{formatCurrency(row.total_amount)}</td>
+                      {/* <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--green)' }}>{formatCurrency(row.total_amount)}</td> */}
                       <td>
                         <input className="form-control" style={{ fontSize: 12, padding: '6px 8px' }}
                           value={row.pdf_name}
