@@ -753,9 +753,8 @@ export default function Sale() {
         setModal(false); load();
       } else {
         result = await api.post('/sales', { ...header, items: validItems });
-        setSavedInvoice({ id: result.data.id, invoice_no: result.data.invoice_no, total_amount: result.data.total_amount });
+        toast.success(`Invoice ${result.data.invoice_no} added to print queue`);
         setModal(false);
-        setPrintModal(true);
         load();
       }
     } catch (err) {
@@ -886,7 +885,7 @@ export default function Sale() {
               <div className="form-group" style={{ margin: 0, gridColumn: 'span 2' }}>
                 <label className="form-label">Status</label>
                 {(() => {
-                  const statusOptions = [{ v: 'open', l: 'Pending Only' }, { v: 'locked', l: 'Settled Only' }, { v: 'all', l: 'All Invoices' }];
+                  const statusOptions = [{ v: 'open', l: 'Open' }, { v: 'locked', l: 'Locked' }, { v: 'all', l: 'All Invoices' }];
                   const activeIndex = Math.max(0, statusOptions.findIndex(o => o.v === draftFilters.status));
                   return (
                     <div style={{

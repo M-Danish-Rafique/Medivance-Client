@@ -311,6 +311,12 @@ export default function InvoicePrint() {
         setCustomerBalance(Math.max(0, currentBal - invoiceAmt));
       } catch { setCustomerBalance(0); }
       setLoading(false);
+      // Let a parent window (e.g. the Print Queue's PDF export) know the
+      // invoice has fully loaded and rendered, so it's safe to capture.
+      requestAnimationFrame(() => {
+        window.__invoiceReady = true;
+        window.dispatchEvent(new Event('invoice-ready'));
+      });
     }).catch(() => setLoading(false));
   }, [id]);
 

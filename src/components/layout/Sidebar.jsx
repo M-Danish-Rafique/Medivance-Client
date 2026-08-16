@@ -18,6 +18,7 @@ const navItems = [
   { section: 'Distribution' },
   { path: '/purchase',   icon: 'shopping_cart',  label: 'Purchase',            perm: 'perm_purchase' },
   { path: '/sale',       icon: 'sell',           label: 'Sale',                perm: 'perm_sale' },
+  { path: '/print-queue',icon: 'print',          label: 'Print Queue',         perm: 'perm_sale' },
   { path: '/inventory',  icon: 'inventory_2',    label: 'Inventory',           perm: 'perm_inventory' },
   { path: '/recovery',   icon: 'account_balance_wallet', label: 'Recovery & Return', perm: 'perm_recovery' },
   { section: 'Manufacturing' },
