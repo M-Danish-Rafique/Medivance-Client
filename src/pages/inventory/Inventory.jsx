@@ -43,6 +43,7 @@ export default function Inventory() {
   const [search, setSearch] = useState('');
   const [showAll, setShowAll] = useState(false);        // false = active only (qty > 0)
   const [companyFilter, setCompanyFilter] = useState(''); // company_id or ''
+  const [analyticsFilter, setAnalyticsFilter] = useState(null); // null | 'low_stock' | 'expiring' | 'expired'
   const canViewPurchaseRates = user?.role === 'admin' || can('perm_view_purchase_rate');
   const canAddInventory = user?.role === 'admin' || can('perm_manage_inventory') || can('perm_add_purchase');
 
@@ -86,7 +87,22 @@ export default function Inventory() {
       item.batch_no.toLowerCase().includes(search.toLowerCase());
     const matchActive = showAll || item.qty > 0;
     const matchCompany = !companyFilter || String(item.company_id) === String(companyFilter);
-    return matchSearch && matchActive && matchCompany;
+
+    let matchAnalytics = true;
+    if (analyticsFilter) {
+      const isLow = item.qty > 0 && item.qty <= item.low_stock_threshold;
+      const isExpired = item.exp_date && new Date(item.exp_date) < new Date();
+      const isExpiringSoon =
+        !isExpired &&
+        item.exp_date &&
+        (new Date(item.exp_date) - new Date()) / (1000 * 60 * 60 * 24) <= 90;
+
+      if (analyticsFilter === 'low_stock') matchAnalytics = isLow;
+      else if (analyticsFilter === 'expiring') matchAnalytics = isExpiringSoon;
+      else if (analyticsFilter === 'expired') matchAnalytics = isExpired;
+    }
+
+    return matchSearch && matchActive && matchCompany && matchAnalytics;
   });
   const { page, setPage, pageSize, setPageSize, totalPages, totalItems, pageItems: pagedInventory } = usePagination(filtered, 25);
 
@@ -368,6 +384,7 @@ export default function Inventory() {
             value: data.length,
             icon: "inventory_2",
             color: "#dbeafe",
+            key: null,
           },
           {
             label: "Low Stock",
@@ -375,6 +392,7 @@ export default function Inventory() {
             icon: "warning",
             color: "#fef3c7",
             textColor: "#d97706",
+            key: "low_stock",
           },
           {
             label: "Expiring (90d)",
@@ -382,6 +400,7 @@ export default function Inventory() {
             icon: "schedule",
             color: "#fce7f3",
             textColor: "#be185d",
+            key: "expiring",
           },
           {
             label: "Expired",
@@ -389,28 +408,54 @@ export default function Inventory() {
             icon: "cancel",
             color: "#fee2e2",
             textColor: "#dc2626",
+            key: "expired",
           },
-        ].map((s, i) => (
-          <div key={i} className="stat-card">
-            <div className="stat-icon" style={{ background: s.color }}>
-              <span
-                className="material-symbols-outlined"
-                style={{ fontSize: 20 }}
-              >
-                {s.icon}
-              </span>
-            </div>
-            <div>
-              <div className="stat-label">{s.label}</div>
-              <div
-                className="stat-value"
-                style={{ color: s.textColor || "var(--gray-900)" }}
-              >
-                {s.value}
+        ].map((s, i) => {
+          // "Total Batches" (key === null) always clears the filter and is
+          // never shown as "active" — only the three specific filters get
+          // a visual indication when applied.
+          const isActive = s.key !== null && analyticsFilter === s.key;
+          return (
+            <div
+              key={i}
+              className="stat-card"
+              onClick={() => setAnalyticsFilter(s.key)}
+              title={
+                s.key === null
+                  ? "Show all batches"
+                  : isActive
+                  ? "Click to clear this filter"
+                  : `Filter by ${s.label}`
+              }
+              style={{
+                cursor: "default",
+                border: isActive
+                  ? `1px solid ${s.textColor || "var(--navy)"}`
+                  : "1px solid transparent",
+                boxShadow: isActive ? "var(--shadow-sm)" : undefined,
+                transition: "border-color 0.15s ease",
+              }}
+            >
+              <div className="stat-icon" style={{ background: s.color }}>
+                <span
+                  className="material-symbols-outlined"
+                  style={{ fontSize: 20 }}
+                >
+                  {s.icon}
+                </span>
+              </div>
+              <div>
+                <div className="stat-label">{s.label}</div>
+                <div
+                  className="stat-value"
+                  style={{ color: s.textColor || "var(--gray-900)" }}
+                >
+                  {s.value}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="card">
@@ -547,7 +592,9 @@ export default function Inventory() {
               </div>
               <div className="empty-state-title">No inventory found</div>
               <div className="empty-state-desc">
-                {!showAll
+                {analyticsFilter
+                  ? "No batches match this filter. Click Total Batches to clear it."
+                  : !showAll
                   ? 'Try switching to "All Products" to see zero-stock items'
                   : "No records match your filters"}
               </div>
