@@ -75,8 +75,4 @@ export const createRecoveryReturnLine = (item) => ({
 // source invoice is still pending, the return can only reduce ITS OWN
 // pending balance — so it's capped there. Mirrors the backend's branch logic
 // in classifyReturnLine (recoveries.js).
-export const getCrossReturnCap = (sourceSale) => {
-  if (!sourceSale) return Infinity;
-  if (getRecoveryStatus(sourceSale) === 'completed') return Infinity;
-  return parseFloat(sourceSale.pending_amount || 0);
-};
+// Previous-invoice return logic removed; cross-return cap helper no longer needed.

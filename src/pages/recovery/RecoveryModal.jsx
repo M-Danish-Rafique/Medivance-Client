@@ -23,7 +23,6 @@ export default function RecoveryModal({
   netCollectible,
   recoveredValue,
   currentReturnAmt,
-  crossReturnAmt,
   activeTab,
   setActiveTab,
   recoveryLines,
@@ -35,18 +34,11 @@ export default function RecoveryModal({
   handleFullReturnToggle,
   updateReturnLine,
   isAdmin,
-  selectedReturnInvoiceId,
-  eligibleReturnInvoices,
-  loadReturnInvoice,
-  loadingReturnInvoice,
-  returnInvoiceDetail,
-  crossReturnLines,
-  crossReturnLineErrors,
-  crossReturnCapError,
-  fullReturnCross,
   saving,
   canSaveRecovery,
   onSave,
+  isInvoiceOpen,
+  onGoToEditInvoice,
 }) {
   return (
     <Modal isOpen={isOpen} onClose={onClose}
@@ -175,10 +167,11 @@ export default function RecoveryModal({
             <button className={`tab-btn ${activeTab === 'return' ? 'active' : ''}`} onClick={() => setActiveTab('return')}>
               Returns — Current Invoice
               {currentReturnAmt > 0 && <span className="badge badge-amber" style={{ marginLeft: 6, fontSize: 10 }}>{formatCurrency(currentReturnAmt)}</span>}
-            </button>
-            <button className={`tab-btn ${activeTab === 'cross-return' ? 'active' : ''}`} onClick={() => setActiveTab('cross-return')}>
-              Returns — Previous Invoice
-              {crossReturnAmt > 0 && <span className="badge badge-amber" style={{ marginLeft: 6, fontSize: 10 }}>{formatCurrency(crossReturnAmt)}</span>}
+              {isInvoiceOpen && (
+                <span className="material-symbols-outlined" style={{ fontSize: 14, marginLeft: 6, verticalAlign: 'middle', color: 'var(--amber)' }} title="Invoice is open">
+                  lock_open
+                </span>
+              )}
             </button>
           </div>
 
@@ -216,60 +209,37 @@ export default function RecoveryModal({
 
           {activeTab === 'return' && (
             <div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--gray-600)', cursor: returnLines.length === 0 ? 'default' : 'pointer' }}>
-                  <input type="checkbox" checked={fullReturnCurrent}
-                    disabled={returnLines.length === 0}
-                    onChange={e => handleFullReturnToggle(false, e.target.checked)} />
-                  Return Full Invoice
-                </label>
-              </div>
-              <ReturnTable lines={returnLines} isCross={false} updateReturnLine={updateReturnLine} isAdmin={isAdmin} errors={returnLineErrors} />
-            </div>
-          )}
-
-          {activeTab === 'cross-return' && (
-            <div>
-              <div className="form-group" style={{ marginBottom: 14 }}>
-                <label className="form-label">Select Previous Invoice *</label>
-                <select className="form-control" style={{ maxWidth: 400 }}
-                  value={selectedReturnInvoiceId}
-                  onChange={e => loadReturnInvoice(e.target.value)}>
-                  <option value="">— Select Invoice —</option>
-                  {eligibleReturnInvoices.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.invoice_no} — {formatDatePKT(s.date)} — {formatCurrency(s.total_amount)}
-                      {s.recovery_status === 'completed' ? ' (Settled)' : s.is_locked ? ' (Pending)' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {loadingReturnInvoice && <div className="loading-center"><div className="spinner" /></div>}
-              {returnInvoiceDetail && !loadingReturnInvoice && (
+              {isInvoiceOpen ? (
+                <div style={{
+                  padding: '28px 20px', textAlign: 'center',
+                  background: 'var(--amber-ultra, #fff8e6)', border: '1.5px solid var(--amber-pale, #ffe4a3)',
+                  borderRadius: 10
+                }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 30, color: 'var(--amber)' }}>lock_open</span>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--navy)', margin: '8px 0 6px' }}>
+                    This invoice is still open
+                  </div>
+                  <div style={{ fontSize: 12.5, color: 'var(--gray-600)', maxWidth: 440, margin: '0 auto 16px', lineHeight: 1.5 }}>
+                    Returns can only be recorded here once an invoice has had a recovery entry (i.e. it's locked).
+                    Since <strong>{selectedSale?.invoice_no}</strong> is still open, edit it directly on the Sale
+                    Invoice page instead.
+                  </div>
+                  <button className="btn btn-primary btn-sm" onClick={onGoToEditInvoice}>
+                    <span className="material-symbols-outlined" style={{ fontSize: 16, verticalAlign: 'middle', marginRight: 6 }}>edit</span>
+                      Edit Sale Invoice
+                  </button>
+                </div>
+              ) : (
                 <>
-                  <div style={{ marginBottom: 10, padding: '8px 12px', background: 'var(--gray-50)', borderRadius: 8, fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-                    <span>
-                      Invoice <strong>{returnInvoiceDetail.invoice_no}</strong> — {formatCurrency(returnInvoiceDetail.total_amount)}
-                      {returnInvoiceDetail.is_locked && returnInvoiceDetail.recovery_status === 'completed' && (
-                        <span className="badge badge-amber" style={{ marginLeft: 8, fontSize: 10 }}>Fully recovered — credit will apply to current invoice</span>
-                      )}
-                      {returnInvoiceDetail.is_locked && returnInvoiceDetail.recovery_status !== 'completed' && (
-                        <span className="badge badge-amber" style={{ marginLeft: 8, fontSize: 10 }}>
-                          Still pending — return reduces this invoice's own balance (up to {formatCurrency(returnInvoiceDetail.pending_amount)})
-                        </span>
-                      )}
-                    </span>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--gray-600)', cursor: crossReturnLines.length === 0 ? 'default' : 'pointer' }}>
-                      <input type="checkbox" checked={fullReturnCross}
-                        disabled={crossReturnLines.length === 0}
-                        onChange={e => handleFullReturnToggle(true, e.target.checked)} />
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--gray-600)', cursor: returnLines.length === 0 ? 'default' : 'pointer' }}>
+                      <input type="checkbox" checked={fullReturnCurrent}
+                        disabled={returnLines.length === 0}
+                        onChange={e => handleFullReturnToggle(e.target.checked)} />
                       Return Full Invoice
                     </label>
                   </div>
-                  <ReturnTable lines={crossReturnLines} isCross={true} updateReturnLine={updateReturnLine} isAdmin={isAdmin} errors={crossReturnLineErrors} />
-                  {crossReturnCapError && (
-                    <div style={{ marginTop: 8, fontSize: 12, color: 'var(--red)', fontWeight: 600 }}>{crossReturnCapError}</div>
-                  )}
+                  <ReturnTable lines={returnLines} isCross={false} updateReturnLine={updateReturnLine} isAdmin={isAdmin} errors={returnLineErrors} />
                 </>
               )}
             </div>
