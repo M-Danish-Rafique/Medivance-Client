@@ -298,9 +298,10 @@ export default function Reports() {
   const recTotals = (recRows || []).reduce((t, r) => ({
     gross: t.gross + parseFloat(r.gross_amount || 0),
     rec: t.rec + parseFloat(r.recovered_amount || 0),
-    rd: t.rd + parseFloat(r.return_discount || 0),
+    ret: t.ret + parseFloat(r.return_amount || 0),
+    disc: t.disc + parseFloat(r.discount || 0),
     pending: t.pending + parseFloat(r.net_pending || 0),
-  }), { gross: 0, rec: 0, rd: 0, pending: 0 });
+  }), { gross: 0, rec: 0, ret: 0, disc: 0, pending: 0 });
 
   const summaryRows = summaryData?.rows || [];
   const summaryLayerLabels = summaryData?.layers?.map(l => l.label) || summaryLayers.map(k => SUMMARY_ENTITY_LABEL[k]);
@@ -492,8 +493,8 @@ export default function Reports() {
                         <th style={{ width: '10%' }}>Invoice No</th>
                         <th>Customer</th>
                         <th style={{ width: '11%', textAlign: 'right' }}>Gross</th>
-                        <th style={{ width: '10%', textAlign: 'right' }}>Return</th>
                         <th style={{ width: '10%', textAlign: 'right' }}>Discount</th>
+                        <th style={{ width: '10%', textAlign: 'right' }}>Return</th>
                         <th style={{ width: '11%', textAlign: 'right' }}>Net</th>
                         <th style={{ width: '11%', textAlign: 'right' }}>Recovered</th>
                       </tr>
@@ -506,8 +507,8 @@ export default function Reports() {
                           <td className="mono">{row.invoice_no}</td>
                           <td style={{ fontWeight: 600 }}>{row.customer_name}</td>
                           <td style={{ textAlign: 'right' }}>{fmt(row.gross_amount)}</td>
-                          <td style={{ textAlign: 'right' }}>{parseFloat(row.return_amount) > 0 ? fmt(row.return_amount) : '—'}</td>
                           <td style={{ textAlign: 'right' }}>{parseFloat(row.discount) > 0 ? fmt(row.discount) : '—'}</td>
+                          <td style={{ textAlign: 'right' }}>{parseFloat(row.return_amount) > 0 ? fmt(row.return_amount) : '—'}</td>
                           <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(row.net_amount)}</td>
                           <td style={{ textAlign: 'right' }}>{parseFloat(row.recovered_amount) > 0 ? fmt(row.recovered_amount) : '—'}</td>
                         </tr>
@@ -517,8 +518,8 @@ export default function Reports() {
                       <tr>
                         <td colSpan={4} className="report-tfoot-label">Total</td>
                         <td className="report-tfoot-num">{fmt(salesTotals.gross)}</td>
-                        <td className="report-tfoot-num">{fmt(salesTotals.ret)}</td>
                         <td className="report-tfoot-num">{fmt(salesTotals.disc)}</td>
+                        <td className="report-tfoot-num">{fmt(salesTotals.ret)}</td>
                         <td className="report-tfoot-num">{fmt(salesTotals.net)}</td>
                         <td className="report-tfoot-num">{fmt(salesTotals.rec)}</td>
                       </tr>
@@ -579,11 +580,13 @@ export default function Reports() {
                       <tr>
                         <th style={{ width: '5%' }}>Sr</th>
                         <th style={{ width: '12%' }}>Date</th>
+                        <th style={{ width: '10%' }}>Invoice No</th>
                         <th>Customer</th>
-                        <th style={{ width: '14%', textAlign: 'right' }}>Gross</th>
-                        <th style={{ width: '14%', textAlign: 'right' }}>Recovered</th>
-                        <th style={{ width: '14%', textAlign: 'right' }}>Return / Discount</th>
-                        <th style={{ width: '14%', textAlign: 'right' }}>Net Pending</th>
+                        <th style={{ width: '12%', textAlign: 'right' }}>Gross Pending</th>
+                        <th style={{ width: '10%', textAlign: 'right' }}>Discount</th>
+                        <th style={{ width: '10%', textAlign: 'right' }}>Return</th>
+                        <th style={{ width: '12%', textAlign: 'right' }}>Recovered</th>
+                        <th style={{ width: '12%', textAlign: 'right' }}>Net Pending</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -591,10 +594,12 @@ export default function Reports() {
                         <tr key={row.id}>
                           <td>{i + 1}</td>
                           <td>{formatDatePKT(row.date)}</td>
+                          <td className="mono">{row.invoice_no}</td>
                           <td style={{ fontWeight: 600 }}>{row.customer_name}</td>
                           <td style={{ textAlign: 'right' }}>{fmt(row.gross_amount)}</td>
+                          <td style={{ textAlign: 'right' }}>{parseFloat(row.discount) > 0 ? fmt(row.discount) : '—'}</td>
+                          <td style={{ textAlign: 'right' }}>{parseFloat(row.return_amount) > 0 ? fmt(row.return_amount) : '—'}</td>
                           <td style={{ textAlign: 'right' }}>{fmt(row.recovered_amount)}</td>
-                          <td style={{ textAlign: 'right' }}>{parseFloat(row.return_discount) > 0 ? fmt(row.return_discount) : '—'}</td>
                           <td style={{ textAlign: 'right', fontWeight: 700, color: parseFloat(row.net_pending) > 0 ? 'var(--amber)' : 'var(--green)' }}>
                             {fmt(row.net_pending)}
                           </td>
@@ -603,10 +608,11 @@ export default function Reports() {
                     </tbody>
                     <tfoot>
                       <tr>
-                        <td colSpan={3} className="report-tfoot-label">Total</td>
+                        <td colSpan={4} className="report-tfoot-label">Total</td>
                         <td className="report-tfoot-num">{fmt(recTotals.gross)}</td>
+                        <td className="report-tfoot-num">{fmt(recTotals.disc)}</td>
+                        <td className="report-tfoot-num">{fmt(recTotals.ret)}</td>
                         <td className="report-tfoot-num">{fmt(recTotals.rec)}</td>
-                        <td className="report-tfoot-num">{fmt(recTotals.rd)}</td>
                         <td className="report-tfoot-num">{fmt(recTotals.pending)}</td>
                       </tr>
                     </tfoot>
@@ -708,9 +714,9 @@ export default function Reports() {
                           <th style={{ width: '4%' }}>Sr</th>
                           {summaryLayerLabels.map((lbl, i) => <th key={i}>{lbl}</th>)}
                           <th style={{ width: '11%', textAlign: 'right' }}>Gross Sale</th>
+                          <th style={{ width: '10%', textAlign: 'right' }}>Discount</th>
                           <th style={{ width: '10%', textAlign: 'right' }}>Return</th>
                           <th style={{ width: '11%', textAlign: 'right' }}>Net Sale</th>
-                          <th style={{ width: '10%', textAlign: 'right' }}>Dis</th>
                           <th style={{ width: '11%', textAlign: 'right' }}>Recovered</th>
                         </tr>
                       </thead>
@@ -748,9 +754,9 @@ export default function Reports() {
                                   ) : null
                                 ))}
                                 <td style={{ textAlign: 'right', verticalAlign: 'top' }}>{fmt(row.gross_amount)}</td>
+                                <td style={{ textAlign: 'right', verticalAlign: 'top' }}>{disc > 0 ? fmt(row.discount) : '—'}</td>
                                 <td style={{ textAlign: 'right', verticalAlign: 'top' }}>{ret > 0 ? fmt(row.return_amount) : '—'}</td>
                                 <td style={{ textAlign: 'right', verticalAlign: 'top', fontWeight: 700 }}>{fmt(row.net_amount)}</td>
-                                <td style={{ textAlign: 'right', verticalAlign: 'top' }}>{disc > 0 ? fmt(row.discount) : '—'}</td>
                                 <td style={{ textAlign: 'right', verticalAlign: 'top' }}>{rec > 0 ? fmt(row.recovered_amount) : '—'}</td>
                               </tr>
                               {subtotalToRender && (
@@ -759,9 +765,9 @@ export default function Reports() {
                                     {row.layer1 ? `Subtotal — ${row.layer1}` : 'Subtotal'}
                                   </td>
                                   <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{fmt(subtotalToRender.gross)}</td>
+                                  <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{subtotalToRender.disc > 0 ? fmt(subtotalToRender.disc) : '—'}</td>
                                   <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{subtotalToRender.ret > 0 ? fmt(subtotalToRender.ret) : '—'}</td>
                                   <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{fmt(subtotalToRender.net)}</td>
-                                  <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{subtotalToRender.disc > 0 ? fmt(subtotalToRender.disc) : '—'}</td>
                                   <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{fmt(subtotalToRender.rec)}</td>
                                 </tr>
                               )}
@@ -773,9 +779,9 @@ export default function Reports() {
                         <tr>
                           <td colSpan={1 + nLayers} className="report-tfoot-label">Grand Total</td>
                           <td className="report-tfoot-num">{fmt(summaryTotals.gross)}</td>
+                          <td className="report-tfoot-num">{summaryTotals.disc > 0 ? fmt(summaryTotals.disc) : '—'}</td>
                           <td className="report-tfoot-num">{summaryTotals.ret > 0 ? fmt(summaryTotals.ret) : '—'}</td>
                           <td className="report-tfoot-num">{fmt(summaryTotals.net)}</td>
-                          <td className="report-tfoot-num">{summaryTotals.disc > 0 ? fmt(summaryTotals.disc) : '—'}</td>
                           <td className="report-tfoot-num">{fmt(summaryTotals.rec)}</td>
                         </tr>
                       </tfoot>
