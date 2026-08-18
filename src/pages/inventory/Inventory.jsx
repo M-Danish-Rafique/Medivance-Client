@@ -19,6 +19,11 @@ const emptyInventoryItem = {
 
 const createInventoryItem = () => ({ ...emptyInventoryItem, row_id: `inv-${Date.now()}-${Math.random().toString(16).slice(2)}` });
 
+// Guard against the classic <input type="number"> footgun where scrolling
+// over a focused field silently increments/decrements its value. Blurring on
+// wheel lets the page scroll act as intended and leaves the value untouched.
+const blockNumberWheel = (e) => e.currentTarget.blur();
+
 const getProductSuggestions = (products, query) => {
   const normalized = (query || '').trim().toLowerCase();
   if (!normalized) return [];
@@ -963,6 +968,7 @@ export default function Inventory() {
                 placeholder="Qty *"
                 value={item.qty}
                 onChange={(e) => updateInvItem(idx, "qty", e.target.value)}
+                onWheel={blockNumberWheel}
                 inputMode="numeric"
               />
 
@@ -970,6 +976,8 @@ export default function Inventory() {
                 <input
                   className="form-control"
                   type="number"
+                  step="1"
+                  min="0"
                   style={{
                     ...inputSm,
                     borderColor:
@@ -982,6 +990,7 @@ export default function Inventory() {
                   onChange={(e) =>
                     updateInvItem(idx, "purchase_rate", e.target.value)
                   }
+                  onWheel={blockNumberWheel}
                 />
               ) : (
                 <div
@@ -998,17 +1007,22 @@ export default function Inventory() {
               <input
                 className="form-control"
                 type="number"
+                step="1"
+                min="0"
                 style={inputSm}
                 placeholder="Sale Rate"
                 value={item.sale_rate}
                 onChange={(e) =>
                   updateInvItem(idx, "sale_rate", e.target.value)
                 }
+                onWheel={blockNumberWheel}
               />
 
               <input
                 className="form-control"
                 type="number"
+                step="1"
+                min="0"
                 style={{
                   ...inputSm,
                   borderColor:
@@ -1021,6 +1035,7 @@ export default function Inventory() {
                 onChange={(e) =>
                   updateInvItem(idx, "retail_price", e.target.value)
                 }
+                onWheel={blockNumberWheel}
               />
 
               <input
@@ -1034,6 +1049,7 @@ export default function Inventory() {
                 onChange={(e) =>
                   updateInvItem(idx, "low_stock_threshold", e.target.value)
                 }
+                onWheel={blockNumberWheel}
                 inputMode="numeric"
               />
 
@@ -1216,6 +1232,7 @@ export default function Inventory() {
                       style={fieldErrors.qty ? errorBorder : undefined}
                       value={editItem.qty}
                       onChange={(e) => updateEditField("qty", e.target.value)}
+                      onWheel={blockNumberWheel}
                       inputMode="numeric"
                     />
                   </div>
@@ -1249,6 +1266,7 @@ export default function Inventory() {
                       onChange={(e) =>
                         updateEditField("low_stock_threshold", e.target.value)
                       }
+                      onWheel={blockNumberWheel}
                       inputMode="numeric"
                     />
                   </div>
@@ -1258,12 +1276,14 @@ export default function Inventory() {
                     <input
                       className="form-control"
                       type="number"
-                      step="0.01"
+                      step="1"
+                      min="0"
                       style={fieldErrors.sale_rate ? errorBorder : undefined}
                       value={editItem.sale_rate}
                       onChange={(e) =>
                         updateEditField("sale_rate", e.target.value)
                       }
+                      onWheel={blockNumberWheel}
                     />
                   </div>
 
@@ -1272,12 +1292,14 @@ export default function Inventory() {
                     <input
                       className="form-control"
                       type="number"
-                      step="0.01"
+                      step="1"
+                      min="0"
                       style={fieldErrors.retail_price ? errorBorder : undefined}
                       value={editItem.retail_price}
                       onChange={(e) =>
                         updateEditField("retail_price", e.target.value)
                       }
+                      onWheel={blockNumberWheel}
                     />
                   </div>
                 </div>
