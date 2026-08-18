@@ -9,6 +9,11 @@ import { useAuth } from '../../context/AuthContext';
 
 const emptyForm = { name: '', pack_size: '', purchase_rate: '', sale_rate: '', retail_price: '', company_id: '', show_purchase_rate: true };
 
+// Guard against the classic <input type="number"> footgun where scrolling
+// over a focused field silently increments/decrements its value. Blurring on
+// wheel lets the page scroll act as intended and leaves the value untouched.
+const blockNumberWheel = (e) => e.currentTarget.blur();
+
 export default function Products() {
   const { user, can } = useAuth();
   const isAdmin = user?.role === 'admin';
@@ -176,16 +181,16 @@ export default function Products() {
           {canEditPurchaseRate && (
             <div className="form-group">
               <label className="form-label">Purchase Rate (PKR)</label>
-              <input className="form-control" type="number" step="0.01" placeholder="0.00" value={form.purchase_rate} onChange={e => setForm(p => ({ ...p, purchase_rate: e.target.value }))} />
+              <input className="form-control" type="number" step="1" min="0" placeholder="0" value={form.purchase_rate} onChange={e => setForm(p => ({ ...p, purchase_rate: e.target.value }))} onWheel={blockNumberWheel} />
             </div>
           )}
           <div className="form-group">
             <label className="form-label">Sale Rate (PKR)</label>
-            <input className="form-control" type="number" step="0.01" placeholder="0.00" value={form.sale_rate} onChange={e => setForm(p => ({ ...p, sale_rate: e.target.value }))} />
+            <input className="form-control" type="number" step="1" min="0" placeholder="0" value={form.sale_rate} onChange={e => setForm(p => ({ ...p, sale_rate: e.target.value }))} onWheel={blockNumberWheel} />
           </div>
           <div className="form-group">
             <label className="form-label">Retail Price (PKR)</label>
-            <input className="form-control" type="number" step="0.01" placeholder="0.00" value={form.retail_price} onChange={e => setForm(p => ({ ...p, retail_price: e.target.value }))} />
+            <input className="form-control" type="number" step="1" min="0" placeholder="0" value={form.retail_price} onChange={e => setForm(p => ({ ...p, retail_price: e.target.value }))} onWheel={blockNumberWheel} />
           </div>
         </div>
         {isAdmin && (
