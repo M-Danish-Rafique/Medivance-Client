@@ -11,7 +11,7 @@ import usePagination from '../../hooks/usePagination';
 
 const emptyForm = {
   name: '', address: '', phone: '', license_no: '', license_expiry: '',
-  city_id: '', area_id: '', territory_id: '', is_licensed: false
+  city_id: '', area_id: '', territory_id: '', is_licensed: true
 };
 
 // Customer segmentation. "Licensed" covers outlets that legally require a
