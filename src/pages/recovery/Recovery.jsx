@@ -84,7 +84,7 @@ export default function Recovery() {
     Promise.all([
       api.get('/sales'),
       api.get('/customers'),
-      api.get('/employees?role=Supplier'),
+      api.get('/employees?role=Salesman'),
       api.get('/geography/geo'),
     ]).then(([s, c, e, g]) => {
       setAllSales(s.data); setSales(s.data);
