@@ -29,6 +29,7 @@ export default function Recovery() {
   const [sales, setSales] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
   const [cities, setCities] = useState([]);
   const [areas, setAreas] = useState([]);
   const [territories, setTerritories] = useState([]);
@@ -38,6 +39,7 @@ export default function Recovery() {
   const [filterArea, setFilterArea] = useState('');
   const [filterTerritory, setFilterTerritory] = useState('');
   const [filterSalesman, setFilterSalesman] = useState('');
+  const [filterSupplier, setFilterSupplier] = useState('');
   const [filterCustomer, setFilterCustomer] = useState('');
   const [filterStatus, setFilterStatus] = useState('pending'); // 'pending' | 'all' — Pending Only by default
 
@@ -85,10 +87,12 @@ export default function Recovery() {
       api.get('/sales'),
       api.get('/customers'),
       api.get('/employees?role=Salesman'),
+      api.get('/employees?role=Supplier'),
       api.get('/geography/geo'),
-    ]).then(([s, c, e, g]) => {
+    ]).then(([s, c, e, sup, g]) => {
       setAllSales(s.data); setSales(s.data);
       setCustomers(c.data); setEmployees(e.data);
+      setSuppliers(Array.isArray(sup.data) ? sup.data : []);
       setCities(g.data.cities); setAreas(g.data.areas); setTerritories(g.data.territories);
       setLoading(false);
     }).catch(() => setLoading(false));
@@ -112,6 +116,7 @@ export default function Recovery() {
       filtered = filtered.filter(s => custIds.includes(s.customer_id));
     }
     if (filterSalesman) filtered = filtered.filter(s => String(s.salesman_id) === String(filterSalesman));
+    if (filterSupplier) filtered = filtered.filter(s => String(s.delivery_by) === String(filterSupplier));
     if (filterCustomer) filtered = filtered.filter(s => String(s.customer_id) === String(filterCustomer));
     if (filterStatus === 'pending') {
       filtered = filtered.filter(s => getRecoveryStatus(s) !== 'completed');
@@ -119,7 +124,7 @@ export default function Recovery() {
       filtered = filtered.filter(s => getRecoveryStatus(s) === 'completed');
     }
     setSales(filtered);
-  }, [filterCity, filterArea, filterTerritory, filterSalesman, filterCustomer, filterStatus, allSales, customers]);
+  }, [filterCity, filterArea, filterTerritory, filterSalesman, filterSupplier, filterCustomer, filterStatus, allSales, customers]);
 
   const { page, setPage, pageSize, setPageSize, totalPages, totalItems, pageItems: pagedSales } = usePagination(sales, 25);
 
@@ -148,8 +153,10 @@ export default function Recovery() {
       setRecoveryLines(recLines);
       setReturnLines(retLines);
       setFullReturnCurrent(false);
-      // Sale invoice stores the supplier in delivery_by (Delivery By on the Sale form) —
-      // same approach as Sale.jsx's openEdit, which is confirmed working.
+      // Recoveries are performed by the SUPPLIER assigned to the invoice, not
+      // the salesman — the sale form captures that in `delivery_by`.
+      // Pre-fill the modal's Supplier dropdown from there so the correct
+      // person is selected by default.
       const invoiceSupplierId = r.data.delivery_by ?? sale.delivery_by;
       setRecHeader({
         date: todayPKT(),
@@ -231,12 +238,16 @@ export default function Recovery() {
       return toast.error(`Recovered amount cannot exceed pending balance (${formatCurrency(editPendingBeforePayment)})`);
     }
 
+    const editInvoiceTotal = historySale ? parseFloat(historySale.total_amount || 0) : 0;
     setPendingAction({
       type: 'edit',
       payload: { validRecovery, validReturns, recovered },
       summary: {
+        invoiceNo: historySale?.invoice_no,
+        invoiceTotal: editInvoiceTotal,
         discount: editDiscountTotal,
         returns: editReturnTotal,
+        netTotal: Math.max(0, editInvoiceTotal - editDiscountTotal - editReturnTotal),
         recovered,
         pending: Math.max(0, editPendingBeforePayment - recovered),
       },
@@ -419,8 +430,10 @@ export default function Recovery() {
       payload: { validRecovery, allReturns, recovered },
       summary: {
         invoiceNo: selectedSale?.invoice_no,
+        invoiceTotal,
         discount: totalDiscount,
         returns: totalReturnAmt,
+        netTotal: netCollectible,
         recovered,
         pending: Math.max(0, pendingBeforeThisPayment - recovered),
       },
@@ -453,7 +466,7 @@ export default function Recovery() {
 
   const resetFilters = () => {
     setFilterCity(''); setFilterArea(''); setFilterTerritory('');
-    setFilterSalesman(''); setFilterCustomer('');
+    setFilterSalesman(''); setFilterSupplier(''); setFilterCustomer('');
   };
 
   const closeConfirm = () => { setConfirmModal(false); setPendingAction(null); };
@@ -468,15 +481,18 @@ export default function Recovery() {
         areas={areas}
         territories={territories}
         employees={employees}
+        suppliers={suppliers}
         filterCity={filterCity}
         filterArea={filterArea}
         filterTerritory={filterTerritory}
         filterSalesman={filterSalesman}
+        filterSupplier={filterSupplier}
         filterCustomer={filterCustomer}
         onCityChange={v => { setFilterCity(v); setFilterArea(''); setFilterTerritory(''); setFilterCustomer(''); }}
         onAreaChange={v => { setFilterArea(v); setFilterTerritory(''); setFilterCustomer(''); }}
         onTerritoryChange={v => { setFilterTerritory(v); setFilterCustomer(''); }}
         onSalesmanChange={setFilterSalesman}
+        onSupplierChange={setFilterSupplier}
         onCustomerChange={setFilterCustomer}
         onReset={resetFilters}
       />
@@ -502,7 +518,7 @@ export default function Recovery() {
         onClose={() => setModal(false)}
         selectedSale={selectedSale}
         saleDetail={saleDetail}
-        employees={employees}
+        employees={suppliers}
         recHeader={recHeader}
         setRecHeader={setRecHeader}
         amountRecovered={amountRecovered}
