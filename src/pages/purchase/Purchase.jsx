@@ -19,6 +19,11 @@ const emptyItem = {
 
 const createPurchaseItem = () => ({ ...emptyItem, row_id: `purchase-${Date.now()}-${Math.random().toString(16).slice(2)}` });
 
+// Guard against the classic <input type="number"> footgun where scrolling
+// over a focused field silently increments/decrements its value. Blurring on
+// wheel lets the page scroll act as intended and leaves the value untouched.
+const blockNumberWheel = (e) => e.currentTarget.blur();
+
 const today = () => todayPKT();
 const fmtPKR = (n) => `PKR ${Math.round(parseFloat(n || 0)).toLocaleString()}`;
 
@@ -397,30 +402,36 @@ export default function Purchase() {
               <input className="form-control" type="number" step="1" min="0" style={{ ...inputSm, borderColor: !item.qty && item.product_id ? 'var(--red)' : undefined }}
                 placeholder="Qty *" value={item.qty}
                 onChange={e => updateItem(idx, 'qty', e.target.value)}
+                onWheel={blockNumberWheel}
                 inputMode="numeric" />
 
               {canViewPurchaseRates ? (
-                <input className="form-control" type="number" style={{ ...inputSm, borderColor: !item.purchase_rate && item.product_id ? 'var(--red)' : undefined }}
+                <input className="form-control" type="number" step="1" min="0" style={{ ...inputSm, borderColor: !item.purchase_rate && item.product_id ? 'var(--red)' : undefined }}
                   placeholder="Rate *" value={item.purchase_rate}
-                  onChange={e => updateItem(idx, 'purchase_rate', e.target.value)} />
+                  onChange={e => updateItem(idx, 'purchase_rate', e.target.value)}
+                  onWheel={blockNumberWheel} />
               ) : (
                 <div style={{ fontSize: 11, color: 'var(--gray-400)', textAlign: 'center' }}>Hidden</div>
               )}
 
-              <input className="form-control" type="number" style={{ ...inputSm, borderColor: !item.retail_price && item.product_id ? 'var(--red)' : undefined }}
+              <input className="form-control" type="number" step="1" min="0" style={{ ...inputSm, borderColor: !item.retail_price && item.product_id ? 'var(--red)' : undefined }}
                 placeholder="Retail *" value={item.retail_price}
-                onChange={e => updateItem(idx, 'retail_price', e.target.value)} />
+                onChange={e => updateItem(idx, 'retail_price', e.target.value)}
+                onWheel={blockNumberWheel} />
 
               <input className="form-control no-spinner" type="number" step="1" min="0" style={inputSm}
                 value={item.bonus} onChange={e => updateItem(idx, 'bonus', e.target.value)}
+                onWheel={blockNumberWheel}
                 inputMode="numeric" />
 
-              <input className="form-control no-spinner" type="number" step="0.5" min="0" style={inputSm}
+              <input className="form-control no-spinner" type="number" step="0.5" min="0" max="100" style={inputSm}
                 value={item.discount_pct} onChange={e => updateItem(idx, 'discount_pct', e.target.value)}
+                onWheel={blockNumberWheel}
                 inputMode="decimal" />
 
-              <input className="form-control no-spinner" type="number" step="0.5" min="0" style={inputSm}
+              <input className="form-control no-spinner" type="number" step="0.5" min="0" max="100" style={inputSm}
                 value={item.tax_pct} onChange={e => updateItem(idx, 'tax_pct', e.target.value)}
+                onWheel={blockNumberWheel}
                 inputMode="decimal" />
 
               <div style={{ fontWeight: 700, fontSize: 12, textAlign: 'right', color: 'var(--navy)', paddingRight: 2 }}>
@@ -447,8 +458,9 @@ export default function Purchase() {
             {item.product_id && (
               <div style={{ padding: '4px 8px 0', display: 'flex', gap: 12, alignItems: 'center' }}>
                 <span style={{ fontSize: 11, color: 'var(--gray-500)' }}>Sale Rate:</span>
-                <input type="number" value={item.sale_rate}
+                <input type="number" step="1" min="0" value={item.sale_rate}
                   onChange={e => updateItem(idx, 'sale_rate', e.target.value)}
+                  onWheel={blockNumberWheel}
                   style={{ width: 90, padding: '3px 6px', border: '1px solid var(--gray-200)', borderRadius: 6, fontSize: 11, fontFamily: 'inherit' }}
                   placeholder="Sale Rate" />
                 {item.bonus > 0 && (
