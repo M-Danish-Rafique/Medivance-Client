@@ -157,9 +157,6 @@ export default function Recovery() {
         notes: '',
       });
       setAmountRecovered('');
-      // Always default to the Recovery (Discounts) tab — for an open
-      // invoice this also avoids leading with the Return tab's guard
-      // message, which is only relevant once the user clicks over to it.
       setActiveTab('recovery');
       setModal(true);
     } catch { toast.error('Error loading invoice'); }
@@ -327,20 +324,6 @@ export default function Recovery() {
   // whatever the user has actually typed so far.
   const recoveredValue = Number.isNaN(parseFloat(amountRecovered)) ? 0 : parseFloat(amountRecovered || 0);
   const pendingAmount = Math.max(0, pendingBeforeThisPayment - recoveredValue);
-
-  // Whether the invoice currently open in this modal has not yet had ANY
-  // recovery event (i.e. it isn't locked). Returns can't be taken against
-  // an open invoice here — the user is sent to the Sale page to edit the
-  // invoice directly instead (see the Return tab in RecoveryModal).
-  const isInvoiceOpen = !!(saleDetail && !saleDetail.is_locked);
-
-  // Close this modal and hand off to the Sale Invoice page, asking it to
-  // auto-open the Edit modal for the invoice currently selected here.
-  const goToEditInvoice = () => {
-    if (!selectedSale) return;
-    setModal(false);
-    navigate('/sale', { state: { editInvoiceId: selectedSale.id } });
-  };
 
   // Edit-modal derived totals — mirrors the main modal's logic, scoped to
   // just the single entry being edited.
@@ -547,8 +530,6 @@ export default function Recovery() {
         saving={saving}
         canSaveRecovery={canSaveRecovery}
         onSave={handleSaveClick}
-        isInvoiceOpen={isInvoiceOpen}
-        onGoToEditInvoice={goToEditInvoice}
       />
 
       <PaymentHistoryModal

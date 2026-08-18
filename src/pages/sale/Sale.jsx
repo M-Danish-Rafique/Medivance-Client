@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import Modal from '../../components/common/Modal';
 import ConfirmModal from '../../components/common/ConfirmModal';
@@ -405,8 +404,6 @@ function ProductFilterAutocomplete({ products, value, onChange, placeholder }) {
 
 export default function Sale() {
   const { user, can } = useAuth();
-  const location = useLocation();
-  const navigate = useNavigate();
   const [sales, setSales] = useState([]);
 
   // Filters — collapsed and inactive by default.
@@ -797,29 +794,6 @@ export default function Sale() {
       setModal('edit');
     } catch { toast.error('Error loading sale'); }
   };
-
-  // Routed here from Recovery's "invoice is still open → edit it instead"
-  // guard (see RecoveryModal's Return tab). Once the sales list has loaded,
-  // find the invoice the person was redirected for and auto-open Edit for
-  // it — mirroring exactly what clicking the row's Edit button would do.
-  useEffect(() => {
-    const editId = location.state?.editInvoiceId;
-    if (!editId || sales.length === 0) return;
-    const target = sales.find(s => s.id === editId);
-    if (target) {
-      if (target.is_locked) {
-        toast.error('This invoice has since been locked and can no longer be edited.');
-      } else {
-        openEdit(target);
-      }
-    } else {
-      toast.error('Invoice not found.');
-    }
-    // Clear the nav state so a refresh or back-navigation doesn't reopen
-    // the Edit modal on its own.
-    navigate(location.pathname, { replace: true, state: {} });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.state, sales]);
 
   const openView = async (sale) => {
     try {
