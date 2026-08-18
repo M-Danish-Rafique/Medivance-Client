@@ -18,6 +18,11 @@ const emptySaleItem = {
   _batches: [], _rateHistory: null
 };
 
+// Guard against the classic <input type="number"> footgun where scrolling
+// over a focused field silently increments/decrements its value. Blurring on
+// wheel lets the page scroll act as intended and leaves the value untouched.
+const blockNumberWheel = (e) => e.currentTarget.blur();
+
 const createSaleItem = () => ({ ...emptySaleItem, row_id: `sale-${Date.now()}-${Math.random().toString(16).slice(2)}` });
 
 const getProductSuggestions = (products, query) => {
@@ -256,9 +261,11 @@ function SaleFormBody({
             const e = getItemErrors(item);
             return (
               <div>
-                <input className="form-control" type="number" min="1" style={{ ...colStyle, borderColor: (e.belowMinQty || e.overQty) ? 'var(--red)' : undefined }}
+                <input className="form-control" type="number" step="1" min="1" style={{ ...colStyle, borderColor: (e.belowMinQty || e.overQty) ? 'var(--red)' : undefined }}
                   placeholder="Qty" value={item.qty}
-                  onChange={ev => updateItem(idx, 'qty', ev.target.value)} />
+                  onChange={ev => updateItem(idx, 'qty', ev.target.value)}
+                  onWheel={blockNumberWheel}
+                  inputMode="numeric" />
                 {e.belowMinQty && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Qty must be ≥ 1</div>}
                 {e.overQty && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Qty+Bonus max: {e.maxQty}</div>}
               </div>
@@ -268,8 +275,9 @@ function SaleFormBody({
             const e = getItemErrors(item);
             return (
               <div>
-                <input className="form-control" type="number" step="0.01" min="1" style={{ ...colStyle, borderColor: e.belowMinRate ? 'var(--red)' : undefined }}
-                  placeholder="Rate" value={item.sale_rate} onChange={ev => updateItem(idx, 'sale_rate', ev.target.value)} />
+                <input className="form-control" type="number" step="1" min="1" style={{ ...colStyle, borderColor: e.belowMinRate ? 'var(--red)' : undefined }}
+                  placeholder="Rate" value={item.sale_rate} onChange={ev => updateItem(idx, 'sale_rate', ev.target.value)}
+                  onWheel={blockNumberWheel} />
                 {e.belowMinRate && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Rate must be ≥ 1</div>}
               </div>
             );
@@ -280,6 +288,7 @@ function SaleFormBody({
               <div>
                 <input className="form-control no-spinner" type="number" step="1" min="0" style={{ ...colStyle, borderColor: e.negBonus ? 'var(--red)' : undefined }}
                   placeholder="0" value={item.bonus} onChange={ev => updateItem(idx, 'bonus', ev.target.value)}
+                  onWheel={blockNumberWheel}
                   inputMode="numeric" />
                 {e.negBonus && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Bonus can't be -ve</div>}
               </div>
@@ -289,8 +298,9 @@ function SaleFormBody({
             const e = getItemErrors(item);
             return (
               <div>
-                <input className="form-control no-spinner" type="number" step="0.5" min="0" style={{ ...colStyle, borderColor: e.negDisc ? 'var(--red)' : undefined }}
+                <input className="form-control no-spinner" type="number" step="0.5" min="0" max="100" style={{ ...colStyle, borderColor: e.negDisc ? 'var(--red)' : undefined }}
                   placeholder="0%" value={item.discount_pct} onChange={ev => updateItem(idx, 'discount_pct', ev.target.value)}
+                  onWheel={blockNumberWheel}
                   inputMode="decimal" />
                 {e.negDisc && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Disc% can't be -ve</div>}
               </div>
@@ -300,8 +310,9 @@ function SaleFormBody({
             const e = getItemErrors(item);
             return (
               <div>
-                <input className="form-control no-spinner" type="number" step="0.5" min="0" style={{ ...colStyle, borderColor: e.negTax ? 'var(--red)' : undefined }}
+                <input className="form-control no-spinner" type="number" step="0.5" min="0" max="100" style={{ ...colStyle, borderColor: e.negTax ? 'var(--red)' : undefined }}
                   placeholder="0%" value={item.tax_pct} onChange={ev => updateItem(idx, 'tax_pct', ev.target.value)}
+                  onWheel={blockNumberWheel}
                   inputMode="decimal" />
                 {e.negTax && <div style={{ fontSize: 9, color: 'var(--red)', marginTop: 1 }}>Tax% can't be -ve</div>}
               </div>
