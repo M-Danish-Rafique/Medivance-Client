@@ -69,7 +69,7 @@ export default function EditRecoveryModal({
                       <div style={{ fontWeight: 600, fontSize: 13 }}>{l.product_name}</div>
                       <div><span className="mono badge badge-gray" style={{ fontSize: 11 }}>{l.batch_no || '—'}</span></div>
                       <div style={{ fontWeight: 700 }}>{formatCurrency(l.original_total)}</div>
-                      <input className="form-control" type="number" step="0.01"
+                      <input className="form-control" type="number" step="1" min="0"
                         style={{ fontSize: 12, padding: '5px 8px', borderColor: err ? 'var(--red)' : undefined }} value={l.discount_given}
                         onChange={e => setEditRecoveryLines(prev => {
                           const u = [...prev]; u[idx] = { ...u[idx], discount_given: e.target.value }; return u;
@@ -100,13 +100,13 @@ export default function EditRecoveryModal({
                         <div style={{ fontSize: 10, color: 'var(--gray-500)' }}>{l.source_invoice}</div>
                       </div>
                       <div><span className="mono badge badge-gray" style={{ fontSize: 11 }}>{l.batch_no || '—'}</span></div>
-                      <input className="form-control" type="number" step="1"
+                      <input className="form-control" type="number" step="1" min="0"
                         style={{ fontSize: 12, padding: '5px 8px', borderColor: err ? 'var(--red)' : undefined }} value={l.qty_returned}
                         onChange={e => setEditReturnLines(prev => {
                           const u = [...prev]; u[idx] = { ...u[idx], qty_returned: e.target.value }; return u;
                         })}
                         onWheel={blockWheelChange} />
-                      <input className="form-control" type="number" step="0.01" min="0"
+                      <input className="form-control" type="number" step="1" min="0"
                         style={{ fontSize: 12, padding: '5px 8px' }} value={l.return_rate}
                         onChange={e => setEditReturnLines(prev => {
                           const u = [...prev]; u[idx] = { ...u[idx], return_rate: e.target.value }; return u;
@@ -127,7 +127,7 @@ export default function EditRecoveryModal({
           <div className="form-grid form-grid-2">
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">Amount Recovered (Cash)</label>
-              <input className="form-control" type="number" step="1"
+              <input className="form-control" type="number" step="1" min="0"
                 placeholder="Enter amount collected"
                 style={{ borderColor: editAmountRecoveredError ? 'var(--red)' : undefined }}
                 value={editAmountRecovered}
