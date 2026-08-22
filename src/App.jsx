@@ -17,7 +17,7 @@ import Customers from './pages/customers/Customers';
 import Suppliers from './pages/suppliers/Suppliers';
 import Purchase from './pages/purchase/Purchase';
 import Sale from './pages/sale/Sale';
-import PrintQueue from './pages/sale/PrintQueue';
+import BatchPrint from './pages/sale/BatchPrint';
 import InvoicePrint from './pages/sale/InvoicePrint';
 import Inventory from './pages/inventory/Inventory';
 import Finance from './pages/finance/Finance';
@@ -62,6 +62,7 @@ export default function App() {
             <Routes>
               <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
               <Route path="/invoice/:id/print" element={<PrivateRoute><InvoicePrint /></PrivateRoute>} />
+              <Route path="/sales/print-batch" element={<PrivateRoute><BatchPrint /></PrivateRoute>} />
 
               {/* Persistent app shell — Sidebar stays mounted across navigations */}
               <Route element={<PrivateRoute><AppLayout /></PrivateRoute>}>
@@ -74,7 +75,6 @@ export default function App() {
                 <Route path="/suppliers" element={<Suppliers />} />
                 <Route path="/purchase" element={<Purchase />} />
                 <Route path="/sale" element={<Sale />} />
-                <Route path="/print-queue" element={<PrintQueue />} />
                 <Route path="/inventory" element={<Inventory />} />
                 <Route path="/finance" element={<Finance />} />
                 <Route path="/reports" element={<Reports />} />
