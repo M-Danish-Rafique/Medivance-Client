@@ -20,6 +20,7 @@ import RecoveryModal from './RecoveryModal';
 import PaymentHistoryModal from './PaymentHistoryModal';
 import EditRecoveryModal from './EditRecoveryModal';
 import ConfirmRecoveryModal from './ConfirmRecoveryModal';
+import ConfirmModal from '../../components/common/ConfirmModal';
 
 export default function Recovery() {
   const { user } = useAuth();
@@ -77,6 +78,13 @@ export default function Recovery() {
   // actually submitted — used by both the add-recovery flow and the admin edit flow.
   const [confirmModal, setConfirmModal] = useState(false);
   const [pendingAction, setPendingAction] = useState(null); // { type: 'add' | 'edit', payload, summary }
+
+  // Empty-delete confirmation: when an admin edits a recovery down to
+  // zero-across-the-board, the backend returns HTTP 409 with a message
+  // asking to confirm deletion of the entry (and possible unlock of the
+  // invoice). We stash the message here to render a confirm modal, and
+  // on confirm we resubmit the same payload with `confirm_delete_if_empty: true`.
+  const [emptyDeletePrompt, setEmptyDeletePrompt] = useState(null); // null | { message: string }
 
   // "Return Full Invoice" checkbox state for the current-invoice return tab.
   const [fullReturnCurrent, setFullReturnCurrent] = useState(false);
@@ -255,22 +263,48 @@ export default function Recovery() {
     setConfirmModal(true);
   };
 
-  const performEditSave = async () => {
+  const performEditSave = async (confirmDeleteIfEmpty = false) => {
     const { validRecovery, validReturns, recovered } = pendingAction.payload;
     setEditSaving(true);
     try {
-      await api.put(`/recoveries/${editingId}`, {
+      const body = {
         date: editDate, notes: editNotes,
         recovery_items: validRecovery, return_items: validReturns,
         amount_recovered: recovered,
-      });
-      toast.success('Recovery entry updated.');
+      };
+      if (confirmDeleteIfEmpty) body.confirm_delete_if_empty = true;
+      const r = await api.put(`/recoveries/${editingId}`, body);
+      // The backend signals `{ deleted: true, unlocked }` when the edit
+      // reduced the entry to zero and the entry was deleted. Show a
+      // clearer toast for that case than the generic "updated" one.
+      if (r.data?.deleted) {
+        toast.success(r.data.unlocked
+          ? 'Recovery entry deleted. Invoice unlocked for further edits.'
+          : 'Recovery entry deleted.');
+      } else {
+        toast.success('Recovery entry updated.');
+      }
       setConfirmModal(false); setPendingAction(null);
+      setEmptyDeletePrompt(null);
       setEditModal(false);
       if (historySale) openHistory(historySale);
       load();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Error updating recovery');
+      // 409 + requires_confirmation === 'confirm_delete_if_empty' means the
+      // server is asking to confirm the delete. Pop the confirm modal with
+      // the exact message the server sent (so the operator sees the same
+      // wording that would appear in an audit log).
+      if (
+        err.response?.status === 409 &&
+        err.response?.data?.requires_confirmation === 'confirm_delete_if_empty'
+      ) {
+        setEmptyDeletePrompt({
+          message: err.response.data.message ||
+            'This edit will leave the recovery entry empty. Confirming will delete it.',
+        });
+      } else {
+        toast.error(err.response?.data?.message || 'Error updating recovery');
+      }
     } finally { setEditSaving(false); }
   };
 
@@ -590,6 +624,20 @@ export default function Recovery() {
         saving={saving}
         editSaving={editSaving}
         onConfirm={() => pendingAction?.type === 'edit' ? performEditSave() : performSaveRecovery()}
+      />
+
+      {/* Empty-recovery delete confirmation. Only shown when the backend has
+         signalled (via a 409 on PUT /recoveries/:id) that the incoming edit
+         would zero-out the entry. Confirming re-invokes performEditSave with
+         `confirm_delete_if_empty: true`, which lets the server delete the
+         entry, reverse its ledger + inventory effects, and (if it was the
+         last recovery on the invoice) auto-unlock the sale. */}
+      <ConfirmModal
+        isOpen={!!emptyDeletePrompt}
+        onClose={() => setEmptyDeletePrompt(null)}
+        onConfirm={() => performEditSave(true)}
+        loading={editSaving}
+        message={emptyDeletePrompt?.message}
       />
     </Layout>
   );

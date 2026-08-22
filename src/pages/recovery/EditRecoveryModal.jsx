@@ -106,13 +106,22 @@ export default function EditRecoveryModal({
                           const u = [...prev]; u[idx] = { ...u[idx], qty_returned: e.target.value }; return u;
                         })}
                         onWheel={blockWheelChange} />
-                      <input className="form-control" type="number" step="1" min="0"
-                        style={{ fontSize: 12, padding: '5px 8px' }} value={l.return_rate}
-                        onChange={e => setEditReturnLines(prev => {
-                          const u = [...prev]; u[idx] = { ...u[idx], return_rate: e.target.value }; return u;
-                        })}
-                        onWheel={blockWheelChange} />
-                      <div style={{ fontWeight: 700, color: 'var(--amber)' }}>
+                      {/* Return rate is server-computed (net of every discount
+                         already applied to this line). Displayed read-only
+                         so an admin can't inadvertently under- or over-credit
+                         the customer. */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <div style={{
+                          fontSize: 12, padding: '5px 8px', border: '1px dashed var(--gray-300)',
+                          background: 'var(--gray-50)', borderRadius: 6, fontWeight: 600,
+                          color: 'var(--gray-800)',
+                        }}>
+                          {formatCurrency(parseFloat(l.return_rate || 0))}
+                        </div>
+                        <div style={{ fontSize: 9, color: 'var(--gray-500)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                          Auto — net of discount
+                        </div>
+                      </div>                      <div style={{ fontWeight: 700, color: 'var(--amber)' }}>
                         {formatCurrency((parseFloat(l.qty_returned || 0)) * (parseFloat(l.return_rate || 0)))}
                       </div>
                     </div>

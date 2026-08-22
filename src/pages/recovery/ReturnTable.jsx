@@ -22,7 +22,7 @@ export default function ReturnTable({ lines, isCross, updateReturnLine, isAdmin,
             const rowBorder = err ? 'var(--red)' : expiryBlocked ? 'var(--red)' : expiryWarning ? '#f59e0b' : 'var(--gray-200)';
             return (
               <div key={line.row_id || idx} style={{ marginBottom: 5 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', background: rowBg, border: `1.5px solid ${rowBorder}`, borderRadius: 8 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', gap: 6, alignItems: 'center', padding: '7px 8px', background: rowBg, border: `1.5px solid ${rowBorder}`, borderRadius: 8 }}>
                   <div style={{ fontWeight: 600, fontSize: 13 }}>{line.product_name}</div>
                   <div>
                     <span className="mono badge badge-gray" style={{ fontSize: 11 }}>{line.batch_no || '—'}</span>
@@ -44,11 +44,26 @@ export default function ReturnTable({ lines, isCross, updateReturnLine, isAdmin,
                     onChange={e => updateReturnLine(idx, 'qty_returned', e.target.value, line, isCross)}
                     onWheel={blockWheelChange}
                     inputMode="numeric" />
-                  <input className="form-control" type="number" step="0.01"
-                    style={{ fontSize: 12, padding: '5px 8px', opacity: expiryBlocked ? 0.4 : 1 }}
-                    value={line.return_rate} disabled={expiryBlocked}
-                    onChange={e => updateReturnLine(idx, 'return_rate', e.target.value, line, isCross)}
-                    onWheel={blockWheelChange} />
+                  {/* Return rate is server-computed and non-editable — the
+                     customer gets back exactly what they paid per unit after
+                     invoice-time and recovery-time discounts. Rendered as a
+                     read-only pill with an "auto" hint so the operator
+                     understands why it can't be changed. */}
+                  <div style={{
+                    display: 'flex', flexDirection: 'column', gap: 2,
+                    opacity: expiryBlocked ? 0.4 : 1,
+                  }}>
+                    <div style={{
+                      fontSize: 12, padding: '5px 8px', border: '1px dashed var(--gray-300)',
+                      background: 'var(--gray-50)', borderRadius: 6, fontWeight: 600,
+                      color: 'var(--gray-800)',
+                    }}>
+                      {formatCurrency(parseFloat(line.return_rate || 0))}
+                    </div>
+                    <div style={{ fontSize: 9, color: 'var(--gray-500)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                      Auto — net of discount
+                    </div>
+                  </div>
                   <div style={{ fontWeight: 700, color: retAmt > 0 ? 'var(--amber)' : 'var(--gray-400)' }}>
                     {retAmt > 0 ? formatCurrency(retAmt) : '—'}
                   </div>

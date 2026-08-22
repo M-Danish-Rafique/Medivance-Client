@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Layout from '../../components/layout/Layout';
 import Modal from '../../components/common/Modal';
 import ConfirmModal from '../../components/common/ConfirmModal';
@@ -8,6 +8,7 @@ import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
 import { useAuth } from '../../context/AuthContext';
 import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
+import { formatCurrency } from '../../utils/formatters';
 
 const emptyItem = {
   row_id: null,
@@ -23,6 +24,34 @@ const createPurchaseItem = () => ({ ...emptyItem, row_id: `purchase-${Date.now()
 // over a focused field silently increments/decrements its value. Blurring on
 // wheel lets the page scroll act as intended and leaves the value untouched.
 const blockNumberWheel = (e) => e.currentTarget.blur();
+
+// Clamp typed numeric input to a [min, max] range. The `min`/`max` attributes
+// on <input type="number"> only constrain the spinner arrows, not typed
+// values, so we enforce the range ourselves on every change.
+const clamp = (val, min, max) => {
+  if (val === '') return val;
+  const n = parseFloat(val);
+  if (Number.isNaN(n)) return val;
+  return Math.min(max, Math.max(min, n)).toString();
+};
+
+// Client-side implementation of the six-step landed-cost formula that
+// backend/purchase.js runs at commit time — mirrored here so the operator
+// can see the Eff. Purchase Rate per Item inline before saving, without a
+// round-trip. Kept in lockstep with `computeLineLandedCost` on the server.
+const computeEffPurchaseRate = (item) => {
+  const rate = parseFloat(item.purchase_rate || 0);
+  const disc = parseFloat(item.discount_pct  || 0);
+  const tax  = parseFloat(item.tax_pct       || 0);
+  const qty  = parseInt  (item.qty           || 0, 10);
+  const bon  = parseInt  (item.bonus         || 0, 10);
+  if (!rate || !qty) return null;
+  const netRate    = rate * (1 - disc / 100);
+  const finalRate  = netRate * (1 + tax / 100);
+  const totalStock = qty + bon;
+  if (totalStock <= 0) return null;
+  return Math.round((finalRate * qty / totalStock) * 10000) / 10000;
+};
 
 const today = () => todayPKT();
 const fmtPKR = (n) => `PKR ${Math.round(parseFloat(n || 0)).toLocaleString()}`;
@@ -58,7 +87,23 @@ export default function Purchase() {
   const [deleting, setDeleting] = useState(false);
   const [header, setHeader] = useState({ supplier_id: '', invoice_no: '', date: today() });
   const [items, setItems] = useState([createPurchaseItem()]);
+
+  // Rate-change confirmation flow. When the backend returns 409 with a
+  // per-line preview of the weighted-average change, we stash it here and
+  // pop a modal. On confirm we re-submit the same payload with
+  // `confirm_rate_change: true`.
+  const [rateChangePreview, setRateChangePreview] = useState(null); // null | { lines, mode: 'add'|'edit' }
   const canViewPurchaseRates = user?.role === 'admin' || can('perm_view_purchase_rate');
+
+  // Guards against a double-submit firing two API calls before `saving`
+  // state has re-rendered the disabled button. Refs update synchronously,
+  // unlike state, so this closes the race window entirely.
+  const savingRef = useRef(false);
+
+  // Per-row debounce timers + a "latest request" token per row, so rapid
+  // batch-number keystrokes don't fire overlapping checks and a stale
+  // response can't clobber a newer one.
+  const conflictCheckState = useRef({});
 
   const load = () => {
     setLoading(true);
@@ -67,6 +112,15 @@ export default function Purchase() {
       .catch(() => setLoading(false));
   };
   useEffect(load, []);
+
+  // Clean up any pending debounce timers on unmount.
+  useEffect(() => {
+    return () => {
+      Object.values(conflictCheckState.current).forEach(entry => {
+        if (entry?.timer) clearTimeout(entry.timer);
+      });
+    };
+  }, []);
 
   const calcTotal = (item) => {
     const qty = parseFloat(item.qty) || 0;
@@ -83,10 +137,13 @@ export default function Purchase() {
     return +(afterDisc + taxAmt).toFixed(2);
   };
 
-  const checkBatchConflict = useCallback(async (idx, product_id, batch_no, exp_date, retail_price) => {
+  const runBatchConflictCheck = useCallback(async (idx, product_id, batch_no, exp_date, retail_price, requestId) => {
     if (!product_id || !batch_no) return;
     try {
       const r = await api.get(`/inventory/check-batch?product_id=${product_id}&batch_no=${batch_no}`);
+      // If a newer keystroke has scheduled another check for this row since
+      // this request went out, discard this (now-stale) response.
+      if (conflictCheckState.current[idx]?.requestId !== requestId) return;
       if (r.data) {
         const existing = r.data;
         const expConflict = exp_date && existing.exp_date && exp_date !== existing.exp_date.split('T')[0];
@@ -97,6 +154,18 @@ export default function Purchase() {
       }
     } catch { }
   }, []);
+
+  // Debounced entry point: clears any pending timer for this row, stamps a
+  // fresh request id, and schedules the actual check 300ms out.
+  const scheduleConflictCheck = useCallback((idx, product_id, batch_no, exp_date, retail_price) => {
+    const prevEntry = conflictCheckState.current[idx];
+    if (prevEntry?.timer) clearTimeout(prevEntry.timer);
+    const requestId = Symbol(`row-${idx}`);
+    const timer = setTimeout(() => {
+      runBatchConflictCheck(idx, product_id, batch_no, exp_date, retail_price, requestId);
+    }, 300);
+    conflictCheckState.current[idx] = { timer, requestId };
+  }, [runBatchConflictCheck]);
 
   const selectProduct = (idx, product) => {
     setItems(prev => prev.map((it, i) => {
@@ -143,21 +212,31 @@ export default function Purchase() {
       return updated;
     });
     if (['batch_no', 'exp_date', 'retail_price'].includes(field)) {
+      // Read the just-updated row on the next tick and kick off a debounced
+      // conflict check with fresh values (avoids a stale closure over `items`).
       setTimeout(() => {
         setItems(prev => {
           const it = prev[idx];
-          checkBatchConflict(idx, it.product_id,
-            field === 'batch_no' ? value : it.batch_no,
-            field === 'exp_date' ? value : it.exp_date,
-            field === 'retail_price' ? value : it.retail_price);
+          if (it) {
+            scheduleConflictCheck(idx, it.product_id,
+              field === 'batch_no' ? value : it.batch_no,
+              field === 'exp_date' ? value : it.exp_date,
+              field === 'retail_price' ? value : it.retail_price);
+          }
           return prev;
         });
-      }, 300);
+      }, 0);
     }
   };
 
   const addItem = () => setItems(p => [...p, createPurchaseItem()]);
-  const removeItem = (idx) => setItems(p => p.filter((_, i) => i !== idx));
+  const removeItem = (idx) => {
+    // Drop any pending debounce state for the row being removed.
+    const entry = conflictCheckState.current[idx];
+    if (entry?.timer) clearTimeout(entry.timer);
+    delete conflictCheckState.current[idx];
+    setItems(p => p.filter((_, i) => i !== idx));
+  };
   const grandTotal = items.reduce((sum, it) => sum + (parseFloat(it.total) || 0), 0);
 
   const validateItems = (validItems) => {
@@ -176,7 +255,7 @@ export default function Purchase() {
   const openAdd = () => {
     setSelected(null);
     setHeader({ supplier_id: '', invoice_no: '', date: today() });
-    setItems([{ ...emptyItem }]);
+    setItems([{ ...emptyItem, row_id: `purchase-${Date.now()}-${Math.random().toString(16).slice(2)}` }]);
     setModal('add');
   };
 
@@ -206,26 +285,71 @@ export default function Purchase() {
   };
 
   const handleSave = async () => {
-    if (!header.supplier_id) return toast.error('Please select a supplier');
-    if (!header.date) return toast.error('Date is required');
-    const validItems = items.filter(it => it.product_id);
-    if (validItems.length === 0) return toast.error('Add at least one product');
-    const err = validateItems(validItems);
-    if (err) return toast.error(err);
+    // Synchronous guard: `saving` state hasn't re-rendered the button yet
+    // when a second click lands in the same tick, so a ref closes the gap.
+    if (savingRef.current) return;
+    savingRef.current = true;
+    try {
+      if (!header.supplier_id) return toast.error('Please select a supplier');
+      if (!header.date) return toast.error('Date is required');
+      const validItems = items.filter(it => it.product_id);
+      if (validItems.length === 0) return toast.error('Add at least one product');
+      const err = validateItems(validItems);
+      if (err) return toast.error(err);
+
+      await submitPurchase(validItems, /* confirmed */ false);
+    } finally {
+      savingRef.current = false;
+    }
+  };
+
+  // Actual submit. Split from handleSave so the confirm-modal path can
+  // re-invoke with `confirmed=true` after the operator agrees to the
+  // weighted-average rate change.
+  const submitPurchase = async (validItems, confirmed) => {
+    const isEdit = modal === 'edit' && selected;
+    const body = { ...header, items: validItems };
+    if (confirmed) body.confirm_rate_change = true;
 
     setSaving(true);
     try {
-      if (modal === 'edit' && selected) {
-        await api.put(`/purchases/${selected.id}`, { ...header, items: validItems });
+      if (isEdit) {
+        await api.put(`/purchases/${selected.id}`, body);
         toast.success('Purchase updated — inventory and ledger adjusted');
       } else {
-        await api.post('/purchases', { ...header, items: validItems });
+        await api.post('/purchases', body);
         toast.success('Purchase saved successfully!');
       }
+      setRateChangePreview(null);
       setModal(false); load();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Error saving');
+      // 409 with requires_confirmation === 'confirm_rate_change' means the
+      // server has computed the weighted-average preview and is waiting
+      // for the operator to acknowledge before applying.
+      if (
+        err.response?.status === 409 &&
+        err.response?.data?.requires_confirmation === 'confirm_rate_change'
+      ) {
+        setRateChangePreview({
+          lines: err.response.data.preview?.lines || [],
+          items: validItems,
+          mode:  isEdit ? 'edit' : 'add',
+        });
+      } else {
+        toast.error(err.response?.data?.message || 'Error saving');
+      }
     } finally { setSaving(false); }
+  };
+
+  const confirmRateChangeAndSave = async () => {
+    if (!rateChangePreview) return;
+    if (savingRef.current) return;
+    savingRef.current = true;
+    try {
+      await submitPurchase(rateChangePreview.items, /* confirmed */ true);
+    } finally {
+      savingRef.current = false;
+    }
   };
 
   const handleDelete = async () => {
@@ -282,8 +406,11 @@ export default function Purchase() {
           pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
       </div>
 
-      {/* Add / Edit Modal */}
-      <Modal isOpen={!!modal} onClose={() => setModal(false)}
+      {/* Add / Edit Modal. Hidden (not unmounted) while the rate-change
+         confirmation modal is showing, so the two never stack on top of
+         each other — form state (`items`/`header`) is preserved either way,
+         so hitting "Back" on the confirmation reveals the same form. */}
+      <Modal isOpen={!!modal && !rateChangePreview} onClose={() => setModal(false)}
         title={modal === 'edit' ? `Edit Purchase — ${selected?.purchase_id}` : 'New Purchase Entry'}
         size="xl"
         footer={
@@ -337,7 +464,11 @@ export default function Purchase() {
           <span style={{ textAlign: 'right' }}>Total</span><span></span>
         </div>
 
-        {items.map((item, idx) => (
+        {items.map((item, idx) => {
+          const suggestions = item.product_search && !item.product_id
+            ? getProductSuggestions(products, item.product_search)
+            : [];
+          return (
           <div key={item.row_id || idx} style={{ marginBottom: 6 }}>
             {(item._expConflict || item._priceConflict) && (
               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '4px 10px', marginBottom: 3, fontSize: 11, color: '#92400e' }}>
@@ -371,11 +502,15 @@ export default function Purchase() {
                 />
                 {item.product_search && !item.product_id && (
                   <div style={{
-                    position: 'absolute', top: 38, left: 0, right: 0, zIndex: 20,
+                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20,
                     background: 'white', border: '1px solid var(--gray-200)', borderRadius: 8,
                     boxShadow: '0 10px 20px rgba(0,0,0,0.08)', maxHeight: 220, overflowY: 'auto'
                   }}>
-                    {getProductSuggestions(products, item.product_search).map(prod => (
+                    {suggestions.length === 0 ? (
+                      <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--gray-400)' }}>
+                        No matching products
+                      </div>
+                    ) : suggestions.map(prod => (
                       <button key={prod.id} type="button" onMouseDown={() => selectProduct(idx, prod)}
                         style={{
                           width: '100%', textAlign: 'left', padding: '9px 12px', border: 'none',
@@ -401,14 +536,14 @@ export default function Purchase() {
 
               <input className="form-control" type="number" step="1" min="0" style={{ ...inputSm, borderColor: !item.qty && item.product_id ? 'var(--red)' : undefined }}
                 placeholder="Qty *" value={item.qty}
-                onChange={e => updateItem(idx, 'qty', e.target.value)}
+                onChange={e => updateItem(idx, 'qty', clamp(e.target.value, 0, Infinity))}
                 onWheel={blockNumberWheel}
                 inputMode="numeric" />
 
               {canViewPurchaseRates ? (
                 <input className="form-control" type="number" step="1" min="0" style={{ ...inputSm, borderColor: !item.purchase_rate && item.product_id ? 'var(--red)' : undefined }}
                   placeholder="Rate *" value={item.purchase_rate}
-                  onChange={e => updateItem(idx, 'purchase_rate', e.target.value)}
+                  onChange={e => updateItem(idx, 'purchase_rate', clamp(e.target.value, 0, Infinity))}
                   onWheel={blockNumberWheel} />
               ) : (
                 <div style={{ fontSize: 11, color: 'var(--gray-400)', textAlign: 'center' }}>Hidden</div>
@@ -416,21 +551,21 @@ export default function Purchase() {
 
               <input className="form-control" type="number" step="1" min="0" style={{ ...inputSm, borderColor: !item.retail_price && item.product_id ? 'var(--red)' : undefined }}
                 placeholder="Retail *" value={item.retail_price}
-                onChange={e => updateItem(idx, 'retail_price', e.target.value)}
+                onChange={e => updateItem(idx, 'retail_price', clamp(e.target.value, 0, Infinity))}
                 onWheel={blockNumberWheel} />
 
               <input className="form-control no-spinner" type="number" step="1" min="0" style={inputSm}
-                value={item.bonus} onChange={e => updateItem(idx, 'bonus', e.target.value)}
+                value={item.bonus} onChange={e => updateItem(idx, 'bonus', clamp(e.target.value, 0, Infinity))}
                 onWheel={blockNumberWheel}
                 inputMode="numeric" />
 
               <input className="form-control no-spinner" type="number" step="0.5" min="0" max="100" style={inputSm}
-                value={item.discount_pct} onChange={e => updateItem(idx, 'discount_pct', e.target.value)}
+                value={item.discount_pct} onChange={e => updateItem(idx, 'discount_pct', clamp(e.target.value, 0, 100))}
                 onWheel={blockNumberWheel}
                 inputMode="decimal" />
 
               <input className="form-control no-spinner" type="number" step="0.5" min="0" max="100" style={inputSm}
-                value={item.tax_pct} onChange={e => updateItem(idx, 'tax_pct', e.target.value)}
+                value={item.tax_pct} onChange={e => updateItem(idx, 'tax_pct', clamp(e.target.value, 0, 100))}
                 onWheel={blockNumberWheel}
                 inputMode="decimal" />
 
@@ -439,7 +574,9 @@ export default function Purchase() {
               </div>
 
               <button
+                type="button"
                 title="Remove row"
+                aria-label="Remove row"
                 onClick={() => removeItem(idx)}
                 disabled={items.length === 1}
                 style={{
@@ -456,10 +593,10 @@ export default function Purchase() {
 
             {/* Sale rate sub-row */}
             {item.product_id && (
-              <div style={{ padding: '4px 8px 0', display: 'flex', gap: 12, alignItems: 'center' }}>
+              <div style={{ padding: '4px 8px 0', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 11, color: 'var(--gray-500)' }}>Sale Rate:</span>
                 <input type="number" step="1" min="0" value={item.sale_rate}
-                  onChange={e => updateItem(idx, 'sale_rate', e.target.value)}
+                  onChange={e => updateItem(idx, 'sale_rate', clamp(e.target.value, 0, Infinity))}
                   onWheel={blockNumberWheel}
                   style={{ width: 90, padding: '3px 6px', border: '1px solid var(--gray-200)', borderRadius: 6, fontSize: 11, fontFamily: 'inherit' }}
                   placeholder="Sale Rate" />
@@ -468,10 +605,28 @@ export default function Purchase() {
                     + {item.bonus} bonus units (total {parseInt(item.qty || 0) + parseInt(item.bonus || 0)} to inventory)
                   </span>
                 )}
+                {/* Effective landed cost per unit — computed client-side using
+                   the same 6-step formula the server applies, so the operator
+                   sees exactly what will land in inventory.purchase_rate
+                   BEFORE hitting Save. */}
+                {(() => {
+                  const effRate = computeEffPurchaseRate(item);
+                  if (effRate == null) return null;
+                  return (
+                    <span style={{
+                      fontSize: 11, color: 'var(--navy)', fontWeight: 700,
+                      background: 'var(--blue-ultra, #eef4ff)', padding: '2px 8px',
+                      borderRadius: 999, border: '1px dashed var(--blue-pale, #cbdbff)',
+                    }} title="Effective landed cost per unit after discount, tax, and bonus dilution — this is what will land in inventory.purchase_rate">
+                      Eff. Purchase Rate/Unit: {formatCurrency(effRate)}
+                    </span>
+                  );
+                })()}
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
 
         <button className="btn btn-outline btn-sm mt-2" onClick={addItem}>+ Add Row</button>
       </Modal>
@@ -535,6 +690,81 @@ export default function Purchase() {
       <ConfirmModal isOpen={deleteModal} onClose={() => setDeleteModal(false)}
         onConfirm={handleDelete} loading={deleting}
         message="Delete this purchase? Inventory will be reversed and supplier ledger updated." />
+
+      {/* Rate-change confirmation. Rendered as a modal that lists every line
+         whose inventory purchase_rate will move because of this purchase,
+         showing the weighted-average target rate and the delta. Operator
+         hits Confirm to re-submit with `confirm_rate_change: true`, or Back
+         to return to the entry modal (which reappears since it's only
+         hidden, not unmounted, while this is open). */}
+      <Modal isOpen={!!rateChangePreview} onClose={() => setRateChangePreview(null)}
+        title="Confirm Purchase Rate Change" size="lg"
+        footer={
+          <div className="flex gap-2" style={{ justifyContent: 'flex-end', width: '100%' }}>
+            <button className="btn btn-outline" onClick={() => setRateChangePreview(null)} disabled={saving}>
+              Back
+            </button>
+            <button className="btn btn-primary" onClick={confirmRateChangeAndSave} disabled={saving}>
+              {saving ? 'Saving…' : 'Confirm & Save'}
+            </button>
+          </div>
+        }>
+        {rateChangePreview && (
+          <div>
+            <div style={{ fontSize: 13, color: 'var(--gray-700)', marginBottom: 12 }}>
+              One or more batches already exist in inventory. Saving this purchase
+              will blend the new landed cost with the current inventory rate using a
+              weighted average across the remaining stock. Please review before confirming.
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr 1fr 1fr 1fr 1fr', gap: 6,
+              padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6,
+              fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
+              <span>Product / Batch</span>
+              <span>Existing Qty</span>
+              <span>Existing Rate</span>
+              <span>New Qty</span>
+              <span>New Rate</span>
+              <span>Weighted Rate</span>
+              <span>Change</span>
+            </div>
+            {rateChangePreview.lines.map((l, idx) => {
+              const changed = l.rate_change_required;
+              const delta = l.existing_in_inventory
+                ? (l.weighted_rate - (l.existing_rate || 0))
+                : 0;
+              const submittedItem = rateChangePreview.items?.[idx];
+              const orderedQty = submittedItem ? parseInt(submittedItem.qty || 0, 10) : null;
+              const bonusQty = submittedItem ? parseInt(submittedItem.bonus || 0, 10) : 0;
+              const totalStock = l.landed_cost_steps?.total_stock;
+              return (
+                <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr 1fr 1fr 1fr 1fr',
+                  gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5,
+                  background: changed ? '#fffbeb' : 'white',
+                  border: `1.5px solid ${changed ? '#f59e0b' : 'var(--gray-200)'}`, borderRadius: 8 }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{l.product_name || `Product ${l.product_id}`}</div>
+                    <div style={{ fontSize: 10, color: 'var(--gray-500)' }}>Batch: {l.batch_no}</div>
+                  </div>
+                  <div>{l.existing_in_inventory ? l.existing_qty : '—'}</div>
+                  <div>{l.existing_in_inventory ? formatCurrency(l.existing_rate) : '—'}</div>
+                  <div>
+                    {orderedQty != null ? orderedQty+bonusQty : (totalStock ?? '—')}
+                  </div>
+                  <div style={{ fontWeight: 700 }}>{formatCurrency(l.landed_cost_steps?.landed_rate)}</div>
+                  <div style={{ fontWeight: 700, color: changed ? '#b45309' : 'var(--gray-800)' }}>
+                    {l.existing_in_inventory ? formatCurrency(l.weighted_rate) : formatCurrency(l.landed_cost_steps?.landed_rate)}
+                  </div>
+                  <div style={{ fontWeight: 600, color: delta > 0 ? 'var(--red)' : delta < 0 ? 'var(--green)' : 'var(--gray-400)' }}>
+                    {l.existing_in_inventory
+                      ? `${delta > 0 ? '+' : ''}${delta.toFixed(4)}`
+                      : 'New'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Modal>
     </Layout>
   );
 }

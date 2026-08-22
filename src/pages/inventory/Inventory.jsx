@@ -61,6 +61,12 @@ export default function Inventory() {
   const [editModal, setEditModal] = useState(false);
   const [editItem, setEditItem] = useState(null);
   const [editSaving, setEditSaving] = useState(false);
+
+  // Rate-change confirmation flow for the Edit modal. When the backend
+  // detects that purchase_rate / sale_rate / retail_price is moving, it
+  // returns 409 with a preview; we stash it here and pop a confirmation
+  // dialog before resubmitting with `confirm_rate_change: true`.
+  const [editRatePreview, setEditRatePreview] = useState(null);
   const canEditInventory = user?.role === 'admin' || can('perm_manage_inventory') || can('perm_add_purchase');
 
   // Print Inventory modal state
@@ -299,31 +305,47 @@ export default function Inventory() {
     };
   };
 
-  const handleSaveEdit = async () => {
+  const handleSaveEdit = async (confirmed = false) => {
     if (!editItem) return;
     const err = validateEditItem(editItem);
     if (err) return toast.error(err);
 
     setEditSaving(true);
     try {
-      await api.put(`/inventory/${editItem.id}`, {
-        batch_no: editItem.batch_no.trim(),
-        qty: editItem.qty,
-        exp_date: editItem.exp_date || null,
-        sale_rate: editItem.sale_rate,
-        retail_price: editItem.retail_price,
+      const body = {
+        batch_no:            editItem.batch_no.trim(),
+        qty:                 editItem.qty,
+        exp_date:            editItem.exp_date || null,
+        purchase_rate:       editItem.purchase_rate,
+        sale_rate:           editItem.sale_rate,
+        retail_price:        editItem.retail_price,
         low_stock_threshold: editItem.low_stock_threshold || null,
-      });
+      };
+      if (confirmed) body.confirm_rate_change = true;
+      await api.put(`/inventory/${editItem.id}`, body);
       toast.success('Inventory batch updated successfully!');
+      setEditRatePreview(null);
       setEditModal(false);
       setEditItem(null);
       load();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Error updating inventory');
+      // 409 with requires_confirmation === 'confirm_rate_change' means one
+      // of the three rates has moved. Server sends before/after values so
+      // the confirm modal can explain the change to the operator.
+      if (
+        err.response?.status === 409 &&
+        err.response?.data?.requires_confirmation === 'confirm_rate_change'
+      ) {
+        setEditRatePreview(err.response.data.preview);
+      } else {
+        toast.error(err.response?.data?.message || 'Error updating inventory');
+      }
     } finally {
       setEditSaving(false);
     }
   };
+
+  const confirmEditRateChange = () => handleSaveEdit(true);
 
   // ---------- Print Inventory modal logic ----------
 
@@ -1119,7 +1141,7 @@ export default function Inventory() {
             </button>
             <button
               className="btn btn-primary btn-std"
-              onClick={handleSaveEdit}
+              onClick={() => handleSaveEdit(false)}
               disabled={
                 editSaving || (editItem && !!validateEditItem(editItem))
               }
@@ -1386,6 +1408,58 @@ export default function Inventory() {
             style={{ background: "var(--gray-50)", color: "var(--gray-500)" }}
           />
         </div>
+      </Modal>
+
+      {/* Rate-change confirmation for the Edit modal. Server returns 409
+          with before/after values for the three price fields; this modal
+          shows a compact diff and confirms with `confirm_rate_change: true`. */}
+      <Modal isOpen={!!editRatePreview} onClose={() => setEditRatePreview(null)}
+        title="Confirm Rate Change" size="sm"
+        footer={
+          <div className="flex gap-2" style={{ justifyContent: 'flex-end', width: '100%' }}>
+            <button className="btn btn-outline" onClick={() => setEditRatePreview(null)} disabled={editSaving}>
+              Back
+            </button>
+            <button className="btn btn-primary" onClick={confirmEditRateChange} disabled={editSaving}>
+              {editSaving ? 'Saving…' : 'Confirm & Save'}
+            </button>
+          </div>
+        }>
+        {editRatePreview && (
+          <div>
+            <div style={{ fontSize: 13, color: 'var(--gray-700)', marginBottom: 12 }}>
+              You're about to change one or more of this batch's rates.
+              Please review before saving — these figures drive Sale, Profit,
+              and Inventory reports.
+            </div>
+            {[
+              { key: 'purchase_rate', label: 'Purchase Rate' },
+              { key: 'sale_rate',     label: 'Sale Rate'     },
+              { key: 'retail_price',  label: 'Retail Price'  },
+            ].map(({ key, label }) => {
+              const before = editRatePreview.existing?.[key];
+              const after  = editRatePreview.new?.[key];
+              const changed = editRatePreview.changed?.[key];
+              if (!changed) return null;
+              return (
+                <div key={key} style={{
+                  display: 'grid', gridTemplateColumns: '1fr 1fr 1fr',
+                  gap: 8, alignItems: 'center', padding: '8px 10px',
+                  marginBottom: 6, background: '#fffbeb',
+                  border: '1.5px solid #f59e0b', borderRadius: 8,
+                }}>
+                  <div style={{ fontWeight: 700 }}>{label}</div>
+                  <div style={{ color: 'var(--gray-500)' }}>
+                    From: {formatCurrency(before)}
+                  </div>
+                  <div style={{ fontWeight: 700, color: '#b45309' }}>
+                    To: {formatCurrency(after)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </Modal>
     </Layout>
   );

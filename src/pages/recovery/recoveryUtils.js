@@ -65,7 +65,16 @@ export const getReturnableQty = (item) =>
 export const createRecoveryReturnLine = (item) => ({
   row_id: `return-${item.id}-${Math.random().toString(16).slice(2)}`,
   sale_item_id: item.id, sale_id: item.sale_id || null, product_id: item.product_id,
-  batch_no: item.batch_no, qty_returned: '', return_rate: item.sale_rate, return_amount: 0,
+  batch_no: item.batch_no,
+  qty_returned: '',
+  // Server-computed return rate exposed by GET /sales/:id (accounts for
+  // invoice-time discount, tax pass-through, and per-unit share of any
+  // recovery-time discount already granted on this line). Falls back to
+  // sale_rate only if the server response predates the 2026-08 refactor.
+  return_rate: item.return_rate !== undefined && item.return_rate !== null
+    ? item.return_rate
+    : item.sale_rate,
+  return_amount: 0,
   product_name: item.product_name, original_qty: getReturnableQty(item), exp_date: item.exp_date
 });
 
