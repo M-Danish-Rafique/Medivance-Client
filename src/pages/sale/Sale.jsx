@@ -41,56 +41,207 @@ const getProductSuggestions = (products, query) => {
 
 const today = () => todayPKT();
 
-function openInvoicePrint(saleId, type) {
-  window.open(`/invoice/${saleId}/print?type=${type}`, '_blank', 'width=960,height=760,scrollbars=yes');
+// Open the Bulk Print preview in a new tab. `ids` is an array of sale ids;
+// `type` is either 'smart' (per-invoice: licensed → warranty,
+// non-licensed → non-warranty) or one of the three concrete invoice types.
+// A soft warning at 50 and a hard cap at 200 mirror the batch-cap policy
+// enforced server-side by POST /sales/mark-printed.
+function openBatchPrint(ids, type = 'smart') {
+  if (!ids || ids.length === 0) return false;
+  if (ids.length > 200) {
+    toast.error(`Please select 200 or fewer invoices at a time (${ids.length} selected).`);
+    return false;
+  }
+  if (ids.length > 50) {
+    // Soft warn on large batches — they still work, but the browser may
+    // spend a few seconds rendering N A4 pages before the print dialog
+    // opens. Native confirm() is enough here; no modal needed.
+    // eslint-disable-next-line no-alert
+    const ok = window.confirm(`Printing ${ids.length} invoices may be slow. Continue?`);
+    if (!ok) return false;
+  }
+  const idsParam = ids.join(',');
+  window.open(`/sales/print-batch?ids=${idsParam}&type=${type}`, '_blank');
+  return true;
 }
 
+// Human label for an invoice-type enum. Used both by the bulk-selection
+// breakdown and by the row-level "Printed as …" tooltip.
+function prettyPrintType(t) {
+  if (t === 'warranty')     return 'Warranty';
+  if (t === 'warranty10')   return 'Warranty +10%';
+  if (t === 'non-warranty') return 'Non-Warranty';
+  return t || 'Warranty';
+}
+
+// Sortable-column comparator map. Every entry returns the standard
+// Array.prototype.sort signed number; the direction (asc/desc) is applied
+// by the caller. String columns use localeCompare so accented / mixed-case
+// names sort consistently. Invoice numbers (S26-00001) sort correctly as
+// plain strings because the YY prefix and 5-digit sequence are both
+// fixed-width.
+const SORT_COMPARATORS = {
+  invoice_no:       (a, b) => (a.invoice_no || '').localeCompare(b.invoice_no || ''),
+  customer_name:    (a, b) => (a.customer_name || '').localeCompare(b.customer_name || ''),
+  salesman_name:    (a, b) => (a.salesman_name || '').localeCompare(b.salesman_name || ''),
+  delivery_by_name: (a, b) => (a.delivery_by_name || '').localeCompare(b.delivery_by_name || ''),
+  date:             (a, b) => (a.date || '').localeCompare(b.date || ''),
+  total_amount:     (a, b) => parseFloat(a.total_amount || 0) - parseFloat(b.total_amount || 0),
+  is_locked:        (a, b) => (a.is_locked ? 1 : 0) - (b.is_locked ? 1 : 0),
+};
+
+// Sortable table header cell. Shows the label with a subtle tri-state
+// chevron: dual arrows (unfold_more) when the column isn't the active
+// sort, or a single up/down arrow when it is. Click cycles asc ↔ desc on
+// the active column, or switches to a new column (starting ascending).
+function SortableHeader({ column, label, sortConfig, onSort, align, style }) {
+  const active = sortConfig.column === column;
+  const iconName = active
+    ? (sortConfig.direction === 'asc' ? 'arrow_upward' : 'arrow_downward')
+    : 'unfold_more';
+  const isRight = align === 'right';
+  return (
+    <th
+      onClick={() => onSort(column)}
+      style={{
+        cursor: 'pointer',
+        userSelect: 'none',
+        textAlign: align || 'left',
+        ...(style || {})
+      }}
+      title={`Sort by ${label}`}
+    >
+      <span style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 3,
+        justifyContent: isRight ? 'flex-end' : 'flex-start',
+        width: '100%'
+      }}>
+        {label}
+        <span className="material-symbols-outlined" style={{
+          fontSize: 14,
+          color: active ? 'var(--gray-700)' : 'var(--gray-300)',
+          transition: 'color 0.2s ease',
+          lineHeight: 1
+        }}>{iconName}</span>
+      </span>
+    </th>
+  );
+}
+
+// Segmented pill control used by the filter panel for Status and Print
+// Status. Extracted so both filters share exactly one implementation and
+// feel visually paired — same padding, same active-thumb animation.
+function SegmentedFilter({ options, value, onChange }) {
+  const activeIndex = Math.max(0, options.findIndex(o => o.v === value));
+  return (
+    <div style={{
+      position: 'relative',
+      display: 'flex',
+      background: 'var(--gray-100)',
+      borderRadius: 12,
+      padding: 4,
+      marginTop: 5
+    }}>
+      <div style={{
+        position: 'absolute',
+        top: 4, bottom: 4, left: 4,
+        width: `calc((100% - 8px) / ${options.length})`,
+        borderRadius: 9,
+        background: '#fff',
+        boxShadow: '0 2px 6px rgba(15, 23, 42, 0.10)',
+        transform: `translateX(${activeIndex * 100}%)`,
+        transition: 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1)'
+      }} />
+      {options.map(opt => {
+        const active = value === opt.v;
+        return (
+          <button key={opt.v} type="button"
+            onClick={() => onChange(opt.v)}
+            style={{
+              position: 'relative',
+              zIndex: 1,
+              flex: 1,
+              border: 'none',
+              borderRadius: 9,
+              padding: '9px 6px',
+              fontSize: 12.5,
+              fontWeight: active ? 550 : 500,
+              color: active ? 'var(--gray-900)' : 'var(--gray-500)',
+              background: 'transparent',
+              cursor: 'pointer',
+              transition: 'color 0.28s ease, font-weight 0.28s ease'
+            }}>
+            {opt.l}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Row-level Print picker (Warranty / +10% / Non-Warranty). Bulk print
+// intentionally does NOT expose this dropdown — it always resolves per
+// invoice via the "smart" default (licensed → warranty, non-licensed →
+// non-warranty). This modal is the only surface where the operator gets
+// to override the type, one invoice at a time.
 function PrintOptionsModal({ isOpen, onClose, invoice }) {
   if (!isOpen || !invoice) return null;
+  const printAs = (type) => {
+    openBatchPrint([invoice.id], type);
+    onClose();
+  };
+  const btnRowStyle = {
+    justifyContent: 'flex-start',
+    gap: 12,
+    textAlign: 'left'
+  };
   return (
     <div className="modal-backdrop">
       <div className="modal modal-sm">
         <div className="modal-header">
-          <div className="modal-title">Invoice Saved</div>
+          <div className="modal-title">Print Invoice</div>
           <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} style={{ fontSize: 18, lineHeight: 1 }}>×</button>
         </div>
         <div className="modal-body">
-          <div style={{ textAlign: 'center', marginBottom: 20 }}>
-            <div style={{ fontSize: 32, marginBottom: 8 }}><span className="material-symbols-outlined" style={{ fontSize: 32 }}>celebration</span></div>
+          <div style={{ textAlign: 'center', marginBottom: 18 }}>
             <div style={{ fontWeight: 800, fontSize: 17, color: 'var(--navy)' }}>{invoice.invoice_no}</div>
-            <div style={{ color: 'var(--gray-500)', fontSize: 13, marginTop: 4 }}>{formatCurrency(invoice.total_amount)}</div>
+            {invoice.total_amount != null && (
+              <div style={{ color: 'var(--gray-500)', fontSize: 13, marginTop: 4 }}>
+                {formatCurrency(invoice.total_amount)}
+              </div>
+            )}
           </div>
-          <div style={{ fontSize: 12, color: 'var(--gray-500)', marginBottom: 12, textAlign: 'center' }}>Select invoice type to print:</div>
+          <div style={{ fontSize: 12, color: 'var(--gray-500)', marginBottom: 10, textAlign: 'center' }}>
+            Select invoice type to print
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <button className="btn btn-outline w-full" style={{ justifyContent: 'flex-start', gap: 12 }}
-              onClick={() => { openInvoicePrint(invoice.id, 'warranty'); onClose(); }}>
+            <button className="btn btn-outline w-full" style={btnRowStyle}
+              onClick={() => printAs('warranty')}>
               <span className="material-symbols-outlined" style={{ fontSize: 18 }}>print</span>
-              <div style={{ textAlign: 'left' }}>
-                <div style={{ fontWeight: 700 }}>Print Warranty</div>
+              <div>
+                <div style={{ fontWeight: 700 }}>Warranty</div>
                 <div style={{ fontSize: 11, color: 'var(--gray-500)' }}>Retail Price −15% rate · With warranty statement</div>
               </div>
             </button>
-            <button className="btn btn-outline w-full" style={{ justifyContent: 'flex-start', gap: 12 }}
-              onClick={() => { openInvoicePrint(invoice.id, 'warranty10'); onClose(); }}>
+            <button className="btn btn-outline w-full" style={btnRowStyle}
+              onClick={() => printAs('warranty10')}>
               <span className="material-symbols-outlined" style={{ fontSize: 18 }}>print</span>
-              <div style={{ textAlign: 'left' }}>
-                <div style={{ fontWeight: 700 }}>Print Warranty (10% Disc)</div>
+              <div>
+                <div style={{ fontWeight: 700 }}>Warranty +10% Discount</div>
                 <div style={{ fontSize: 11, color: 'var(--gray-500)' }}>Warranty + additional 10% discount applied</div>
               </div>
             </button>
-            <button className="btn btn-outline w-full" style={{ justifyContent: 'flex-start', gap: 12 }}
-              onClick={() => { openInvoicePrint(invoice.id, 'non-warranty'); onClose(); }}>
+            <button className="btn btn-outline w-full" style={btnRowStyle}
+              onClick={() => printAs('non-warranty')}>
               <span className="material-symbols-outlined" style={{ fontSize: 18 }}>print</span>
-              <div style={{ textAlign: 'left' }}>
-                <div style={{ fontWeight: 700 }}>Print Non-Warranty</div>
+              <div>
+                <div style={{ fontWeight: 700 }}>Non-Warranty</div>
                 <div style={{ fontSize: 11, color: 'var(--gray-500)' }}>Actual sale rate · No warranty statement</div>
               </div>
             </button>
           </div>
-        </div>
-        <div className="modal-footer">
-          <button className="btn btn-ghost" onClick={onClose}>Skip</button>
-          <button className="btn btn-primary" onClick={onClose}>Done</button>
         </div>
       </div>
     </div>
@@ -423,11 +574,22 @@ export default function Sale() {
   // hits Apply — so typing/selecting doesn't refilter the table on every
   // keystroke.
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const emptyFilters = { customer_id: '', salesman_id: '', delivery_by: '', date_from: '', date_to: '', status: 'all', invoice_no: '', product_id: '' };
+  const emptyFilters = { customer_id: '', salesman_id: '', delivery_by: '', date_from: '', date_to: '', status: 'all', invoice_no: '', product_id: '', print_status: 'all' };
   const [filters, setFilters] = useState(emptyFilters);
   const [draftFilters, setDraftFilters] = useState(emptyFilters);
-  const isEmptyFilters = (f) => Object.entries(f).every(([k, v]) => k === 'status' ? v === 'all' : !v);
-  const activeFilterCount = Object.entries(filters).filter(([k, v]) => k === 'status' ? v !== 'all' : !!v).length;
+  // Sortable table column state. Declared alongside the filter state
+  // because the sortedSales useMemo below reads it — keeping the two
+  // in the same block avoids a temporal-dead-zone error at mount.
+  // Defaults to date DESC — matches the backend's
+  // `ORDER BY s.date DESC, s.id DESC`, so an operator who never touches
+  // a header sees the same order the server delivered.
+  const [sortConfig, setSortConfig] = useState({ column: 'date', direction: 'desc' });
+  // Both `status` and `print_status` are segmented enums whose "off" value
+  // is 'all' rather than empty — treat them the same way when counting
+  // active filters and when checking whether the filter set is empty.
+  const ENUM_FILTER_KEYS = new Set(['status', 'print_status']);
+  const isEmptyFilters = (f) => Object.entries(f).every(([k, v]) => ENUM_FILTER_KEYS.has(k) ? v === 'all' : !v);
+  const activeFilterCount = Object.entries(filters).filter(([k, v]) => ENUM_FILTER_KEYS.has(k) ? v !== 'all' : !!v).length;
   const clearFilters = () => { setDraftFilters(emptyFilters); setFilters(emptyFilters); };
   const applyFilters = () => { setFilters(draftFilters); setFiltersOpen(false); };
 
@@ -442,6 +604,8 @@ export default function Sale() {
       if (filters.date_to && s.date > filters.date_to) return false;
       if (filters.status === 'open' && s.is_locked) return false;
       if (filters.status === 'locked' && !s.is_locked) return false;
+      if (filters.print_status === 'unprinted' && s.printed_at) return false;
+      if (filters.print_status === 'printed' && !s.printed_at) return false;
       if (invoiceQuery && !(s.invoice_no || '').toLowerCase().includes(invoiceQuery)) return false;
       if (productFilterId) {
         // product_ids comes from the backend as a comma-separated string of
@@ -453,13 +617,23 @@ export default function Sale() {
     });
   }, [sales, filters]);
 
+  // Sort applied on top of filteredSales. Kept in its own useMemo so
+  // toggling sort direction doesn't re-run the filter predicate (which
+  // is more expensive on large sales lists).
+  const sortedSales = useMemo(() => {
+    const cmp = SORT_COMPARATORS[sortConfig.column];
+    if (!cmp) return filteredSales;
+    const dir = sortConfig.direction === 'asc' ? 1 : -1;
+    return [...filteredSales].sort((a, b) => cmp(a, b) * dir);
+  }, [filteredSales, sortConfig]);
+
   // --- Pagination is disabled for now (client-side slicing doesn't make
   // sense once the backend paginates too). Left in place, commented, so it
   // can be reactivated as soon as GET /sales accepts page & pageSize and
   // returns { rows, totalItems } instead of the full array. ---
   // const { page, setPage, pageSize, setPageSize, totalPages, totalItems, pageItems: pagedSales } = usePagination(filteredSales, 25);
   // useEffect(() => { setPage(1); }, [filters]); // eslint-disable-line react-hooks/exhaustive-deps
-  const pagedSales = filteredSales;
+  const pagedSales = sortedSales;
   const [customers, setCustomers] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [products, setProducts] = useState([]);
@@ -476,14 +650,30 @@ export default function Sale() {
   const [modal, setModal] = useState(false);   // 'add' | 'edit' | null
   const [viewModal, setViewModal] = useState(false);
   const [deleteModal, setDeleteModal] = useState(false);
-  const [printModal, setPrintModal] = useState(false);
   const [newCustModal, setNewCustModal] = useState(false);
 
   const [selected, setSelected] = useState(null);
   const [viewData, setViewData] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [savedInvoice, setSavedInvoice] = useState(null);
+
+  // ─── Bulk print state ────────────────────────────────────────────────
+  // Bulk print only surfaces when the filter panel is active. Every row
+  // in filteredSales is IMPLICITLY included; `excludedIds` tracks the
+  // rows the operator has explicitly unchecked to refine the batch.
+  // When the filter set changes, exclusions reset so a new query starts
+  // fresh.
+  const [excludedIds, setExcludedIds] = useState(() => new Set());
+
+  // Row-level Print picker (Warranty / +10% / Non-Warranty). Populated
+  // by the row's Print button; the modal invokes /sales/print-batch with
+  // a single id and the chosen type. Bulk print is always Smart and
+  // never opens this modal.
+  //
+  // NOTE: sortConfig lives up with the filter state (before the
+  // filteredSales / sortedSales useMemos) to avoid a TDZ error at mount.
+  const [printModalOpen, setPrintModalOpen] = useState(false);
+  const [printSaleTarget, setPrintSaleTarget] = useState(null);
 
   // Form state
   const [header, setHeader] = useState({ customer_id: '', salesman_id: '', delivery_by: '', date: today() });
@@ -517,6 +707,15 @@ export default function Sale() {
     }).catch(() => setLoading(false));
   };
   useEffect(load, []);
+
+  // Reset the bulk-print exclusion set whenever the applied filter set
+  // changes — the operator's intent for a new query is to print every
+  // row in that new result set until they explicitly opt some out. Same
+  // reasoning applies when filters are cleared: no stale exclusions
+  // carry over.
+  useEffect(() => {
+    setExcludedIds(new Set());
+  }, [filters]);
 
   const calcTotal = (item) => {
     const qty = parseFloat(item.qty) || 0;
@@ -855,7 +1054,11 @@ export default function Sale() {
         setModal(false); load();
       } else {
         result = await api.post('/sales', { ...header, items: validItems });
-        toast.success(`Invoice ${result.data.invoice_no} added to print queue`);
+        // New invoices default to "unprinted" (sales.printed_at IS NULL)
+        // and land at the top of the Sales list. Operators either print
+        // them one-off from the row's Print action or select them into
+        // the Bulk Print flow — no post-save prompt.
+        toast.success(`Invoice ${result.data.invoice_no} saved`);
         setModal(false);
         load();
       }
@@ -894,6 +1097,72 @@ export default function Sale() {
   // batch numbers.
   const gridCols = '2fr 0.65fr 1.57fr 0.78fr 1fr 0.6fr 0.6fr 0.6fr 1fr 36px';
 
+  // ─── Bulk print helpers (derived state) ──────────────────────────────
+  // Bulk print is opt-in: it only surfaces when the filter panel actually
+  // constrains the visible set. Without filters the Sales page stays a
+  // clean browse view — no checkbox column, no toolbar action.
+  const hasActiveFilters = activeFilterCount > 0;
+
+  // Row → checkbox state derives directly from excludedIds. A row is
+  // "included" (checkbox ON) when the operator hasn't ticked it off.
+  const isRowIncluded = (id) => !excludedIds.has(id);
+  const toggleRowInclusion = (id) => setExcludedIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  // Header checkbox mirrors ONLY the currently visible rows — clicking
+  // it toggles inclusion for every row in filteredSales. Tri-state via
+  // the input's `indeterminate` DOM property (React doesn't expose it
+  // as an attribute).
+  const includedInView = filteredSales.reduce((n, s) => n + (isRowIncluded(s.id) ? 1 : 0), 0);
+  const headerCheckboxChecked = filteredSales.length > 0 && includedInView === filteredSales.length;
+  const headerCheckboxIndeterminate = includedInView > 0 && includedInView < filteredSales.length;
+  const toggleHeaderCheckbox = () => {
+    if (headerCheckboxChecked) {
+      setExcludedIds(prev => {
+        const next = new Set(prev);
+        filteredSales.forEach(s => next.add(s.id));
+        return next;
+      });
+    } else {
+      setExcludedIds(prev => {
+        const next = new Set(prev);
+        filteredSales.forEach(s => next.delete(s.id));
+        return next;
+      });
+    }
+  };
+
+  // Ids that will actually be sent to the batch-print preview when the
+  // operator clicks Print. Empty (and the toolbar CTA vanishes) when no
+  // filters are active.
+  const printableIds = hasActiveFilters
+    ? filteredSales.filter(s => isRowIncluded(s.id)).map(s => s.id)
+    : [];
+  const printableCount = printableIds.length;
+
+  const handleBulkPrint = () => {
+    if (printableCount === 0) {
+      return toast.error('Nothing to print — refine your filters or re-check some rows.');
+    }
+    // Bulk print is intentionally always Smart: the type is resolved per
+    // invoice from customers.is_licensed. Per-invoice type overrides are
+    // only available through the row-level Print action (PrintOptionsModal).
+    openBatchPrint(printableIds, 'smart');
+  };
+
+  // Column sort cycles asc ↔ desc on the active column, or switches to
+  // a new column (starting ascending).
+  const handleSort = (col) => {
+    setSortConfig(prev => (
+      prev.column === col
+        ? { column: col, direction: prev.direction === 'asc' ? 'desc' : 'asc' }
+        : { column: col, direction: 'asc' }
+    ));
+  };
+
   return (
     <Layout title="Sale">
       <div className="card">
@@ -923,6 +1192,33 @@ export default function Sale() {
                 {filtersOpen ? 'expand_less' : 'expand_more'}
               </span>
             </button>
+            {/* Bulk Print CTA — only appears when the filter set is
+                actually constraining the visible rows. Kept as a distinct
+                surface from the primary "+ New Sale" so it never competes
+                for the primary action slot. */}
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={handleBulkPrint}
+                disabled={printableCount === 0}
+                style={{
+                  padding: '9px 14px',
+                  background: printableCount === 0 ? 'var(--gray-100)' : 'var(--blue-ultra, #eff6ff)',
+                  color: printableCount === 0 ? 'var(--gray-400)' : 'var(--navy, #1e3a8a)',
+                  border: `1px solid ${printableCount === 0 ? 'var(--gray-200)' : 'var(--blue-light, #93c5fd)'}`,
+                  borderRadius: 6,
+                  fontWeight: 650,
+                  fontSize: 13,
+                  cursor: printableCount === 0 ? 'not-allowed' : 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  transition: 'background 0.2s ease, border-color 0.2s ease'
+                }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>print</span>
+                Print {printableCount} invoice{printableCount === 1 ? '' : 's'}
+              </button>
+            )}
             <button className="btn btn-primary" onClick={openAdd}>+ New Sale Invoice</button>
           </div>
         </div>
@@ -945,7 +1241,10 @@ export default function Sale() {
           }}
         >
           <div style={{ padding: '18px 20px' }}>
-            <div className="form-grid form-grid-4" style={{ marginBottom: 14 }}>
+            {/* Balanced 3\u00d73 filter grid \u2014 no bolted-on rows, no empty
+                cells. Row 1 = who ordered / delivered, Row 2 = when +
+                invoice no, Row 3 = what + state (Status, Print Status). */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 14 }}>
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label">Customer</label>
                 <CustomerAutocomplete
@@ -973,13 +1272,9 @@ export default function Sale() {
                   {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
               </div>
-              <div className="form-group" style={{ margin: 0 }}>
-                <label className="form-label">Invoice No</label>
-                <input className="form-control" placeholder="Search invoice no…" value={draftFilters.invoice_no}
-                  onChange={e => setDraftFilters(p => ({ ...p, invoice_no: e.target.value }))} />
-              </div>
             </div>
-            <div className="form-grid form-grid-4">
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 14 }}>
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label">Date From</label>
                 <input className="form-control" type="date" value={draftFilters.date_from}
@@ -991,59 +1286,13 @@ export default function Sale() {
                   onChange={e => setDraftFilters(p => ({ ...p, date_to: e.target.value }))} />
               </div>
               <div className="form-group" style={{ margin: 0 }}>
-                <label className="form-label">Status</label>
-                {(() => {
-                  const statusOptions = [{ v: 'open', l: 'Open' }, { v: 'locked', l: 'Locked' }, { v: 'all', l: 'All' }];
-                  const activeIndex = Math.max(0, statusOptions.findIndex(o => o.v === draftFilters.status));
-                  return (
-                    <div style={{
-                      position: 'relative',
-                      display: 'flex',
-                      background: 'var(--gray-100)',
-                      borderRadius: 12,
-                      padding: 4,
-                      marginTop: 5
-                    }}>
-                      {/* sliding active-segment thumb */}
-                      <div style={{
-                        position: 'absolute',
-                        top: 4,
-                        bottom: 4,
-                        left: 4,
-                        width: `calc((100% - 8px) / ${statusOptions.length})`,
-                        borderRadius: 9,
-                        background: '#fff',
-                        boxShadow: '0 2px 6px rgba(15, 23, 42, 0.10)',
-                        transform: `translateX(${activeIndex * 100}%)`,
-                        transition: 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1)'
-                      }} />
-                      {statusOptions.map(opt => {
-                        const active = draftFilters.status === opt.v;
-                        return (
-                          <button key={opt.v} type="button"
-                            onClick={() => setDraftFilters(p => ({ ...p, status: opt.v }))}
-                            style={{
-                              position: 'relative',
-                              zIndex: 1,
-                              flex: 1,
-                              border: 'none',
-                              borderRadius: 9,
-                              padding: '9px 6px',
-                              fontSize: 12.5,
-                              fontWeight: active ? 550 : 500,
-                              color: active ? 'var(--gray-900)' : 'var(--gray-500)',
-                              background: 'transparent',
-                              cursor: 'pointer',
-                              transition: 'color 0.28s ease, font-weight 0.28s ease'
-                            }}>
-                            {opt.l}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
+                <label className="form-label">Invoice No</label>
+                <input className="form-control" placeholder="Search invoice no…" value={draftFilters.invoice_no}
+                  onChange={e => setDraftFilters(p => ({ ...p, invoice_no: e.target.value }))} />
               </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label">Product</label>
                 <ProductFilterAutocomplete
@@ -1051,6 +1300,22 @@ export default function Sale() {
                   value={draftFilters.product_id}
                   onChange={id => setDraftFilters(p => ({ ...p, product_id: id }))}
                   placeholder="Search product…"
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Status</label>
+                <SegmentedFilter
+                  options={[{ v: 'open', l: 'Open' }, { v: 'locked', l: 'Locked' }, { v: 'all', l: 'All' }]}
+                  value={draftFilters.status}
+                  onChange={v => setDraftFilters(p => ({ ...p, status: v }))}
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Print Status</label>
+                <SegmentedFilter
+                  options={[{ v: 'unprinted', l: 'Not printed' }, { v: 'printed', l: 'Printed' }, { v: 'all', l: 'All' }]}
+                  value={draftFilters.print_status}
+                  onChange={v => setDraftFilters(p => ({ ...p, print_status: v }))}
                 />
               </div>
             </div>
@@ -1094,40 +1359,75 @@ export default function Sale() {
             : (
               <table>
                 <thead>
-                  <tr><th>Invoice No</th><th>Customer</th><th>Salesman</th><th>Delivery By</th><th>Date</th><th style={{ textAlign: 'right' }}>Total</th><th>Status</th><th style={{ textAlign: 'right' }}>Actions</th></tr>
+                  <tr>
+                    {hasActiveFilters && (
+                      <th style={{ width: 36 }}>
+                        <input type="checkbox"
+                          checked={headerCheckboxChecked}
+                          ref={el => { if (el) el.indeterminate = headerCheckboxIndeterminate; }}
+                          onChange={toggleHeaderCheckbox}
+                          title="Include every visible invoice in bulk print" />
+                      </th>
+                    )}
+                    <SortableHeader column="invoice_no"       label="Invoice No"  sortConfig={sortConfig} onSort={handleSort} />
+                    <SortableHeader column="customer_name"    label="Customer"    sortConfig={sortConfig} onSort={handleSort} />
+                    <SortableHeader column="salesman_name"    label="Salesman"    sortConfig={sortConfig} onSort={handleSort} />
+                    <SortableHeader column="delivery_by_name" label="Delivery By" sortConfig={sortConfig} onSort={handleSort} />
+                    <SortableHeader column="date"             label="Date"        sortConfig={sortConfig} onSort={handleSort} />
+                    <SortableHeader column="total_amount"     label="Total"       sortConfig={sortConfig} onSort={handleSort} align="right" />
+                    <SortableHeader column="is_locked"        label="Status"      sortConfig={sortConfig} onSort={handleSort} />
+                    <th style={{ textAlign: 'right' }}>Actions</th>
+                  </tr>
                 </thead>
                 <tbody>
-                  {pagedSales.map(s => (
-                    <tr key={s.id}>
-                      <td className="mono" style={{ color: 'var(--gray-700)' }}>{s.invoice_no}</td>
-                      <td>{s.customer_name}</td>
-                      <td>{s.salesman_name || '—'}</td>
-                      <td>{s.delivery_by_name || '—'}</td>
-                      <td>{formatDatePKT(s.date)}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--green)' }}>{fmt(s.total_amount)}</td>
-                      <td>
-                        {s.is_locked
-                          ? <span className="badge badge-amber"><span className="material-symbols-outlined" style={{ fontSize: 16, verticalAlign: 'middle', marginRight: 6 }}>lock</span>Locked</span>
-                          : <span className="badge badge-green">Open</span>}
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <div className="flex gap-2" style={{ justifyContent: 'flex-end' }}>
-                          <button className="btn btn-outline btn-sm btn-icon" title="View invoice" onClick={() => openView(s)}>
-                            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>visibility</span>
-                          </button>
-                          <button className="btn btn-outline btn-sm btn-icon" title="Print invoice" onClick={() => { setSavedInvoice({ id: s.id, invoice_no: s.invoice_no, total_amount: s.total_amount }); setPrintModal(true); }}>
-                            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>print</span>
-                          </button>
-                          {!s.is_locked && <button className="btn btn-outline btn-sm btn-icon" title="Edit invoice" onClick={() => openEdit(s)}>
-                            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>edit</span>
-                          </button>}
-                          {!s.is_locked && <button className="btn btn-danger btn-sm btn-icon" title="Delete invoice" onClick={() => { setSelected(s); setDeleteModal(true); }}>
-                            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span>
-                          </button>}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {pagedSales.map(s => {
+                    const included = isRowIncluded(s.id);
+                    // Fade excluded rows so it's obvious which invoices are
+                    // out of the current bulk-print set without stripping
+                    // them from the visible table.
+                    const rowStyle = hasActiveFilters && !included
+                      ? { opacity: 0.5, background: 'var(--gray-50)' }
+                      : undefined;
+                    return (
+                      <tr key={s.id} style={rowStyle}>
+                        {hasActiveFilters && (
+                          <td>
+                            <input type="checkbox"
+                              checked={included}
+                              onChange={() => toggleRowInclusion(s.id)} />
+                          </td>
+                        )}
+                        <td className="mono" style={{ color: 'var(--gray-700)' }}>{s.invoice_no}</td>
+                        <td>{s.customer_name}</td>
+                        <td>{s.salesman_name || '—'}</td>
+                        <td>{s.delivery_by_name || '—'}</td>
+                        <td>{formatDatePKT(s.date)}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--green)' }}>{fmt(s.total_amount)}</td>
+                        <td>
+                          {s.is_locked
+                            ? <span className="badge badge-amber"><span className="material-symbols-outlined" style={{ fontSize: 16, verticalAlign: 'middle', marginRight: 6 }}>lock</span>Locked</span>
+                            : <span className="badge badge-green">Open</span>}
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <div className="flex gap-2" style={{ justifyContent: 'flex-end' }}>
+                            <button className="btn btn-outline btn-sm btn-icon" title="View invoice" onClick={() => openView(s)}>
+                              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>visibility</span>
+                            </button>
+                            <button className="btn btn-outline btn-sm btn-icon" title="Print invoice"
+                              onClick={() => { setPrintSaleTarget(s); setPrintModalOpen(true); }}>
+                              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>print</span>
+                            </button>
+                            {!s.is_locked && <button className="btn btn-outline btn-sm btn-icon" title="Edit invoice" onClick={() => openEdit(s)}>
+                              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>edit</span>
+                            </button>}
+                            {!s.is_locked && <button className="btn btn-danger btn-sm btn-icon" title="Delete invoice" onClick={() => { setSelected(s); setDeleteModal(true); }}>
+                              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span>
+                            </button>}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
@@ -1219,9 +1519,6 @@ export default function Sale() {
         )}
       </Modal>
 
-      {/* Print Options Modal */}
-      <PrintOptionsModal isOpen={printModal} onClose={() => setPrintModal(false)} invoice={savedInvoice} />
-
       {/* New Customer Mini Modal */}
       <Modal isOpen={newCustModal} onClose={() => setNewCustModal(false)} title="Quick Add Customer" size="sm"
         footer={<><button className="btn btn-outline" onClick={() => setNewCustModal(false)}>Cancel</button><button className="btn btn-primary" onClick={saveNewCustomer} disabled={savingCust}>{savingCust ? 'Saving...' : 'Add'}</button></>}>
@@ -1239,6 +1536,14 @@ export default function Sale() {
 
       <ConfirmModal isOpen={deleteModal} onClose={() => setDeleteModal(false)} onConfirm={handleDelete} loading={deleting}
         message="Delete this invoice? Inventory will be restored and customer ledger updated." />
+
+      {/* Row-level Print picker. Bulk print goes straight to Smart and
+          never opens this modal. */}
+      <PrintOptionsModal
+        isOpen={printModalOpen}
+        onClose={() => setPrintModalOpen(false)}
+        invoice={printSaleTarget}
+      />
     </Layout>
   );
 }
