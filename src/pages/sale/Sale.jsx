@@ -248,11 +248,30 @@ function PrintOptionsModal({ isOpen, onClose, invoice }) {
   );
 }
 
-function RateInfoPanel({ rateHistory, activeRowIdx, canViewPurchaseRates }) {
+function RateInfoPanel({ rateHistory, activeRowIdx, activeItem, canViewPurchaseRates }) {
   if (!rateHistory || activeRowIdx === null) return null;
   const info = rateHistory[activeRowIdx];
   if (!info) return null;
-  const canShowPurchaseRate = canViewPurchaseRates && info.purchase_rate_visible !== false && info.purchase_rate_visible !== 0;
+
+  // Prefer the SELECTED batch's purchase_rate (inventory row) over the fallback
+  // from /sales/history/rates (which returns the latest-updated batch). The
+  // user-visible "Purchase Rate" must reflect the specific batch being sold,
+  // not a product-level or most-recent-batch rate.
+  const selectedBatch = (activeItem?._batches || []).find(
+    b => b.batch_no === activeItem?.batch_no
+  );
+  const batchPurchaseRate = selectedBatch ? selectedBatch.purchase_rate : null;
+  const batchRateVisible  = selectedBatch
+    ? (selectedBatch.purchase_rate_visible !== false && selectedBatch.purchase_rate_visible !== 0)
+    : true;
+  const effectivePurchaseRate = batchPurchaseRate != null ? batchPurchaseRate : info.purchase_rate;
+  const rateSource = selectedBatch && batchPurchaseRate != null
+    ? `Batch ${selectedBatch.batch_no}`
+    : (effectivePurchaseRate != null ? 'Latest batch' : null);
+
+  const canShowPurchaseRate = canViewPurchaseRates
+    && info.purchase_rate_visible !== false && info.purchase_rate_visible !== 0
+    && batchRateVisible;
 
   return (
     <div style={{
@@ -269,8 +288,11 @@ function RateInfoPanel({ rateHistory, activeRowIdx, canViewPurchaseRates }) {
           <div style={{ padding: '8px 10px', background: 'white', borderRadius: 8, textAlign: 'center' }}>
             <div style={{ fontSize: 10, color: 'var(--gray-500)', marginBottom: 4 }}>Purchase Rate</div>
             <div style={{ fontWeight: 700, color: 'var(--navy)' }}>
-              {info.purchase_rate ? formatCurrency(info.purchase_rate) : 'N/A'}
+              {effectivePurchaseRate != null ? formatCurrency(effectivePurchaseRate) : 'N/A'}
             </div>
+            {rateSource && (
+              <div style={{ fontSize: 10, color: 'var(--gray-400)', marginTop: 2 }}>{rateSource}</div>
+            )}
           </div>
         )}
         {[0, 1, 2].map(i => (
@@ -484,7 +506,12 @@ function SaleFormBody({
 
       <button className="btn btn-outline btn-sm mt-2" onClick={addItem}>+ Add Row</button>
 
-      <RateInfoPanel rateHistory={rateHistory} activeRowIdx={activeRowIdx} canViewPurchaseRates={canViewPurchaseRates} />
+      <RateInfoPanel
+        rateHistory={rateHistory}
+        activeRowIdx={activeRowIdx}
+        activeItem={activeRowIdx !== null ? items[activeRowIdx] : null}
+        canViewPurchaseRates={canViewPurchaseRates}
+      />
     </>
   );
 }
