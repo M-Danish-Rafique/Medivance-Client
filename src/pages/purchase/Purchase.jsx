@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Layout from '../../components/layout/Layout';
 import Modal from '../../components/common/Modal';
 import ConfirmModal from '../../components/common/ConfirmModal';
@@ -24,16 +24,6 @@ const createPurchaseItem = () => ({ ...emptyItem, row_id: `purchase-${Date.now()
 // over a focused field silently increments/decrements its value. Blurring on
 // wheel lets the page scroll act as intended and leaves the value untouched.
 const blockNumberWheel = (e) => e.currentTarget.blur();
-
-// Clamp typed numeric input to a [min, max] range. The `min`/`max` attributes
-// on <input type="number"> only constrain the spinner arrows, not typed
-// values, so we enforce the range ourselves on every change.
-const clamp = (val, min, max) => {
-  if (val === '') return val;
-  const n = parseFloat(val);
-  if (Number.isNaN(n)) return val;
-  return Math.min(max, Math.max(min, n)).toString();
-};
 
 // Client-side implementation of the six-step landed-cost formula that
 // backend/purchase.js runs at commit time — mirrored here so the operator
@@ -70,11 +60,200 @@ const getProductSuggestions = (products, query) => {
     .map(item => item.product);
 };
 
+// Sortable-column comparator map for the Purchase list. Same shape and
+// contract as the one in Sale.js: every entry returns a signed number,
+// direction is applied by the caller. Purchase IDs (P26-00001) sort
+// correctly as plain strings because the YY prefix and 5-digit sequence
+// are both fixed-width. `date` is a DATE_FORMAT'd ISO string from the
+// backend, so localeCompare handles it correctly too.
+const SORT_COMPARATORS = {
+  purchase_id:   (a, b) => (a.purchase_id   || '').localeCompare(b.purchase_id   || ''),
+  invoice_no:    (a, b) => (a.invoice_no    || '').localeCompare(b.invoice_no    || ''),
+  supplier_name: (a, b) => (a.supplier_name || '').localeCompare(b.supplier_name || ''),
+  date:          (a, b) => (a.date          || '').localeCompare(b.date          || ''),
+  total_amount:  (a, b) => parseFloat(a.total_amount || 0) - parseFloat(b.total_amount || 0),
+};
+
+// Sortable table header cell — mirrors the Sale.js implementation exactly
+// so the two lists feel identical when clicked. Kept local rather than
+// shared through a common component because this workspace is a
+// review/patch folder (see AGENTS.md); the real app should hoist both
+// copies to a single shared component in a follow-up.
+function SortableHeader({ column, label, sortConfig, onSort, align, style }) {
+  const active = sortConfig.column === column;
+  const iconName = active
+    ? (sortConfig.direction === 'asc' ? 'arrow_upward' : 'arrow_downward')
+    : 'unfold_more';
+  const isRight = align === 'right';
+  return (
+    <th
+      onClick={() => onSort(column)}
+      style={{
+        cursor: 'pointer',
+        userSelect: 'none',
+        textAlign: align || 'left',
+        ...(style || {})
+      }}
+      title={`Sort by ${label}`}
+    >
+      <span style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 3,
+        justifyContent: isRight ? 'flex-end' : 'flex-start',
+        width: '100%'
+      }}>
+        {label}
+        <span className="material-symbols-outlined" style={{
+          fontSize: 14,
+          color: active ? 'var(--gray-700)' : 'var(--gray-300)',
+          transition: 'color 0.2s ease',
+          lineHeight: 1
+        }}>{iconName}</span>
+      </span>
+    </th>
+  );
+}
+
+// Standalone searchable product-filter dropdown used by the Purchase
+// filter panel — same UX and code shape as the one in Sale.js. Backed
+// by the FULL product list so old purchases whose products no longer
+// have active stock stay filterable.
+function ProductFilterAutocomplete({ products, value, onChange, placeholder }) {
+  const [search, setSearch] = useState('');
+  const [open, setOpen] = useState(false);
+
+  // Keep the visible text in sync with an externally-set value
+  // (e.g. Clear Filters resets `value` to '').
+  useEffect(() => {
+    if (!value) { setSearch(''); return; }
+    const prod = products.find(p => p.id === value || p.id === parseInt(value));
+    if (prod) setSearch(prod.name);
+  }, [value, products]);
+
+  const suggestions = getProductSuggestions(products, search);
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        className="form-control"
+        placeholder={placeholder}
+        autoComplete="off"
+        value={search}
+        onChange={e => {
+          setSearch(e.target.value);
+          setOpen(true);
+          if (value) onChange('');
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+      />
+      {value && (
+        <button
+          type="button"
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => { onChange(''); setSearch(''); }}
+          title="Clear"
+          style={{
+            position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+            border: 'none', background: 'transparent', cursor: 'pointer',
+            color: 'var(--gray-400)', fontSize: 16, lineHeight: 1, padding: 2
+          }}
+        >×</button>
+      )}
+      {open && search && !value && (
+        <div style={{
+          position: 'absolute', top: 38, left: 0, right: 0, zIndex: 60,
+          background: 'white', border: '1px solid var(--gray-200)', borderRadius: 8,
+          boxShadow: '0 10px 20px rgba(0,0,0,0.08)', maxHeight: 220, overflowY: 'auto'
+        }}>
+          {suggestions.length === 0 ? (
+            <div style={{ padding: '9px 12px', fontSize: 12, color: 'var(--gray-400)' }}>No products found</div>
+          ) : suggestions.map(prod => (
+            <button key={prod.id} type="button" onMouseDown={() => { onChange(prod.id); setSearch(prod.name); setOpen(false); }}
+              style={{
+                width: '100%', textAlign: 'left', padding: '9px 12px', border: 'none',
+                background: 'white', cursor: 'pointer', fontSize: 13, color: 'var(--gray-900)',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10
+              }}>
+              <span>{prod.name}</span>
+              {prod.pack_size && (
+                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--gray-500)', whiteSpace: 'nowrap' }}>
+                  {prod.pack_size}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 export default function Purchase() {
   const { user, can } = useAuth();
   const [purchases, setPurchases] = useState([]);
-  const { page, setPage, pageSize, setPageSize, totalPages, totalItems, pageItems: pagedPurchases } = usePagination(purchases, 25);
+
+  // ─── Filters ───────────────────────────────────────────────────────────
+  // Same collapsed-by-default + draft-vs-applied pattern as Sale.js:
+  // typing/selecting in the panel edits `draftFilters` and only commits
+  // to `filters` (which actually drives filteredPurchases) when the
+  // operator hits Apply — so the table doesn't re-filter on every
+  // keystroke.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const emptyFilters = { supplier_id: '', date_from: '', date_to: '', purchase_id: '', invoice_no: '', product_id: '' };
+  const [filters, setFilters] = useState(emptyFilters);
+  const [draftFilters, setDraftFilters] = useState(emptyFilters);
+  const isEmptyFilters = (f) => Object.values(f).every(v => !v);
+  const activeFilterCount = Object.values(filters).filter(v => !!v).length;
+  const clearFilters = () => { setDraftFilters(emptyFilters); setFilters(emptyFilters); };
+  const applyFilters = () => { setFilters(draftFilters); setFiltersOpen(false); };
+
+  // Sortable table column state. Declared alongside filter state (before
+  // the useMemos below) so the sortedPurchases memo can read it without
+  // triggering a temporal-dead-zone error at mount.
+  //
+  // Defaults to date DESC — matches the backend's
+  // `ORDER BY p.date DESC, p.id DESC`, so an operator who never touches
+  // a header sees the same order the server returned.
+  const [sortConfig, setSortConfig] = useState({ column: 'date', direction: 'desc' });
+
+  const filteredPurchases = useMemo(() => {
+    const purchaseIdQuery = filters.purchase_id.trim().toLowerCase();
+    const invoiceQuery    = filters.invoice_no.trim().toLowerCase();
+    const productFilterId = filters.product_id ? String(filters.product_id) : '';
+    return purchases.filter(p => {
+      if (filters.supplier_id && String(p.supplier_id) !== String(filters.supplier_id)) return false;
+      if (filters.date_from && p.date < filters.date_from) return false;
+      if (filters.date_to   && p.date > filters.date_to)   return false;
+      if (purchaseIdQuery && !(p.purchase_id || '').toLowerCase().includes(purchaseIdQuery)) return false;
+      if (invoiceQuery    && !(p.invoice_no  || '').toLowerCase().includes(invoiceQuery))    return false;
+      if (productFilterId) {
+        // product_ids comes from the backend as a comma-separated string of
+        // every distinct product_id sold on that purchase (see GET /purchases).
+        const productIds = (p.product_ids || '').split(',').filter(Boolean);
+        if (!productIds.includes(productFilterId)) return false;
+      }
+      return true;
+    });
+  }, [purchases, filters]);
+
+  // Sort applied on top of filteredPurchases. Kept in its own useMemo so
+  // toggling sort direction doesn't re-run the filter predicate.
+  const sortedPurchases = useMemo(() => {
+    const cmp = SORT_COMPARATORS[sortConfig.column];
+    if (!cmp) return filteredPurchases;
+    const dir = sortConfig.direction === 'asc' ? 1 : -1;
+    return [...filteredPurchases].sort((a, b) => cmp(a, b) * dir);
+  }, [filteredPurchases, sortConfig]);
+
+  const { page, setPage, pageSize, setPageSize, totalPages, totalItems, pageItems: pagedPurchases } = usePagination(sortedPurchases, 25);
+  // Reset to page 1 whenever the filter set changes so the operator isn't
+  // stranded on page 4 of a result set that no longer has 4 pages. Sort
+  // changes intentionally do NOT reset — same data, reordered.
+  useEffect(() => { setPage(1); }, [filters]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [suppliers, setSuppliers] = useState([]);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -95,16 +274,6 @@ export default function Purchase() {
   const [rateChangePreview, setRateChangePreview] = useState(null); // null | { lines, mode: 'add'|'edit' }
   const canViewPurchaseRates = user?.role === 'admin' || can('perm_view_purchase_rate');
 
-  // Guards against a double-submit firing two API calls before `saving`
-  // state has re-rendered the disabled button. Refs update synchronously,
-  // unlike state, so this closes the race window entirely.
-  const savingRef = useRef(false);
-
-  // Per-row debounce timers + a "latest request" token per row, so rapid
-  // batch-number keystrokes don't fire overlapping checks and a stale
-  // response can't clobber a newer one.
-  const conflictCheckState = useRef({});
-
   const load = () => {
     setLoading(true);
     Promise.all([api.get('/purchases'), api.get('/suppliers'), api.get('/products')])
@@ -112,15 +281,6 @@ export default function Purchase() {
       .catch(() => setLoading(false));
   };
   useEffect(load, []);
-
-  // Clean up any pending debounce timers on unmount.
-  useEffect(() => {
-    return () => {
-      Object.values(conflictCheckState.current).forEach(entry => {
-        if (entry?.timer) clearTimeout(entry.timer);
-      });
-    };
-  }, []);
 
   const calcTotal = (item) => {
     const qty = parseFloat(item.qty) || 0;
@@ -137,13 +297,10 @@ export default function Purchase() {
     return +(afterDisc + taxAmt).toFixed(2);
   };
 
-  const runBatchConflictCheck = useCallback(async (idx, product_id, batch_no, exp_date, retail_price, requestId) => {
+  const checkBatchConflict = useCallback(async (idx, product_id, batch_no, exp_date, retail_price) => {
     if (!product_id || !batch_no) return;
     try {
       const r = await api.get(`/inventory/check-batch?product_id=${product_id}&batch_no=${batch_no}`);
-      // If a newer keystroke has scheduled another check for this row since
-      // this request went out, discard this (now-stale) response.
-      if (conflictCheckState.current[idx]?.requestId !== requestId) return;
       if (r.data) {
         const existing = r.data;
         const expConflict = exp_date && existing.exp_date && exp_date !== existing.exp_date.split('T')[0];
@@ -154,18 +311,6 @@ export default function Purchase() {
       }
     } catch { }
   }, []);
-
-  // Debounced entry point: clears any pending timer for this row, stamps a
-  // fresh request id, and schedules the actual check 300ms out.
-  const scheduleConflictCheck = useCallback((idx, product_id, batch_no, exp_date, retail_price) => {
-    const prevEntry = conflictCheckState.current[idx];
-    if (prevEntry?.timer) clearTimeout(prevEntry.timer);
-    const requestId = Symbol(`row-${idx}`);
-    const timer = setTimeout(() => {
-      runBatchConflictCheck(idx, product_id, batch_no, exp_date, retail_price, requestId);
-    }, 300);
-    conflictCheckState.current[idx] = { timer, requestId };
-  }, [runBatchConflictCheck]);
 
   const selectProduct = (idx, product) => {
     setItems(prev => prev.map((it, i) => {
@@ -212,31 +357,21 @@ export default function Purchase() {
       return updated;
     });
     if (['batch_no', 'exp_date', 'retail_price'].includes(field)) {
-      // Read the just-updated row on the next tick and kick off a debounced
-      // conflict check with fresh values (avoids a stale closure over `items`).
       setTimeout(() => {
         setItems(prev => {
           const it = prev[idx];
-          if (it) {
-            scheduleConflictCheck(idx, it.product_id,
-              field === 'batch_no' ? value : it.batch_no,
-              field === 'exp_date' ? value : it.exp_date,
-              field === 'retail_price' ? value : it.retail_price);
-          }
+          checkBatchConflict(idx, it.product_id,
+            field === 'batch_no' ? value : it.batch_no,
+            field === 'exp_date' ? value : it.exp_date,
+            field === 'retail_price' ? value : it.retail_price);
           return prev;
         });
-      }, 0);
+      }, 300);
     }
   };
 
   const addItem = () => setItems(p => [...p, createPurchaseItem()]);
-  const removeItem = (idx) => {
-    // Drop any pending debounce state for the row being removed.
-    const entry = conflictCheckState.current[idx];
-    if (entry?.timer) clearTimeout(entry.timer);
-    delete conflictCheckState.current[idx];
-    setItems(p => p.filter((_, i) => i !== idx));
-  };
+  const removeItem = (idx) => setItems(p => p.filter((_, i) => i !== idx));
   const grandTotal = items.reduce((sum, it) => sum + (parseFloat(it.total) || 0), 0);
 
   const validateItems = (validItems) => {
@@ -255,7 +390,7 @@ export default function Purchase() {
   const openAdd = () => {
     setSelected(null);
     setHeader({ supplier_id: '', invoice_no: '', date: today() });
-    setItems([{ ...emptyItem, row_id: `purchase-${Date.now()}-${Math.random().toString(16).slice(2)}` }]);
+    setItems([{ ...emptyItem }]);
     setModal('add');
   };
 
@@ -285,22 +420,14 @@ export default function Purchase() {
   };
 
   const handleSave = async () => {
-    // Synchronous guard: `saving` state hasn't re-rendered the button yet
-    // when a second click lands in the same tick, so a ref closes the gap.
-    if (savingRef.current) return;
-    savingRef.current = true;
-    try {
-      if (!header.supplier_id) return toast.error('Please select a supplier');
-      if (!header.date) return toast.error('Date is required');
-      const validItems = items.filter(it => it.product_id);
-      if (validItems.length === 0) return toast.error('Add at least one product');
-      const err = validateItems(validItems);
-      if (err) return toast.error(err);
+    if (!header.supplier_id) return toast.error('Please select a supplier');
+    if (!header.date) return toast.error('Date is required');
+    const validItems = items.filter(it => it.product_id);
+    if (validItems.length === 0) return toast.error('Add at least one product');
+    const err = validateItems(validItems);
+    if (err) return toast.error(err);
 
-      await submitPurchase(validItems, /* confirmed */ false);
-    } finally {
-      savingRef.current = false;
-    }
+    await submitPurchase(validItems, /* confirmed */ false);
   };
 
   // Actual submit. Split from handleSave so the confirm-modal path can
@@ -343,13 +470,7 @@ export default function Purchase() {
 
   const confirmRateChangeAndSave = async () => {
     if (!rateChangePreview) return;
-    if (savingRef.current) return;
-    savingRef.current = true;
-    try {
-      await submitPurchase(rateChangePreview.items, /* confirmed */ true);
-    } finally {
-      savingRef.current = false;
-    }
+    await submitPurchase(rateChangePreview.items, /* confirmed */ true);
   };
 
   const handleDelete = async () => {
@@ -360,6 +481,16 @@ export default function Purchase() {
     } catch (err) { toast.error('Error'); } finally { setDeleting(false); }
   };
 
+  // Column sort cycles asc ↔ desc on the active column, or switches to a
+  // new column (starting ascending).
+  const handleSort = (col) => {
+    setSortConfig(prev => (
+      prev.column === col
+        ? { column: col, direction: prev.direction === 'asc' ? 'desc' : 'asc' }
+        : { column: col, direction: 'asc' }
+    ));
+  };
+
   const inputSm = { fontSize: 12, padding: '6px 7px' };
 
   return (
@@ -368,18 +499,149 @@ export default function Purchase() {
         <div className="card-header">
           <div>
             <div className="card-title">Purchase Records</div>
-            <div className="text-sm text-muted mt-1">{purchases.length} purchases recorded</div>
+            <div className="text-sm text-muted mt-1">
+              {activeFilterCount > 0
+                ? `${filteredPurchases.length} of ${purchases.length} purchases`
+                : `${purchases.length} purchases recorded`}
+            </div>
           </div>
-          <button className="btn btn-primary" onClick={openAdd}>+ New Purchase</button>
+          <div className="flex gap-2">
+            <button
+              className="btn btn-outline"
+              onClick={() => setFiltersOpen(o => !o)}
+              style={{
+                justifyContent: 'center',
+                padding: '9px 12px',
+                background: '#fff',
+                color: 'var(--gray-500)',
+                borderColor: 'var(--gray-200)',
+                fontWeight: 550
+              }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: 'middle', marginRight: 0, color: 'var(--gray-400)' }}>filter_list</span>
+              Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+              <span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: 'middle', marginLeft: 0, color: 'var(--gray-400)' }}>
+                {filtersOpen ? 'expand_less' : 'expand_more'}
+              </span>
+            </button>
+            <button className="btn btn-primary" onClick={openAdd}>+ New Purchase</button>
+          </div>
         </div>
+
+        {/* Filter panel — mirrors the Sale.js pattern: animated collapse,
+            draft-vs-applied filters, balanced 3-col × 2-row grid so there
+            are no bolted-on rows or empty cells. */}
+        <div
+          style={{
+            maxHeight: filtersOpen ? 460 : 0,
+            opacity: filtersOpen ? 1 : 0,
+            // Once open, let the product-filter dropdown escape this
+            // container's bounds instead of being clipped by it.
+            overflow: filtersOpen ? 'visible' : 'hidden',
+            background: '#fff',
+            borderTop: filtersOpen ? '1px solid var(--gray-200)' : 'none',
+            borderBottom: filtersOpen ? '1px solid var(--gray-200)' : 'none',
+            transition: 'max-height 0.32s ease, opacity 0.24s ease, border-color 0.24s ease',
+            // Establish a stacking context above the table below so the
+            // dropdown suggestion list always paints on top of it.
+            position: 'relative',
+            zIndex: 30
+          }}
+        >
+          <div style={{ padding: '18px 20px' }}>
+            {/* Row 1 = who (supplier) + when (dates).
+                Row 2 = what (product) + the two identifier lookups. */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 14 }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Supplier</label>
+                <select className="form-control" value={draftFilters.supplier_id}
+                  onChange={e => setDraftFilters(p => ({ ...p, supplier_id: e.target.value }))}>
+                  <option value="">— All Suppliers —</option>
+                  {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Date From</label>
+                <input className="form-control" type="date" value={draftFilters.date_from}
+                  onChange={e => setDraftFilters(p => ({ ...p, date_from: e.target.value }))} />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Date To</label>
+                <input className="form-control" type="date" value={draftFilters.date_to}
+                  onChange={e => setDraftFilters(p => ({ ...p, date_to: e.target.value }))} />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Product</label>
+                <ProductFilterAutocomplete
+                  products={products}
+                  value={draftFilters.product_id}
+                  onChange={id => setDraftFilters(p => ({ ...p, product_id: id }))}
+                  placeholder="Search product…"
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Purchase ID</label>
+                <input className="form-control" placeholder="Search purchase ID…" value={draftFilters.purchase_id}
+                  onChange={e => setDraftFilters(p => ({ ...p, purchase_id: e.target.value }))} />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Invoice No</label>
+                <input className="form-control" placeholder="Search invoice no…" value={draftFilters.invoice_no}
+                  onChange={e => setDraftFilters(p => ({ ...p, invoice_no: e.target.value }))} />
+              </div>
+            </div>
+
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginTop: 16,
+              paddingTop: 14,
+              borderTop: '1px solid var(--gray-100)'
+            }}>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={clearFilters}
+                disabled={isEmptyFilters(draftFilters) && isEmptyFilters(filters)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--gray-500)', fontWeight: 600, padding: '8px 4px' }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 16, verticalAlign: 'middle', marginRight: 4 }}>filter_alt_off</span>
+                Clear Filters
+              </button>
+              <button type="button" className="btn btn-primary" onClick={applyFilters}>
+                <span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: 'middle', marginRight: 6 }}>search</span>
+                Apply Filters
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div className="table-wrap">
           {loading ? <div className="loading-center"><div className="spinner" /></div>
           : purchases.length === 0
             ? <div className="empty-state"><div className="empty-state-icon">📥</div><div className="empty-state-title">No purchases yet</div></div>
+            : filteredPurchases.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-state-icon"><span className="material-symbols-outlined" style={{ fontSize: 28 }}>filter_alt_off</span></div>
+                <div className="empty-state-title">No purchases match your filters</div>
+                <button className="btn btn-outline btn-sm" style={{ marginTop: 10 }} onClick={clearFilters}>Clear Filters</button>
+              </div>
+            )
             : (
               <table>
                 <thead>
-                  <tr><th>Purchase ID</th><th>Invoice No</th><th>Supplier</th><th>Date</th><th style={{ textAlign: 'right' }}>Total Amount</th><th style={{ textAlign: 'right' }}>Actions</th></tr>
+                  <tr>
+                    <SortableHeader column="purchase_id"   label="Purchase ID"  sortConfig={sortConfig} onSort={handleSort} />
+                    <SortableHeader column="invoice_no"    label="Invoice No"   sortConfig={sortConfig} onSort={handleSort} />
+                    <SortableHeader column="supplier_name" label="Supplier"     sortConfig={sortConfig} onSort={handleSort} />
+                    <SortableHeader column="date"          label="Date"         sortConfig={sortConfig} onSort={handleSort} />
+                    <SortableHeader column="total_amount"  label="Total Amount" sortConfig={sortConfig} onSort={handleSort} align="right" />
+                    <th style={{ textAlign: 'right' }}>Actions</th>
+                  </tr>
                 </thead>
                 <tbody>
                   {pagedPurchases.map(p => (
@@ -406,11 +668,8 @@ export default function Purchase() {
           pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
       </div>
 
-      {/* Add / Edit Modal. Hidden (not unmounted) while the rate-change
-         confirmation modal is showing, so the two never stack on top of
-         each other — form state (`items`/`header`) is preserved either way,
-         so hitting "Back" on the confirmation reveals the same form. */}
-      <Modal isOpen={!!modal && !rateChangePreview} onClose={() => setModal(false)}
+      {/* Add / Edit Modal */}
+      <Modal isOpen={!!modal} onClose={() => setModal(false)}
         title={modal === 'edit' ? `Edit Purchase — ${selected?.purchase_id}` : 'New Purchase Entry'}
         size="xl"
         footer={
@@ -464,11 +723,7 @@ export default function Purchase() {
           <span style={{ textAlign: 'right' }}>Total</span><span></span>
         </div>
 
-        {items.map((item, idx) => {
-          const suggestions = item.product_search && !item.product_id
-            ? getProductSuggestions(products, item.product_search)
-            : [];
-          return (
+        {items.map((item, idx) => (
           <div key={item.row_id || idx} style={{ marginBottom: 6 }}>
             {(item._expConflict || item._priceConflict) && (
               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '4px 10px', marginBottom: 3, fontSize: 11, color: '#92400e' }}>
@@ -502,15 +757,11 @@ export default function Purchase() {
                 />
                 {item.product_search && !item.product_id && (
                   <div style={{
-                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20,
+                    position: 'absolute', top: 38, left: 0, right: 0, zIndex: 20,
                     background: 'white', border: '1px solid var(--gray-200)', borderRadius: 8,
                     boxShadow: '0 10px 20px rgba(0,0,0,0.08)', maxHeight: 220, overflowY: 'auto'
                   }}>
-                    {suggestions.length === 0 ? (
-                      <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--gray-400)' }}>
-                        No matching products
-                      </div>
-                    ) : suggestions.map(prod => (
+                    {getProductSuggestions(products, item.product_search).map(prod => (
                       <button key={prod.id} type="button" onMouseDown={() => selectProduct(idx, prod)}
                         style={{
                           width: '100%', textAlign: 'left', padding: '9px 12px', border: 'none',
@@ -536,14 +787,14 @@ export default function Purchase() {
 
               <input className="form-control" type="number" step="1" min="0" style={{ ...inputSm, borderColor: !item.qty && item.product_id ? 'var(--red)' : undefined }}
                 placeholder="Qty *" value={item.qty}
-                onChange={e => updateItem(idx, 'qty', clamp(e.target.value, 0, Infinity))}
+                onChange={e => updateItem(idx, 'qty', e.target.value)}
                 onWheel={blockNumberWheel}
                 inputMode="numeric" />
 
               {canViewPurchaseRates ? (
                 <input className="form-control" type="number" step="1" min="0" style={{ ...inputSm, borderColor: !item.purchase_rate && item.product_id ? 'var(--red)' : undefined }}
                   placeholder="Rate *" value={item.purchase_rate}
-                  onChange={e => updateItem(idx, 'purchase_rate', clamp(e.target.value, 0, Infinity))}
+                  onChange={e => updateItem(idx, 'purchase_rate', e.target.value)}
                   onWheel={blockNumberWheel} />
               ) : (
                 <div style={{ fontSize: 11, color: 'var(--gray-400)', textAlign: 'center' }}>Hidden</div>
@@ -551,21 +802,21 @@ export default function Purchase() {
 
               <input className="form-control" type="number" step="1" min="0" style={{ ...inputSm, borderColor: !item.retail_price && item.product_id ? 'var(--red)' : undefined }}
                 placeholder="Retail *" value={item.retail_price}
-                onChange={e => updateItem(idx, 'retail_price', clamp(e.target.value, 0, Infinity))}
+                onChange={e => updateItem(idx, 'retail_price', e.target.value)}
                 onWheel={blockNumberWheel} />
 
               <input className="form-control no-spinner" type="number" step="1" min="0" style={inputSm}
-                value={item.bonus} onChange={e => updateItem(idx, 'bonus', clamp(e.target.value, 0, Infinity))}
+                value={item.bonus} onChange={e => updateItem(idx, 'bonus', e.target.value)}
                 onWheel={blockNumberWheel}
                 inputMode="numeric" />
 
               <input className="form-control no-spinner" type="number" step="0.5" min="0" max="100" style={inputSm}
-                value={item.discount_pct} onChange={e => updateItem(idx, 'discount_pct', clamp(e.target.value, 0, 100))}
+                value={item.discount_pct} onChange={e => updateItem(idx, 'discount_pct', e.target.value)}
                 onWheel={blockNumberWheel}
                 inputMode="decimal" />
 
               <input className="form-control no-spinner" type="number" step="0.5" min="0" max="100" style={inputSm}
-                value={item.tax_pct} onChange={e => updateItem(idx, 'tax_pct', clamp(e.target.value, 0, 100))}
+                value={item.tax_pct} onChange={e => updateItem(idx, 'tax_pct', e.target.value)}
                 onWheel={blockNumberWheel}
                 inputMode="decimal" />
 
@@ -574,9 +825,7 @@ export default function Purchase() {
               </div>
 
               <button
-                type="button"
                 title="Remove row"
-                aria-label="Remove row"
                 onClick={() => removeItem(idx)}
                 disabled={items.length === 1}
                 style={{
@@ -596,7 +845,7 @@ export default function Purchase() {
               <div style={{ padding: '4px 8px 0', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 11, color: 'var(--gray-500)' }}>Sale Rate:</span>
                 <input type="number" step="1" min="0" value={item.sale_rate}
-                  onChange={e => updateItem(idx, 'sale_rate', clamp(e.target.value, 0, Infinity))}
+                  onChange={e => updateItem(idx, 'sale_rate', e.target.value)}
                   onWheel={blockNumberWheel}
                   style={{ width: 90, padding: '3px 6px', border: '1px solid var(--gray-200)', borderRadius: 6, fontSize: 11, fontFamily: 'inherit' }}
                   placeholder="Sale Rate" />
@@ -625,8 +874,7 @@ export default function Purchase() {
               </div>
             )}
           </div>
-          );
-        })}
+        ))}
 
         <button className="btn btn-outline btn-sm mt-2" onClick={addItem}>+ Add Row</button>
       </Modal>
@@ -694,9 +942,7 @@ export default function Purchase() {
       {/* Rate-change confirmation. Rendered as a modal that lists every line
          whose inventory purchase_rate will move because of this purchase,
          showing the weighted-average target rate and the delta. Operator
-         hits Confirm to re-submit with `confirm_rate_change: true`, or Back
-         to return to the entry modal (which reappears since it's only
-         hidden, not unmounted, while this is open). */}
+         hits Confirm to re-submit with `confirm_rate_change: true`. */}
       <Modal isOpen={!!rateChangePreview} onClose={() => setRateChangePreview(null)}
         title="Confirm Purchase Rate Change" size="lg"
         footer={
@@ -716,15 +962,14 @@ export default function Purchase() {
               will blend the new landed cost with the current inventory rate using a
               weighted average across the remaining stock. Please review before confirming.
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr 1fr 1fr 1fr 1fr', gap: 6,
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', gap: 6,
               padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6,
               fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
               <span>Product / Batch</span>
-              <span>Existing Qty</span>
+              <span>Landed Rate</span>
               <span>Existing Rate</span>
-              <span>New Qty</span>
-              <span>New Rate</span>
-              <span>Weighted Rate</span>
+              <span>Existing Qty</span>
+              <span>New Weighted Rate</span>
               <span>Change</span>
             </div>
             {rateChangePreview.lines.map((l, idx) => {
@@ -732,12 +977,8 @@ export default function Purchase() {
               const delta = l.existing_in_inventory
                 ? (l.weighted_rate - (l.existing_rate || 0))
                 : 0;
-              const submittedItem = rateChangePreview.items?.[idx];
-              const orderedQty = submittedItem ? parseInt(submittedItem.qty || 0, 10) : null;
-              const bonusQty = submittedItem ? parseInt(submittedItem.bonus || 0, 10) : 0;
-              const totalStock = l.landed_cost_steps?.total_stock;
               return (
-                <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr 1fr 1fr 1fr 1fr',
+                <div key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr',
                   gap: 6, alignItems: 'center', padding: '7px 8px', marginBottom: 5,
                   background: changed ? '#fffbeb' : 'white',
                   border: `1.5px solid ${changed ? '#f59e0b' : 'var(--gray-200)'}`, borderRadius: 8 }}>
@@ -745,12 +986,9 @@ export default function Purchase() {
                     <div style={{ fontWeight: 600, fontSize: 13 }}>{l.product_name || `Product ${l.product_id}`}</div>
                     <div style={{ fontSize: 10, color: 'var(--gray-500)' }}>Batch: {l.batch_no}</div>
                   </div>
-                  <div>{l.existing_in_inventory ? l.existing_qty : '—'}</div>
-                  <div>{l.existing_in_inventory ? formatCurrency(l.existing_rate) : '—'}</div>
-                  <div>
-                    {orderedQty != null ? orderedQty+bonusQty : (totalStock ?? '—')}
-                  </div>
                   <div style={{ fontWeight: 700 }}>{formatCurrency(l.landed_cost_steps?.landed_rate)}</div>
+                  <div>{l.existing_in_inventory ? formatCurrency(l.existing_rate) : '—'}</div>
+                  <div>{l.existing_in_inventory ? l.existing_qty : '—'}</div>
                   <div style={{ fontWeight: 700, color: changed ? '#b45309' : 'var(--gray-800)' }}>
                     {l.existing_in_inventory ? formatCurrency(l.weighted_rate) : formatCurrency(l.landed_cost_steps?.landed_rate)}
                   </div>
