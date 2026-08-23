@@ -4,7 +4,7 @@ import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { formatCurrency } from '../../utils/formatters';
 import CustomerAutocomplete from '../../components/common/CustomerAutocomplete';
-import { formatDatePKT } from '../../utils/dateUtils';
+import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
 
 const fmt = formatCurrency;
 
@@ -127,12 +127,16 @@ export default function Reports() {
   // importantly, so the underlying report never runs unbounded — which
   // previously produced meaningless numbers (opening = current stock,
   // gross = every sale ever, closing = negative).
+  //
+  // PKT is used for BOTH endpoints (not `new Date()` browser-local): the
+  // rest of the app stores dates as PKT via `todayPKT()`, so a browser
+  // whose local time differs from PKT would otherwise drift the report
+  // window by up to a day and silently exclude same-day activity — which
+  // was the actual root cause of the "Purchase = 0" report bug.
   const _defaultStockRange = (() => {
-    const t = new Date();
-    const y = t.getFullYear();
-    const m = String(t.getMonth() + 1).padStart(2, '0');
-    const d = String(t.getDate()).padStart(2, '0');
-    return { from: `${y}-${m}-01`, to: `${y}-${m}-${d}` };
+    const today = todayPKT();                 // 'YYYY-MM-DD' in PKT
+    const from  = `${today.slice(0, 7)}-01`;  // first of current PKT month
+    return { from, to: today };
   })();
   const [companies, setCompanies] = useState([]);
   const [stockCompany, setStockCompany] = useState('');
@@ -374,14 +378,15 @@ export default function Reports() {
   }), { gross: 0, ret: 0, net: 0, disc: 0, rec: 0 });
 
   const stockTotals = (stockRows || []).reduce((t, r) => ({
-    opening:  t.opening  + (parseInt(r.opening_stock, 10) || 0),
-    purchase: t.purchase + (parseInt(r.purchase_qty, 10)  || 0),
-    gross:    t.gross    + (parseInt(r.gross_qty, 10)     || 0),
-    ret:      t.ret      + (parseInt(r.return_qty, 10)    || 0),
-    netU:     t.netU     + (parseInt(r.net_sale_unit, 10) || 0),
-    netV:     t.netV     + (parseFloat(r.net_sale_value)  || 0),
-    closing:  t.closing  + (parseInt(r.closing_stock, 10) || 0),
-  }), { opening: 0, purchase: 0, gross: 0, ret: 0, netU: 0, netV: 0, closing: 0 });
+    opening:  t.opening  + (parseInt(r.opening_stock,   10) || 0),
+    purchase: t.purchase + (parseInt(r.purchase_qty,    10) || 0),
+    adjust:   t.adjust   + (parseInt(r.adjustment_qty,  10) || 0),
+    gross:    t.gross    + (parseInt(r.gross_qty,       10) || 0),
+    ret:      t.ret      + (parseInt(r.return_qty,      10) || 0),
+    netU:     t.netU     + (parseInt(r.net_sale_unit,   10) || 0),
+    netV:     t.netV     + (parseFloat(r.net_sale_value)    || 0),
+    closing:  t.closing  + (parseInt(r.closing_stock,   10) || 0),
+  }), { opening: 0, purchase: 0, adjust: 0, gross: 0, ret: 0, netU: 0, netV: 0, closing: 0 });
 
   if (dataLoading) {
     return (
@@ -909,8 +914,9 @@ export default function Reports() {
                 <span className="material-symbols-outlined" style={{ fontSize: 14, verticalAlign: 'text-bottom', marginRight: 4 }}>info</span>
                 Batches are consolidated per product. Opening &amp; Closing are real physical stock at the period boundaries.
                 Purchase includes both purchase entries and manufacturing yields added in the period.
+                Adjustment is the signed net of manual inventory adds/edits (positive = added, negative = removed).
                 Net Sale (Value) is the actual billed revenue net of discounts and returns.
-                Closing = Opening + Purchase − Gross Sale + Return.
+                Closing = Opening + Purchase + Adjustment − Gross Sale + Return.
               </div>
             </div>
           </div>
@@ -942,19 +948,21 @@ export default function Reports() {
                       <tr>
                         <th style={{ width: '4%' }}>Sr</th>
                         <th>Product</th>
-                        <th style={{ width: '9%' }}>Pack Size</th>
-                        <th style={{ width: '8%', textAlign: 'right' }}>Opening</th>
-                        <th style={{ width: '8%', textAlign: 'right' }}>Purchase</th>
+                        <th style={{ width: '8%' }}>Pack Size</th>
+                        <th style={{ width: '7%', textAlign: 'right' }}>Opening</th>
+                        <th style={{ width: '7%', textAlign: 'right' }}>Purchase</th>
+                        <th style={{ width: '7%', textAlign: 'right' }} title="Signed net of manual inventory adds/edits (positive = added, negative = removed)">Adjustment</th>
                         <th style={{ width: '8%', textAlign: 'right' }}>Gross Sale</th>
-                        <th style={{ width: '7%', textAlign: 'right' }}>Return</th>
+                        <th style={{ width: '6%', textAlign: 'right' }}>Return</th>
                         <th style={{ width: '9%', textAlign: 'right' }}>Net Sale (Unit)</th>
                         <th style={{ width: '11%', textAlign: 'right' }}>Net Sale (Value)</th>
-                        <th style={{ width: '8%', textAlign: 'right' }}>Closing</th>
+                        <th style={{ width: '7%', textAlign: 'right' }}>Closing</th>
                       </tr>
                     </thead>
                     <tbody>
                       {stockRows.map((row, i) => {
                         const closingNeg = row.closing_stock < 0;
+                        const adj        = parseInt(row.adjustment_qty, 10) || 0;
                         return (
                           <tr key={row.product_id}>
                             <td>{i + 1}</td>
@@ -962,6 +970,11 @@ export default function Reports() {
                             <td style={{ color: 'var(--gray-500)' }}>{row.pack_size || '—'}</td>
                             <td style={{ textAlign: 'right' }}>{row.opening_stock}</td>
                             <td style={{ textAlign: 'right' }}>{row.purchase_qty > 0 ? row.purchase_qty : '—'}</td>
+                            <td style={{
+                              textAlign: 'right',
+                              color: adj < 0 ? 'var(--amber)' : undefined,
+                              fontWeight: adj !== 0 ? 600 : undefined,
+                            }}>{adj === 0 ? '—' : adj}</td>
                             <td style={{ textAlign: 'right' }}>{row.gross_qty > 0 ? row.gross_qty : '—'}</td>
                             <td style={{ textAlign: 'right' }}>{row.return_qty > 0 ? row.return_qty : '—'}</td>
                             <td style={{ textAlign: 'right', fontWeight: 600 }}>{row.net_sale_unit}</td>
@@ -970,7 +983,7 @@ export default function Reports() {
                               textAlign: 'right',
                               fontWeight: 700,
                               color: closingNeg ? 'var(--amber)' : undefined,
-                            }} title={closingNeg ? 'Negative closing stock — data integrity check needed (possible manual inventory adjustment or return without matching sale)' : undefined}>
+                            }} title={closingNeg ? 'Negative closing stock — data integrity check needed' : undefined}>
                               {row.closing_stock}
                             </td>
                           </tr>
@@ -982,6 +995,7 @@ export default function Reports() {
                         <td colSpan={3} className="report-tfoot-label">Total</td>
                         <td className="report-tfoot-num">{stockTotals.opening}</td>
                         <td className="report-tfoot-num">{stockTotals.purchase}</td>
+                        <td className="report-tfoot-num">{stockTotals.adjust === 0 ? '—' : stockTotals.adjust}</td>
                         <td className="report-tfoot-num">{stockTotals.gross}</td>
                         <td className="report-tfoot-num">{stockTotals.ret}</td>
                         <td className="report-tfoot-num">{stockTotals.netU}</td>
