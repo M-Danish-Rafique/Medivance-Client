@@ -121,11 +121,23 @@ export default function Reports() {
   const [summaryData, setSummaryData] = useState(null);   // { rows, layers }
   const [summaryLoading, setSummaryLoading] = useState(false);
 
-  // Sale & Stock report state
+  // Sale & Stock report state — dates are REQUIRED (see fetchSaleStock).
+  // Pre-filled with a sensible default window (start of current month → today
+  // in PKT) so operators aren't stared at by an empty form and, more
+  // importantly, so the underlying report never runs unbounded — which
+  // previously produced meaningless numbers (opening = current stock,
+  // gross = every sale ever, closing = negative).
+  const _defaultStockRange = (() => {
+    const t = new Date();
+    const y = t.getFullYear();
+    const m = String(t.getMonth() + 1).padStart(2, '0');
+    const d = String(t.getDate()).padStart(2, '0');
+    return { from: `${y}-${m}-01`, to: `${y}-${m}-${d}` };
+  })();
   const [companies, setCompanies] = useState([]);
   const [stockCompany, setStockCompany] = useState('');
-  const [stockFrom, setStockFrom] = useState('');
-  const [stockTo, setStockTo] = useState('');
+  const [stockFrom, setStockFrom] = useState(_defaultStockRange.from);
+  const [stockTo, setStockTo] = useState(_defaultStockRange.to);
   const [stockRows, setStockRows] = useState(null);
   const [stockLoading, setStockLoading] = useState(false);
 
@@ -288,25 +300,34 @@ export default function Reports() {
   };
 
   const fetchSaleStock = async () => {
+    if (!stockFrom || !stockTo) {
+      return toast.error('Please select both From Date and To Date');
+    }
+    if (stockFrom > stockTo) {
+      return toast.error('From Date cannot be after To Date');
+    }
     setStockLoading(true);
     try {
       const params = new URLSearchParams();
-      if (stockFrom) params.append('from_date', stockFrom);
-      if (stockTo) params.append('to_date', stockTo);
+      params.append('from_date', stockFrom);
+      params.append('to_date', stockTo);
       if (stockCompany) params.append('company_id', stockCompany);
       const r = await api.get(`/reports/sale-stock-report?${params}`);
       setStockRows(r.data.rows || []);
-    } catch {
-      toast.error('Error fetching Sale & Stock report');
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Error fetching Sale & Stock report');
     } finally {
       setStockLoading(false);
     }
   };
 
   const downloadSaleStockPDF = async () => {
+    if (!stockFrom || !stockTo) {
+      return toast.error('Please select both From Date and To Date');
+    }
     const params = new URLSearchParams();
-    if (stockFrom) params.append('from_date', stockFrom);
-    if (stockTo) params.append('to_date', stockTo);
+    params.append('from_date', stockFrom);
+    params.append('to_date', stockTo);
     if (stockCompany) params.append('company_id', stockCompany);
     try {
       const res = await api.get(`/reports/sale-stock-report/pdf?${params}`, { responseType: 'blob' });
@@ -353,13 +374,14 @@ export default function Reports() {
   }), { gross: 0, ret: 0, net: 0, disc: 0, rec: 0 });
 
   const stockTotals = (stockRows || []).reduce((t, r) => ({
-    opening: t.opening + (parseInt(r.opening_stock, 10) || 0),
-    gross:   t.gross   + (parseInt(r.gross_qty, 10)     || 0),
-    ret:     t.ret     + (parseInt(r.return_qty, 10)    || 0),
-    netU:    t.netU    + (parseInt(r.net_sale_unit, 10) || 0),
-    netV:    t.netV    + (parseFloat(r.net_sale_value)  || 0),
-    closing: t.closing + (parseInt(r.closing_stock, 10) || 0),
-  }), { opening: 0, gross: 0, ret: 0, netU: 0, netV: 0, closing: 0 });
+    opening:  t.opening  + (parseInt(r.opening_stock, 10) || 0),
+    purchase: t.purchase + (parseInt(r.purchase_qty, 10)  || 0),
+    gross:    t.gross    + (parseInt(r.gross_qty, 10)     || 0),
+    ret:      t.ret      + (parseInt(r.return_qty, 10)    || 0),
+    netU:     t.netU     + (parseInt(r.net_sale_unit, 10) || 0),
+    netV:     t.netV     + (parseFloat(r.net_sale_value)  || 0),
+    closing:  t.closing  + (parseInt(r.closing_stock, 10) || 0),
+  }), { opening: 0, purchase: 0, gross: 0, ret: 0, netU: 0, netV: 0, closing: 0 });
 
   if (dataLoading) {
     return (
@@ -854,6 +876,7 @@ export default function Reports() {
                 onGenerate={fetchSaleStock}
                 onDownload={downloadSaleStockPDF}
                 hasData={!!stockRows}
+                generateDisabled={!stockFrom || !stockTo}
                 fields={
                   <>
                     <div className="form-group" style={{ margin: 0 }}>
@@ -870,13 +893,13 @@ export default function Reports() {
                       </select>
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
-                      <label className="form-label">From Date</label>
-                      <input className="form-control" type="date" value={stockFrom}
+                      <label className="form-label">From Date *</label>
+                      <input className="form-control" type="date" value={stockFrom} required
                         onChange={e => { setStockFrom(e.target.value); setStockRows(null); }} />
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
-                      <label className="form-label">To Date</label>
-                      <input className="form-control" type="date" value={stockTo}
+                      <label className="form-label">To Date *</label>
+                      <input className="form-control" type="date" value={stockTo} required
                         onChange={e => { setStockTo(e.target.value); setStockRows(null); }} />
                     </div>
                   </>
@@ -884,9 +907,10 @@ export default function Reports() {
               />
               <div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 12, lineHeight: 1.55 }}>
                 <span className="material-symbols-outlined" style={{ fontSize: 14, verticalAlign: 'text-bottom', marginRight: 4 }}>info</span>
-                Batches are consolidated per product. Gross &amp; Return are physical units for the period.
+                Batches are consolidated per product. Opening &amp; Closing are real physical stock at the period boundaries.
+                Purchase includes both purchase entries and manufacturing yields added in the period.
                 Net Sale (Value) is the actual billed revenue net of discounts and returns.
-                Closing Stock = Opening − Gross Sale + Return.
+                Closing = Opening + Purchase − Gross Sale + Return.
               </div>
             </div>
           </div>
@@ -918,13 +942,14 @@ export default function Reports() {
                       <tr>
                         <th style={{ width: '4%' }}>Sr</th>
                         <th>Product</th>
-                        <th style={{ width: '10%' }}>Pack Size</th>
-                        <th style={{ width: '9%', textAlign: 'right' }}>Opening Stock</th>
-                        <th style={{ width: '9%', textAlign: 'right' }}>Gross Sale</th>
-                        <th style={{ width: '8%', textAlign: 'right' }}>Return</th>
+                        <th style={{ width: '9%' }}>Pack Size</th>
+                        <th style={{ width: '8%', textAlign: 'right' }}>Opening</th>
+                        <th style={{ width: '8%', textAlign: 'right' }}>Purchase</th>
+                        <th style={{ width: '8%', textAlign: 'right' }}>Gross Sale</th>
+                        <th style={{ width: '7%', textAlign: 'right' }}>Return</th>
                         <th style={{ width: '9%', textAlign: 'right' }}>Net Sale (Unit)</th>
-                        <th style={{ width: '12%', textAlign: 'right' }}>Net Sale (Value)</th>
-                        <th style={{ width: '9%', textAlign: 'right' }}>Closing Stock</th>
+                        <th style={{ width: '11%', textAlign: 'right' }}>Net Sale (Value)</th>
+                        <th style={{ width: '8%', textAlign: 'right' }}>Closing</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -936,6 +961,7 @@ export default function Reports() {
                             <td style={{ fontWeight: 600 }}>{row.product_name}</td>
                             <td style={{ color: 'var(--gray-500)' }}>{row.pack_size || '—'}</td>
                             <td style={{ textAlign: 'right' }}>{row.opening_stock}</td>
+                            <td style={{ textAlign: 'right' }}>{row.purchase_qty > 0 ? row.purchase_qty : '—'}</td>
                             <td style={{ textAlign: 'right' }}>{row.gross_qty > 0 ? row.gross_qty : '—'}</td>
                             <td style={{ textAlign: 'right' }}>{row.return_qty > 0 ? row.return_qty : '—'}</td>
                             <td style={{ textAlign: 'right', fontWeight: 600 }}>{row.net_sale_unit}</td>
@@ -944,7 +970,7 @@ export default function Reports() {
                               textAlign: 'right',
                               fontWeight: 700,
                               color: closingNeg ? 'var(--amber)' : undefined,
-                            }} title={closingNeg ? 'Negative closing stock — check for unrecorded purchases in period' : undefined}>
+                            }} title={closingNeg ? 'Negative closing stock — data integrity check needed (possible manual inventory adjustment or return without matching sale)' : undefined}>
                               {row.closing_stock}
                             </td>
                           </tr>
@@ -955,6 +981,7 @@ export default function Reports() {
                       <tr>
                         <td colSpan={3} className="report-tfoot-label">Total</td>
                         <td className="report-tfoot-num">{stockTotals.opening}</td>
+                        <td className="report-tfoot-num">{stockTotals.purchase}</td>
                         <td className="report-tfoot-num">{stockTotals.gross}</td>
                         <td className="report-tfoot-num">{stockTotals.ret}</td>
                         <td className="report-tfoot-num">{stockTotals.netU}</td>
