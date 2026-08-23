@@ -121,6 +121,14 @@ export default function Reports() {
   const [summaryData, setSummaryData] = useState(null);   // { rows, layers }
   const [summaryLoading, setSummaryLoading] = useState(false);
 
+  // Sale & Stock report state
+  const [companies, setCompanies] = useState([]);
+  const [stockCompany, setStockCompany] = useState('');
+  const [stockFrom, setStockFrom] = useState('');
+  const [stockTo, setStockTo] = useState('');
+  const [stockRows, setStockRows] = useState(null);
+  const [stockLoading, setStockLoading] = useState(false);
+
   useEffect(() => {
     Promise.all([
       api.get('/customers'),
@@ -128,14 +136,16 @@ export default function Reports() {
       api.get('/employees?role=Salesman'),
       api.get('/employees?role=Supplier'),
       api.get('/geography/geo'),
+      api.get('/companies'),
     ])
-      .then(([c, s, e_sm, e_sp, g]) => {
+      .then(([c, s, e_sm, e_sp, g, co]) => {
         setCustomers(c.data);
         setSuppliers(s.data);
         setEmployeesSalesman(e_sm.data);
         setEmployeesSupplier(e_sp.data);
         setAreas(g.data.areas);
         setTerritories(g.data.territories);
+        setCompanies(co.data || []);
         setDataLoading(false);
       })
       .catch(() => setDataLoading(false));
@@ -277,6 +287,35 @@ export default function Reports() {
     }
   };
 
+  const fetchSaleStock = async () => {
+    setStockLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (stockFrom) params.append('from_date', stockFrom);
+      if (stockTo) params.append('to_date', stockTo);
+      if (stockCompany) params.append('company_id', stockCompany);
+      const r = await api.get(`/reports/sale-stock-report?${params}`);
+      setStockRows(r.data.rows || []);
+    } catch {
+      toast.error('Error fetching Sale & Stock report');
+    } finally {
+      setStockLoading(false);
+    }
+  };
+
+  const downloadSaleStockPDF = async () => {
+    const params = new URLSearchParams();
+    if (stockFrom) params.append('from_date', stockFrom);
+    if (stockTo) params.append('to_date', stockTo);
+    if (stockCompany) params.append('company_id', stockCompany);
+    try {
+      const res = await api.get(`/reports/sale-stock-report/pdf?${params}`, { responseType: 'blob' });
+      downloadBlob(res, 'sale-stock-report.pdf');
+    } catch {
+      toast.error('Error downloading PDF');
+    }
+  };
+
   const ledgerEntity = ledger?.customer || ledger?.supplier;
   const ledgerRows = ledger?.ledger || [];
   const ob = parseFloat(ledger?.openingBalance || 0);
@@ -313,6 +352,15 @@ export default function Reports() {
     rec: t.rec + parseFloat(r.recovered_amount || 0),
   }), { gross: 0, ret: 0, net: 0, disc: 0, rec: 0 });
 
+  const stockTotals = (stockRows || []).reduce((t, r) => ({
+    opening: t.opening + (parseInt(r.opening_stock, 10) || 0),
+    gross:   t.gross   + (parseInt(r.gross_qty, 10)     || 0),
+    ret:     t.ret     + (parseInt(r.return_qty, 10)    || 0),
+    netU:    t.netU    + (parseInt(r.net_sale_unit, 10) || 0),
+    netV:    t.netV    + (parseFloat(r.net_sale_value)  || 0),
+    closing: t.closing + (parseInt(r.closing_stock, 10) || 0),
+  }), { opening: 0, gross: 0, ret: 0, netU: 0, netV: 0, closing: 0 });
+
   if (dataLoading) {
     return (
       <Layout title="Reports">
@@ -329,6 +377,7 @@ export default function Reports() {
           { id: 'sales', label: 'Sales Report', icon: 'sell' },
           { id: 'recovery', label: 'Recovery Report', icon: 'account_balance_wallet' },
           { id: 'summary', label: 'Sale Summary', icon: 'layers' },
+          { id: 'saleStock', label: 'Sale & Stock', icon: 'inventory_2' },
         ].map(tab => (
           <button
             key={tab.id}
@@ -791,6 +840,133 @@ export default function Reports() {
               </div>
             );
           })()}
+        </>
+      )}
+
+      {/* ── Sale & Stock Report ── */}
+      {reportTab === 'saleStock' && (
+        <>
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div className="card-header"><div className="card-title">Sale &amp; Stock Report</div></div>
+            <div className="card-body">
+              <ReportFilterLayout
+                loading={stockLoading}
+                onGenerate={fetchSaleStock}
+                onDownload={downloadSaleStockPDF}
+                hasData={!!stockRows}
+                fields={
+                  <>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Company</label>
+                      <select
+                        className="form-control"
+                        value={stockCompany}
+                        onChange={e => { setStockCompany(e.target.value); setStockRows(null); }}
+                      >
+                        <option value="">All Companies</option>
+                        {companies.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">From Date</label>
+                      <input className="form-control" type="date" value={stockFrom}
+                        onChange={e => { setStockFrom(e.target.value); setStockRows(null); }} />
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">To Date</label>
+                      <input className="form-control" type="date" value={stockTo}
+                        onChange={e => { setStockTo(e.target.value); setStockRows(null); }} />
+                    </div>
+                  </>
+                }
+              />
+              <div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 12, lineHeight: 1.55 }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 14, verticalAlign: 'text-bottom', marginRight: 4 }}>info</span>
+                Batches are consolidated per product. Gross &amp; Return are physical units for the period.
+                Net Sale (Value) is the actual billed revenue net of discounts and returns.
+                Closing Stock = Opening − Gross Sale + Return.
+              </div>
+            </div>
+          </div>
+
+          {stockRows && (
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title">
+                  {stockRows.length} product{stockRows.length !== 1 ? 's' : ''}
+                  {stockCompany && (() => {
+                    const c = companies.find(x => String(x.id) === String(stockCompany));
+                    return c ? (
+                      <span style={{ fontWeight: 400, color: 'var(--gray-500)', marginLeft: 8 }}>
+                        · {c.name}
+                      </span>
+                    ) : null;
+                  })()}
+                </div>
+              </div>
+              <div className="table-wrap">
+                {stockRows.length === 0 ? (
+                  <div className="empty-state">
+                    <div className="empty-state-title">No product activity in selected period</div>
+                    <div className="empty-state-subtitle">Try widening the date range or clearing the company filter.</div>
+                  </div>
+                ) : (
+                  <table className="report-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: '4%' }}>Sr</th>
+                        <th>Product</th>
+                        <th style={{ width: '10%' }}>Pack Size</th>
+                        <th style={{ width: '9%', textAlign: 'right' }}>Opening Stock</th>
+                        <th style={{ width: '9%', textAlign: 'right' }}>Gross Sale</th>
+                        <th style={{ width: '8%', textAlign: 'right' }}>Return</th>
+                        <th style={{ width: '9%', textAlign: 'right' }}>Net Sale (Unit)</th>
+                        <th style={{ width: '12%', textAlign: 'right' }}>Net Sale (Value)</th>
+                        <th style={{ width: '9%', textAlign: 'right' }}>Closing Stock</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stockRows.map((row, i) => {
+                        const closingNeg = row.closing_stock < 0;
+                        return (
+                          <tr key={row.product_id}>
+                            <td>{i + 1}</td>
+                            <td style={{ fontWeight: 600 }}>{row.product_name}</td>
+                            <td style={{ color: 'var(--gray-500)' }}>{row.pack_size || '—'}</td>
+                            <td style={{ textAlign: 'right' }}>{row.opening_stock}</td>
+                            <td style={{ textAlign: 'right' }}>{row.gross_qty > 0 ? row.gross_qty : '—'}</td>
+                            <td style={{ textAlign: 'right' }}>{row.return_qty > 0 ? row.return_qty : '—'}</td>
+                            <td style={{ textAlign: 'right', fontWeight: 600 }}>{row.net_sale_unit}</td>
+                            <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(row.net_sale_value)}</td>
+                            <td style={{
+                              textAlign: 'right',
+                              fontWeight: 700,
+                              color: closingNeg ? 'var(--amber)' : undefined,
+                            }} title={closingNeg ? 'Negative closing stock — check for unrecorded purchases in period' : undefined}>
+                              {row.closing_stock}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={3} className="report-tfoot-label">Total</td>
+                        <td className="report-tfoot-num">{stockTotals.opening}</td>
+                        <td className="report-tfoot-num">{stockTotals.gross}</td>
+                        <td className="report-tfoot-num">{stockTotals.ret}</td>
+                        <td className="report-tfoot-num">{stockTotals.netU}</td>
+                        <td className="report-tfoot-num">{fmt(stockTotals.netV)}</td>
+                        <td className="report-tfoot-num">{stockTotals.closing}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                )}
+              </div>
+            </div>
+          )}
         </>
       )}
     </Layout>
