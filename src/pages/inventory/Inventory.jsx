@@ -28,12 +28,18 @@ const getProductSuggestions = (products, query) => {
   const normalized = (query || '').trim().toLowerCase();
   if (!normalized) return [];
   return products
-    .map(p => ({
-      product: p,
-      score: p.name.toLowerCase().startsWith(normalized) ? 0 : p.name.toLowerCase().includes(normalized) ? 1 : 2,
-    }))
+    .map(p => {
+      // Defensive: a product with a missing name would otherwise crash
+      // the whole page here. Treat it as an empty name — it just won't
+      // match any query.
+      const name = (p?.name || '').toLowerCase();
+      return {
+        product: p,
+        score: name.startsWith(normalized) ? 0 : name.includes(normalized) ? 1 : 2,
+      };
+    })
     .filter(item => item.score < 2)
-    .sort((a, b) => a.score - b.score || a.product.name.localeCompare(b.product.name))
+    .sort((a, b) => a.score - b.score || (a.product.name || '').localeCompare(b.product.name || ''))
     .slice(0, 8)
     .map(item => item.product);
 };
@@ -51,6 +57,19 @@ export default function Inventory() {
   const [analyticsFilter, setAnalyticsFilter] = useState(null); // null | 'low_stock' | 'expiring' | 'expired'
   const canViewPurchaseRates = user?.role === 'admin' || can('perm_view_purchase_rate');
   const canAddInventory = user?.role === 'admin' || can('perm_manage_inventory') || can('perm_add_purchase');
+
+  // Admin bypass — matches the backend's sanitizeInventoryRowsWithAdminBypass
+  // in backend/inventory.js. For any user with the base view permission we
+  // then respect the per-product `show_purchase_rate` flag; for admins the
+  // rate is ALWAYS visible regardless of that flag (they need the number to
+  // run the business — the flag is meant to hide cost data from junior
+  // staff, not from account owners).
+  const isAdmin = user?.role === 'admin';
+  const canSeePurchaseRateForItem = (item) => {
+    if (!canViewPurchaseRates) return false;
+    if (isAdmin) return true;
+    return item?.show_purchase_rate !== false && item?.show_purchase_rate !== 0;
+  };
 
   // Manual "Add Inventory" modal state
   const [invModal, setInvModal] = useState(false);
@@ -93,9 +112,10 @@ export default function Inventory() {
   useEffect(load, []);
 
   const filtered = data.filter(item => {
+    const q = (search || '').toLowerCase();
     const matchSearch =
-      item.product_name.toLowerCase().includes(search.toLowerCase()) ||
-      item.batch_no.toLowerCase().includes(search.toLowerCase());
+      (item.product_name || '').toLowerCase().includes(q) ||
+      (item.batch_no    || '').toLowerCase().includes(q);
     const matchActive = showAll || item.qty > 0;
     const matchCompany = !companyFilter || String(item.company_id) === String(companyFilter);
 
@@ -707,9 +727,7 @@ export default function Inventory() {
                         </span>
                       </td>
                       <td className="mono">
-                        {canViewPurchaseRates &&
-                        item.show_purchase_rate !== false &&
-                        item.show_purchase_rate !== 0
+                        {canSeePurchaseRateForItem(item)
                           ? formatCurrency(item.purchase_rate)
                           : "—"}
                       </td>
@@ -1177,9 +1195,7 @@ export default function Inventory() {
                       {editItem.pack_size || "—"}
                     </div>
                   </div>
-                  {canViewPurchaseRates &&
-                    editItem.show_purchase_rate !== false &&
-                    editItem.show_purchase_rate !== 0 && (
+                  {canSeePurchaseRateForItem(editItem) && (
                       <div style={{ textAlign: "right" }}>
                         <div
                           style={{
