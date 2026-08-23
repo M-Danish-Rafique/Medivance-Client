@@ -252,7 +252,14 @@ export default function Purchase() {
   // Reset to page 1 whenever the filter set changes so the operator isn't
   // stranded on page 4 of a result set that no longer has 4 pages. Sort
   // changes intentionally do NOT reset — same data, reordered.
-  useEffect(() => { setPage(1); }, [filters]); // eslint-disable-line react-hooks/exhaustive-deps
+  //
+  // Note: `setPage` is intentionally omitted from the dependency list —
+  // it's a stable setter from usePagination and adding it can cause a
+  // re-render loop if the hook returns a fresh reference each render.
+  // No eslint-disable directive here because this project's ESLint
+  // config does not register `eslint-plugin-react-hooks`, and Vercel's
+  // strict CI build fails on directives that reference unknown rules.
+  useEffect(() => { setPage(1); }, [filters]);
 
   const [suppliers, setSuppliers] = useState([]);
   const [products, setProducts] = useState([]);
