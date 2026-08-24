@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Layout from '../../components/layout/Layout';
 import Modal from '../../components/common/Modal';
 import api from '../../utils/api';
@@ -8,6 +8,85 @@ import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
 import { useAuth } from '../../context/AuthContext';
 import { formatDatePKT, todayPKT, addMonthsPKT } from '../../utils/dateUtils';
+
+// Column visibility defaults for the Stock Ledger table. Keys must match the
+// `field` used by the sort/header/body render code below. Toggled via the
+// kebab menu in the table header — persisted to localStorage so a user's
+// preference survives reloads.
+const DEFAULT_COLUMN_VISIBILITY = {
+  company_name:     false, // hidden by default (badge is redundant on the shop floor)
+  pack_size:        true,
+  batch_no:         true,
+  qty:              true,
+  purchase_rate:    true,  // gated separately by canSeePurchaseRateForItem
+  sale_rate:        true,
+  retail_price:     false, // hidden by default
+  total_cost:       true,  // qty * purchase_rate — shown as "Cost"
+  total_sale_value: true,  // qty * sale_rate — shown as "Revenue"
+  profit:           false, // hidden by default (Revenue − Cost)
+  exp_date:         true,
+  status:           true,
+};
+
+// Edit action is intentionally NOT in this list — the edit button lives in
+// the trailing kebab-menu column and is always available for permitted users.
+const COLUMN_MENU_ITEMS = [
+  { key: 'company_name',     label: 'Company Name' },
+  { key: 'pack_size',        label: 'Pack'         },
+  { key: 'batch_no',         label: 'Batch No'     },
+  { key: 'qty',              label: 'Qty'          },
+  { key: 'purchase_rate',    label: 'Pur. Rate'    },
+  { key: 'sale_rate',        label: 'Sale Rate'    },
+  { key: 'retail_price',     label: 'Retail Price' },
+  { key: 'total_cost',       label: 'Cost'         },
+  { key: 'total_sale_value', label: 'Revenue'      },
+  { key: 'profit',           label: 'Profit'       },
+  { key: 'exp_date',         label: 'Exp Date'     },
+  { key: 'status',           label: 'Status'       },
+];
+
+const COLUMN_VISIBILITY_STORAGE_KEY = 'inventory.columnVisibility.v1';
+
+// Status priority for column sorting — lowest priority (worst state) first
+// under ascending order so operators see the problems that need attention.
+const statusRank = (item) => {
+  const qty = parseFloat(item.qty) || 0;
+  if (qty === 0) return 0;
+  if (item.exp_date && new Date(item.exp_date) < new Date()) return 1;
+  if (item.exp_date && (new Date(item.exp_date) - new Date()) / 86400000 <= 90) return 2;
+  if (qty <= item.low_stock_threshold) return 3;
+  return 4;
+};
+
+// Sortable table header cell. Click cycles asc → desc → asc. Uses the same
+// material icons as the rest of the app; inactive columns show a faint
+// `unfold_more` glyph so users know the header is interactive. Icon size
+// is kept just under the header text so the row height matches a plain <th>.
+function SortableTh({ field, label, sortField, sortOrder, onSort }) {
+  const active = sortField === field;
+  return (
+    <th
+      onClick={() => onSort(field)}
+      style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+      title={`Sort by ${label}`}
+    >
+      {label}
+      <span
+        className="material-symbols-outlined"
+        style={{
+          fontSize: 13,
+          marginLeft: 3,
+          verticalAlign: 'middle',
+          lineHeight: 1,
+          color: active ? 'var(--navy)' : 'var(--gray-300)',
+          transition: 'color 0.15s ease',
+        }}
+      >
+        {active ? (sortOrder === 'asc' ? 'arrow_upward' : 'arrow_downward') : 'unfold_more'}
+      </span>
+    </th>
+  );
+}
 
 const emptyInventoryItem = {
   row_id: null,
@@ -49,7 +128,6 @@ export default function Inventory() {
   const [data, setData] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [products, setProducts] = useState([]);
-  const [lowStock, setLowStock] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showAll, setShowAll] = useState(false);        // false = active only (qty > 0)
@@ -93,16 +171,65 @@ export default function Inventory() {
   const [printCompany, setPrintCompany] = useState('');
   const [printLoading, setPrintLoading] = useState(false);
 
+  // ─── Sorting ─────────────────────────────────────────────────────────────
+  const [sortField, setSortField] = useState('product_name');
+  const [sortOrder, setSortOrder] = useState('asc');
+
+  const toggleSort = (field) => {
+    if (sortField === field) {
+      setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortOrder('asc');
+    }
+  };
+
+  // ─── Column visibility (kebab menu in table header) ──────────────────────
+  const [columnVisibility, setColumnVisibility] = useState(() => {
+    try {
+      const raw = localStorage.getItem(COLUMN_VISIBILITY_STORAGE_KEY);
+      if (raw) return { ...DEFAULT_COLUMN_VISIBILITY, ...JSON.parse(raw) };
+    } catch {}
+    return DEFAULT_COLUMN_VISIBILITY;
+  });
+  const [showColumnMenu, setShowColumnMenu] = useState(false);
+  const columnMenuRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(columnVisibility));
+    } catch {}
+  }, [columnVisibility]);
+
+  useEffect(() => {
+    if (!showColumnMenu) return;
+    const onDocClick = (e) => {
+      if (columnMenuRef.current && !columnMenuRef.current.contains(e.target)) {
+        setShowColumnMenu(false);
+      }
+    };
+    const onEsc = (e) => { if (e.key === 'Escape') setShowColumnMenu(false); };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onEsc);
+    };
+  }, [showColumnMenu]);
+
+  const toggleColumn = (key) =>
+    setColumnVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
+  const isColVisible = (key) => columnVisibility[key] !== false;
+  const resetColumns = () => setColumnVisibility(DEFAULT_COLUMN_VISIBILITY);
+
   const load = () => {
     setLoading(true);
     Promise.all([
       api.get('/inventory'),
-      api.get('/inventory/low-stock'),
       api.get('/companies'),
       api.get('/products'),
-    ]).then(([inv, low, comp, prod]) => {
+    ]).then(([inv, comp, prod]) => {
       setData(inv.data);
-      setLowStock(low.data);
       setCompanies(comp.data);
       setProducts(prod.data);
       setLoading(false);
@@ -116,12 +243,18 @@ export default function Inventory() {
     const matchSearch =
       (item.product_name || '').toLowerCase().includes(q) ||
       (item.batch_no    || '').toLowerCase().includes(q);
-    const matchActive = showAll || item.qty > 0;
+    // "Active Only" hides qty=0 batches by default, but the Low Stock stat
+    // card explicitly targets out-of-stock items — bypass the active filter
+    // for that analytics view so a user drilling into Low Stock always sees
+    // the zero-qty batches regardless of the toggle position.
+    const matchActive = showAll || item.qty > 0 || analyticsFilter === 'low_stock';
     const matchCompany = !companyFilter || String(item.company_id) === String(companyFilter);
 
     let matchAnalytics = true;
     if (analyticsFilter) {
-      const isLow = item.qty > 0 && item.qty <= item.low_stock_threshold;
+      // "Low Stock" now includes qty = 0 (out of stock) — a zero-qty batch is
+      // the most urgent restock signal, so it belongs in the same bucket.
+      const isLow = item.qty <= item.low_stock_threshold;
       const isExpired = item.exp_date && new Date(item.exp_date) < new Date();
       const isExpiringSoon =
         !isExpired &&
@@ -135,7 +268,54 @@ export default function Inventory() {
 
     return matchSearch && matchActive && matchCompany && matchAnalytics;
   });
-  const { page, setPage, pageSize, setPageSize, totalPages, totalItems, pageItems: pagedInventory } = usePagination(filtered, 25);
+
+  // Sort AFTER filter so the sort key applies to the visible slice only. Sort
+  // is stable-ish (Array.sort is stable in modern JS) so ties keep the
+  // original SQL order (product → batch).
+  const sorted = useMemo(() => {
+    const arr = [...filtered];
+    const dir = sortOrder === 'asc' ? 1 : -1;
+
+    const cmpStr = (a, b) => (a || '').toString().localeCompare((b || '').toString(), undefined, { sensitivity: 'base', numeric: true });
+    const cmpNum = (a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0);
+
+    arr.sort((a, b) => {
+      let r = 0;
+      switch (sortField) {
+        case 'product_name':    r = cmpStr(a.product_name, b.product_name); break;
+        case 'company_name':    r = cmpStr(a.company_name, b.company_name); break;
+        case 'pack_size':       r = cmpStr(a.pack_size, b.pack_size); break;
+        case 'batch_no':        r = cmpStr(a.batch_no, b.batch_no); break;
+        case 'qty':             r = cmpNum(a.qty, b.qty); break;
+        case 'purchase_rate':   r = cmpNum(a.purchase_rate, b.purchase_rate); break;
+        case 'sale_rate':       r = cmpNum(a.sale_rate, b.sale_rate); break;
+        case 'retail_price':    r = cmpNum(a.retail_price, b.retail_price); break;
+        case 'total_cost':      r = cmpNum((a.qty || 0) * (a.purchase_rate || 0), (b.qty || 0) * (b.purchase_rate || 0)); break;
+        case 'total_sale_value':r = cmpNum((a.qty || 0) * (a.sale_rate     || 0), (b.qty || 0) * (b.sale_rate     || 0)); break;
+        case 'profit': {
+          const av = (a.qty || 0) * ((a.sale_rate || 0) - (a.purchase_rate || 0));
+          const bv = (b.qty || 0) * ((b.sale_rate || 0) - (b.purchase_rate || 0));
+          r = cmpNum(av, bv);
+          break;
+        }
+        case 'exp_date': {
+          // Null/undefined expiries sink to the bottom regardless of order.
+          const av = a.exp_date ? new Date(a.exp_date).getTime() : null;
+          const bv = b.exp_date ? new Date(b.exp_date).getTime() : null;
+          if (av === null && bv === null) r = 0;
+          else if (av === null) return 1;
+          else if (bv === null) return -1;
+          else r = av - bv;
+          break;
+        }
+        case 'status':          r = statusRank(a) - statusRank(b); break;
+        default:                r = cmpStr(a.product_name, b.product_name);
+      }
+      return r * dir;
+    });
+    return arr;
+  }, [filtered, sortField, sortOrder]);
+  const { page, setPage, pageSize, setPageSize, totalPages, totalItems, pageItems: pagedInventory } = usePagination(sorted, 25);
 
   const expiringSoon = data.filter(item => {
     if (!item.exp_date) return false;
@@ -146,6 +326,11 @@ export default function Inventory() {
   });
 
   const expired = data.filter(item => item.exp_date && new Date(item.exp_date) < new Date());
+
+  // Include out-of-stock (qty = 0) in the Low Stock count. Computed
+  // client-side because the backend /inventory/low-stock endpoint filters
+  // qty > 0 for the (removed) banner use case.
+  const lowStockCount = data.filter(item => item.qty <= item.low_stock_threshold).length;
 
   const getRowStyle = (item) => {
     if (!item.exp_date) return {};
@@ -394,28 +579,6 @@ export default function Inventory() {
 
   return (
     <Layout title="Inventory">
-      {lowStock.length > 0 && (
-        <div className="alert alert-warning" style={{ marginBottom: 20 }}>
-          <span
-            className="material-symbols-outlined"
-            style={{ marginRight: 8, fontSize: 18 }}
-          >
-            warning
-          </span>
-          <span>
-            <strong>
-              {lowStock.length} item{lowStock.length > 1 ? "s" : ""}
-            </strong>{" "}
-            running low on stock:&nbsp;
-            {lowStock
-              .slice(0, 3)
-              .map((i) => i.product_name)
-              .join(", ")}
-            {lowStock.length > 3 ? ` and ${lowStock.length - 3} more` : ""}
-          </span>
-        </div>
-      )}
-
       {/* Stats row */}
       <div
         style={{
@@ -435,7 +598,7 @@ export default function Inventory() {
           },
           {
             label: "Low Stock",
-            value: lowStock.length,
+            value: lowStockCount,
             icon: "warning",
             color: "#fef3c7",
             textColor: "#d97706",
@@ -650,19 +813,102 @@ export default function Inventory() {
             <table>
               <thead>
                 <tr>
-                  <th>Product Name</th>
-                  <th>Company</th>
-                  <th>Pack Size</th>
-                  <th>Batch No</th>
-                  <th>Qty</th>
-                  {canViewPurchaseRates && <th>Purchase Rate</th>}
-                  <th>Sale Rate</th>
-                  <th>Retail Price</th>
-                  <th>Exp Date</th>
-                  <th>Status</th>
-                  {canEditInventory && (
-                    <th style={{ textAlign: "center" }}>Actions</th>
+                  <SortableTh field="product_name" label="Product Name" sortField={sortField} sortOrder={sortOrder} onSort={toggleSort} />
+                  {isColVisible('company_name')  && <SortableTh field="company_name"  label="Company"      sortField={sortField} sortOrder={sortOrder} onSort={toggleSort} />}
+                  {isColVisible('pack_size')     && <SortableTh field="pack_size"     label="Pack"         sortField={sortField} sortOrder={sortOrder} onSort={toggleSort} />}
+                  {isColVisible('batch_no')      && <SortableTh field="batch_no"      label="Batch No"     sortField={sortField} sortOrder={sortOrder} onSort={toggleSort} />}
+                  {isColVisible('qty')           && <SortableTh field="qty"           label="Qty"          sortField={sortField} sortOrder={sortOrder} onSort={toggleSort} />}
+                  {canViewPurchaseRates && isColVisible('purchase_rate') && (
+                    <SortableTh field="purchase_rate" label="Pur. Rate" sortField={sortField} sortOrder={sortOrder} onSort={toggleSort} />
                   )}
+                  {isColVisible('sale_rate')     && <SortableTh field="sale_rate"     label="Sale Rate"    sortField={sortField} sortOrder={sortOrder} onSort={toggleSort} />}
+                  {isColVisible('retail_price')  && <SortableTh field="retail_price"  label="Retail Price" sortField={sortField} sortOrder={sortOrder} onSort={toggleSort} />}
+                  {canViewPurchaseRates && isColVisible('total_cost') && (
+                    <SortableTh field="total_cost" label="Cost" sortField={sortField} sortOrder={sortOrder} onSort={toggleSort} />
+                  )}
+                  {isColVisible('total_sale_value') && (
+                    <SortableTh field="total_sale_value" label="Revenue" sortField={sortField} sortOrder={sortOrder} onSort={toggleSort} />
+                  )}
+                  {canViewPurchaseRates && isColVisible('profit') && (
+                    <SortableTh field="profit" label="Profit" sortField={sortField} sortOrder={sortOrder} onSort={toggleSort} />
+                  )}
+                  {isColVisible('exp_date')      && <SortableTh field="exp_date" label="Exp Date" sortField={sortField} sortOrder={sortOrder} onSort={toggleSort} />}
+                  {isColVisible('status')        && <SortableTh field="status"   label="Status"   sortField={sortField} sortOrder={sortOrder} onSort={toggleSort} />}
+                  {/* Kebab column-visibility menu — always shown as the last header cell */}
+                  <th style={{ width: 40, textAlign: 'center', position: 'relative' }}>
+                    <div ref={columnMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
+                      <button
+                        type="button"
+                        title="Show/hide columns"
+                        aria-label="Show/hide columns"
+                        aria-haspopup="true"
+                        aria-expanded={showColumnMenu}
+                        onClick={(e) => { e.stopPropagation(); setShowColumnMenu(v => !v); }}
+                        style={{
+                          background: showColumnMenu ? 'var(--gray-100)' : 'transparent',
+                          border: 'none', padding: 2, borderRadius: 4,
+                          color: 'var(--gray-600)', cursor: 'pointer',
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                        }}
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+                          more_vert
+                        </span>
+                      </button>
+                      {showColumnMenu && (
+                        <div
+                          role="menu"
+                          style={{
+                            position: 'absolute', top: 26, right: 0, zIndex: 30,
+                            background: 'white', border: '1px solid var(--gray-200)',
+                            borderRadius: 6, boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+                            minWidth: 170, padding: 4, textAlign: 'left',
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {COLUMN_MENU_ITEMS.map((c) => {
+                            const checked = isColVisible(c.key);
+                            return (
+                              <label
+                                key={c.key}
+                                style={{
+                                  display: 'flex', alignItems: 'center', gap: 8,
+                                  padding: '4px 8px', cursor: 'pointer',
+                                  fontSize: 11, color: 'var(--gray-700)',
+                                  borderRadius: 4, fontWeight: 400,
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleColumn(c.key)}
+                                  style={{ margin: 0, cursor: 'pointer' }}
+                                />
+                                <span style={{ flex: 1 }}>{c.label}</span>
+                              </label>
+                            );
+                          })}
+                          <div style={{
+                            borderTop: '1px solid var(--gray-100)',
+                            marginTop: 4, paddingTop: 4, textAlign: 'right',
+                          }}>
+                            <button
+                              type="button"
+                              onClick={resetColumns}
+                              style={{
+                                background: 'transparent', border: 'none',
+                                color: 'var(--gray-500)', fontSize: 11,
+                                cursor: 'pointer', padding: '2px 6px', borderRadius: 4,
+                              }}
+                              title="Reset to defaults"
+                            >
+                              Reset
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -679,6 +925,13 @@ export default function Inventory() {
                       90;
                   const isInactive = item.qty === 0;
 
+                  const qtyNum       = parseFloat(item.qty) || 0;
+                  const purchaseRate = parseFloat(item.purchase_rate) || 0;
+                  const saleRate     = parseFloat(item.sale_rate)     || 0;
+                  const totalCost      = qtyNum * purchaseRate;
+                  const totalSaleValue = qtyNum * saleRate;
+                  const profit         = totalSaleValue - totalCost;
+
                   return (
                     <tr
                       key={i}
@@ -688,104 +941,133 @@ export default function Inventory() {
                       }}
                     >
                       <td style={{ fontWeight: 600 }}>{item.product_name}</td>
-                      <td>
-                        {item.company_name ? (
-                          <span
-                            className="badge badge-blue"
-                            style={{ fontSize: 11 }}
-                          >
-                            {item.company_name}
-                          </span>
-                        ) : (
-                          <span style={{ color: "var(--gray-300)" }}>—</span>
-                        )}
-                      </td>
-                      <td>{item.pack_size || "—"}</td>
-                      <td>
-                        <span className="mono badge badge-gray">
-                          {item.batch_no}
-                        </span>
-                      </td>
-                      <td>
-                        <span
-                          style={{
-                            fontWeight: 700,
-                            color: isInactive
-                              ? "var(--gray-400)"
-                              : isLow
-                                ? "var(--red)"
-                                : "var(--green)",
-                          }}
-                        >
-                          {isLow && (
-                            <span
-                              className="low-stock-dot"
-                              style={{ marginRight: 5 }}
-                            />
+                      {isColVisible('company_name') && (
+                        <td>
+                          {item.company_name ? (
+                            <span className="badge badge-blue" style={{ fontSize: 11 }}>
+                              {item.company_name}
+                            </span>
+                          ) : (
+                            <span style={{ color: "var(--gray-300)" }}>—</span>
                           )}
-                          {item.qty}
-                        </span>
-                      </td>
-                      <td className="mono">
-                        {canSeePurchaseRateForItem(item)
-                          ? formatCurrency(item.purchase_rate)
-                          : "—"}
-                      </td>
-                      <td className="mono">{formatCurrency(item.sale_rate)}</td>
-                      <td className="mono">
-                        {formatCurrency(item.retail_price)}
-                      </td>
-                      <td>
-                        {item.exp_date ? (
+                        </td>
+                      )}
+                      {isColVisible('pack_size') && <td>{item.pack_size || "—"}</td>}
+                      {isColVisible('batch_no') && (
+                        <td>
+                          <span className="mono badge badge-gray">
+                            {item.batch_no}
+                          </span>
+                        </td>
+                      )}
+                      {isColVisible('qty') && (
+                        <td>
                           <span
                             style={{
-                              color: isExpired
-                                ? "var(--red)"
-                                : isExpiringSoon
-                                  ? "var(--amber)"
-                                  : "var(--gray-700)",
-                              fontWeight:
-                                isExpired || isExpiringSoon ? 700 : 400,
+                              fontWeight: 700,
+                              color: isInactive
+                                ? "var(--gray-400)"
+                                : isLow
+                                  ? "var(--red)"
+                                  : "var(--green)",
                             }}
                           >
-                            {formatDatePKT(item.exp_date)}
+                            {isLow && (
+                              <span
+                                className="low-stock-dot"
+                                style={{ marginRight: 5 }}
+                              />
+                            )}
+                            {item.qty}
                           </span>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td>
-                        {isInactive ? (
-                          <span className="badge badge-gray">Out of Stock</span>
-                        ) : isExpired ? (
-                          <span className="badge badge-red">Expired</span>
-                        ) : isExpiringSoon ? (
-                          <span className="badge badge-amber">
-                            Expiring Soon
-                          </span>
-                        ) : isLow ? (
-                          <span className="badge badge-red">Low Stock</span>
-                        ) : (
-                          <span className="badge badge-green">In Stock</span>
-                        )}
-                      </td>
-                      {canEditInventory && (
-                        <td style={{ textAlign: "center" }}>
+                        </td>
+                      )}
+                      {canViewPurchaseRates && isColVisible('purchase_rate') && (
+                        <td className="mono">
+                          {canSeePurchaseRateForItem(item)
+                            ? formatCurrency(item.purchase_rate)
+                            : "—"}
+                        </td>
+                      )}
+                      {isColVisible('sale_rate') && (
+                        <td className="mono">{formatCurrency(item.sale_rate)}</td>
+                      )}
+                      {isColVisible('retail_price') && (
+                        <td className="mono">{formatCurrency(item.retail_price)}</td>
+                      )}
+                      {canViewPurchaseRates && isColVisible('total_cost') && (
+                        <td className="mono">
+                          {canSeePurchaseRateForItem(item)
+                            ? formatCurrency(totalCost)
+                            : "—"}
+                        </td>
+                      )}
+                      {isColVisible('total_sale_value') && (
+                        <td className="mono">
+                          {formatCurrency(totalSaleValue)}
+                        </td>
+                      )}
+                      {canViewPurchaseRates && isColVisible('profit') && (
+                        <td className="mono">
+                          {canSeePurchaseRateForItem(item)
+                            ? formatCurrency(profit)
+                            : "—"}
+                        </td>
+                      )}
+                      {isColVisible('exp_date') && (
+                        <td>
+                          {item.exp_date ? (
+                            <span
+                              style={{
+                                color: isExpired
+                                  ? "var(--red)"
+                                  : isExpiringSoon
+                                    ? "var(--amber)"
+                                    : "var(--gray-700)",
+                                fontWeight:
+                                  isExpired || isExpiringSoon ? 700 : 400,
+                              }}
+                            >
+                              {formatDatePKT(item.exp_date)}
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                      )}
+                      {isColVisible('status') && (
+                        <td>
+                          {isInactive ? (
+                            <span className="badge badge-gray">Out of Stock</span>
+                          ) : isExpired ? (
+                            <span className="badge badge-red">Expired</span>
+                          ) : isExpiringSoon ? (
+                            <span className="badge badge-amber">
+                              Expiring Soon
+                            </span>
+                          ) : isLow ? (
+                            <span className="badge badge-red">Low Stock</span>
+                          ) : (
+                            <span className="badge badge-green">In Stock</span>
+                          )}
+                        </td>
+                      )}
+                      {/* Edit action — always shown for permitted users, sits under
+                          the kebab-menu column so the header stays clean. */}
+                      <td style={{ textAlign: 'center', width: 40 }}>
+                        {canEditInventory && (
                           <button
                             className="btn btn-outline btn-sm btn-icon"
                             title="Edit batch"
                             aria-label="Edit batch"
                             onClick={() => openEdit(item)}
                           >
-                            <span
-                              className="material-symbols-outlined"
-                              style={{ fontSize: 16 }}
-                            >
+                            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
                               edit
                             </span>
                           </button>
-                        </td>
-                      )}
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
