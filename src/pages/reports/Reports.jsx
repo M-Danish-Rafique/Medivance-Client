@@ -18,6 +18,103 @@ const SUMMARY_ENTITY_OPTIONS = [
 ];
 const SUMMARY_ENTITY_LABEL = Object.fromEntries(SUMMARY_ENTITY_OPTIONS.map(o => [o.key, o.label]));
 
+// ─── Sale & Stock: in-flow display modes ────────────────────────────────
+// Segmented control above the table lets the operator choose how the
+// Purchase and Adjustment (manual inventory add/edit) columns are shown.
+// The chosen mode is also sent to the PDF endpoint so print output matches
+// the on-screen shape.
+const STOCK_MODES = [
+  {
+    key:   'none',
+    label: 'None',
+    icon:  'visibility_off',
+    hint:  'Hide Purchase and Adjustment columns.',
+  },
+  {
+    key:   'split',
+    label: 'Split',
+    icon:  'view_column',
+    hint:  'Show Purchase and Adjustment as separate columns.',
+  },
+  {
+    key:   'combined',
+    label: 'Combined',
+    icon:  'merge_type',
+    hint:  'Show a single Purchase + Adjustment column.',
+  },
+];
+const STOCK_MODE_TOOLTIP =
+  'Choose how inventory in-flows are displayed:\n' +
+  '• None — hides Purchase & Adjustment columns\n' +
+  '• Split — separate columns for Purchase and Adjustment\n' +
+  '• Combined — merged Pur + Adj column\n' +
+  'The choice also applies to the downloaded PDF.';
+
+// Small, dependency-free segmented control (radio group semantics).
+// Rendered inline where used — kept module-local since it's specific to
+// this report's shape/tokens.
+function StockModeSegment({ value, onChange }) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Inventory in-flow display mode"
+      title={STOCK_MODE_TOOLTIP}
+      className="stock-mode-segment"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 2,
+        padding: 3,
+        borderRadius: 999,
+        background: 'var(--gray-100, #eef1f5)',
+        border: '1px solid var(--gray-200, #e2e6ec)',
+      }}
+    >
+      {STOCK_MODES.map(m => {
+        const active = value === m.key;
+        return (
+          <button
+            key={m.key}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            title={m.hint}
+            onClick={() => onChange(m.key)}
+            className={`stock-mode-segment__btn${active ? ' is-active' : ''}`}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '6px 12px',
+              border: 0,
+              borderRadius: 999,
+              cursor: 'pointer',
+              fontSize: 12.5,
+              fontWeight: active ? 600 : 500,
+              lineHeight: 1,
+              background: active ? 'var(--white, #fff)' : 'transparent',
+              color:      active ? 'var(--gray-900, #0f172a)' : 'var(--gray-600, #4b5563)',
+              boxShadow:  active
+                ? '0 1px 2px rgba(15,23,42,0.08), 0 0 0 1px rgba(15,23,42,0.06)'
+                : 'none',
+              transition: 'background 180ms ease, color 180ms ease, box-shadow 180ms ease',
+            }}
+          >
+            <span
+              className="material-symbols-outlined"
+              aria-hidden="true"
+              style={{ fontSize: 15, opacity: active ? 1 : 0.75 }}
+            >
+              {m.icon}
+            </span>
+            {m.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // Given the flat, already-sorted rows returned by the API (sorted by
 // layer1..layerN, matching the SQL ORDER BY), work out which cells should
 // be merged (rowSpan) so repeated outer-group values show once instead of
@@ -144,6 +241,12 @@ export default function Reports() {
   const [stockTo, setStockTo] = useState(_defaultStockRange.to);
   const [stockRows, setStockRows] = useState(null);
   const [stockLoading, setStockLoading] = useState(false);
+  // Stock in-flow display mode — controls whether Purchase/Adjustment
+  // columns are shown separately, merged, or hidden. Default 'none' keeps
+  // the initial view focused on sales; operator opts into inventory
+  // context on demand. Sent through to the PDF endpoint so downloads
+  // match the on-screen shape.
+  const [stockDisplayMode, setStockDisplayMode] = useState('none');
 
   useEffect(() => {
     Promise.all([
@@ -333,6 +436,9 @@ export default function Reports() {
     params.append('from_date', stockFrom);
     params.append('to_date', stockTo);
     if (stockCompany) params.append('company_id', stockCompany);
+    // Mirror on-screen inflow view in the PDF so what the operator sees is
+    // what gets printed.
+    params.append('stock_mode', stockDisplayMode);
     try {
       const res = await api.get(`/reports/sale-stock-report/pdf?${params}`, { responseType: 'blob' });
       downloadBlob(res, 'sale-stock-report.pdf');
@@ -910,20 +1016,34 @@ export default function Reports() {
                   </>
                 }
               />
-              <div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 12, lineHeight: 1.55 }}>
-                <span className="material-symbols-outlined" style={{ fontSize: 14, verticalAlign: 'text-bottom', marginRight: 4 }}>info</span>
-                Batches are consolidated per product. Opening &amp; Closing are real physical stock at the period boundaries.
-                Purchase includes both purchase entries and manufacturing yields added in the period.
-                Adjustment is the signed net of manual inventory adds/edits (positive = added, negative = removed).
-                Net Sale (Value) is the actual billed revenue net of discounts and returns.
-                Closing = Opening + Purchase + Adjustment − Gross Sale + Return.
-              </div>
             </div>
           </div>
 
           {stockRows && (
             <div className="card">
-              <div className="card-header">
+              {/* Scoped animation used when Purchase/Adjustment cells mount
+                  after a segmented-control change — a quick fade+slide-in
+                  removes the jarring "columns just teleported in" feel. */}
+              <style>{`
+                @keyframes stockColEnter {
+                  from { opacity: 0; transform: translateY(-2px); }
+                  to   { opacity: 1; transform: none; }
+                }
+                .stock-col-enter { animation: stockColEnter 220ms ease-out both; }
+                .report-table td, .report-table th {
+                  transition: background-color 220ms ease;
+                }
+              `}</style>
+              <div
+                className="card-header"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  flexWrap: 'wrap',
+                }}
+              >
                 <div className="card-title">
                   {stockRows.length} product{stockRows.length !== 1 ? 's' : ''}
                   {stockCompany && (() => {
@@ -935,6 +1055,10 @@ export default function Reports() {
                     ) : null;
                   })()}
                 </div>
+                <StockModeSegment
+                  value={stockDisplayMode}
+                  onChange={setStockDisplayMode}
+                />
               </div>
               <div className="table-wrap">
                 {stockRows.length === 0 ? (
@@ -942,69 +1066,152 @@ export default function Reports() {
                     <div className="empty-state-title">No product activity in selected period</div>
                     <div className="empty-state-subtitle">Try widening the date range or clearing the company filter.</div>
                   </div>
-                ) : (
-                  <table className="report-table">
-                    <thead>
-                      <tr>
-                        <th style={{ width: '4%' }}>Sr</th>
-                        <th>Product</th>
-                        <th style={{ width: '8%' }}>Pack Size</th>
-                        <th style={{ width: '7%', textAlign: 'right' }}>Opening</th>
-                        <th style={{ width: '7%', textAlign: 'right' }}>Purchase</th>
-                        <th style={{ width: '7%', textAlign: 'right' }} title="Signed net of manual inventory adds/edits (positive = added, negative = removed)">Adjustment</th>
-                        <th style={{ width: '8%', textAlign: 'right' }}>Gross Sale</th>
-                        <th style={{ width: '6%', textAlign: 'right' }}>Return</th>
-                        <th style={{ width: '9%', textAlign: 'right' }}>Net Sale (Unit)</th>
-                        <th style={{ width: '11%', textAlign: 'right' }}>Net Sale (Value)</th>
-                        <th style={{ width: '7%', textAlign: 'right' }}>Closing</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {stockRows.map((row, i) => {
-                        const closingNeg = row.closing_stock < 0;
-                        const adj        = parseInt(row.adjustment_qty, 10) || 0;
-                        return (
-                          <tr key={row.product_id}>
-                            <td>{i + 1}</td>
-                            <td style={{ fontWeight: 600 }}>{row.product_name}</td>
-                            <td style={{ color: 'var(--gray-500)' }}>{row.pack_size || '—'}</td>
-                            <td style={{ textAlign: 'right' }}>{row.opening_stock}</td>
-                            <td style={{ textAlign: 'right' }}>{row.purchase_qty > 0 ? row.purchase_qty : '—'}</td>
-                            <td style={{
-                              textAlign: 'right',
-                              color: adj < 0 ? 'var(--amber)' : undefined,
-                              fontWeight: adj !== 0 ? 600 : undefined,
-                            }}>{adj === 0 ? '—' : adj}</td>
-                            <td style={{ textAlign: 'right' }}>{row.gross_qty > 0 ? row.gross_qty : '—'}</td>
-                            <td style={{ textAlign: 'right' }}>{row.return_qty > 0 ? row.return_qty : '—'}</td>
-                            <td style={{ textAlign: 'right', fontWeight: 600 }}>{row.net_sale_unit}</td>
-                            <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(row.net_sale_value)}</td>
-                            <td style={{
-                              textAlign: 'right',
-                              fontWeight: 700,
-                              color: closingNeg ? 'var(--amber)' : undefined,
-                            }} title={closingNeg ? 'Negative closing stock — data integrity check needed' : undefined}>
-                              {row.closing_stock}
+                ) : (() => {
+                  // Column-shape derived from the segmented control.
+                  const showSplit    = stockDisplayMode === 'split';
+                  const showCombined = stockDisplayMode === 'combined';
+
+                  // Subtle background tints for the in-flow columns —
+                  // green = inflow (purchase / combined),
+                  // amber = manual intervention (adjustment).
+                  // Alphas stay low so numbers remain the dominant signal.
+                  const TINT_PUR      = 'rgba(16,185,129,0.06)';
+                  const TINT_ADJ      = 'rgba(245,158,11,0.06)';
+                  const TINT_COMBINED = 'rgba(16,185,129,0.05)';
+                  const HEADER_TINT_PUR      = 'rgba(16,185,129,0.10)';
+                  const HEADER_TINT_ADJ      = 'rgba(245,158,11,0.10)';
+                  const HEADER_TINT_COMBINED = 'rgba(16,185,129,0.09)';
+
+                  return (
+                    <table className="report-table" style={{ transition: 'all 220ms ease' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ width: '4%' }}>Sr</th>
+                          <th>Product</th>
+                          <th style={{ width: '8%' }}>Pack Size</th>
+                          <th style={{ width: '7%', textAlign: 'right' }}>Opening</th>
+
+                          {showSplit && (
+                            <>
+                                <th className="stock-col-enter" style={{ width: '7%', textAlign: 'right' }} >
+                                  Purchase
+                                </th>
+                                <th className="stock-col-enter" style={{ width: '7%', textAlign: 'right' }} >
+                                  Adjustment
+                                </th>
+                            </>
+                          )}
+
+                          {showCombined && (
+                            <th className="stock-col-enter" style={{ width: '7%', textAlign: 'right' }} >
+                                Pur. / Adj.
+                            </th>
+                          )}
+
+                          <th style={{ width: '8%', textAlign: 'right' }}>Gross Sale</th>
+                          <th style={{ width: '6%', textAlign: 'right' }}>Return</th>
+                          <th style={{ width: '9%', textAlign: 'right' }}>Net Sale (Unit)</th>
+                          <th style={{ width: '11%', textAlign: 'right' }}>Net Sale (Value)</th>
+                          <th style={{ width: '7%', textAlign: 'right' }}>Closing</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stockRows.map((row, i) => {
+                          const closingNeg = row.closing_stock < 0;
+                          const adj        = parseInt(row.adjustment_qty, 10) || 0;
+                          const pur        = parseInt(row.purchase_qty, 10)   || 0;
+                          const inflow     = pur + adj;
+                          return (
+                            <tr key={row.product_id}>
+                              <td>{i + 1}</td>
+                              <td style={{ fontWeight: 600 }}>{row.product_name}</td>
+                              <td style={{ color: 'var(--gray-500)' }}>{row.pack_size || '—'}</td>
+                              <td style={{ textAlign: 'right' }}>{row.opening_stock}</td>
+
+                              {showSplit && (
+                                <>
+                                  <td
+                                    className="stock-col-enter"
+                                    style={{ textAlign: 'right'}}
+                                  >
+                                    {pur > 0 ? pur : '—'}
+                                  </td>
+                                  <td
+                                    className="stock-col-enter"
+                                    style={{
+                                      textAlign: 'right',
+                                      color: adj < 0 ? 'var(--amber)' : undefined,
+                                      fontWeight: adj !== 0 ? 600 : undefined,
+                                    }}
+                                  >
+                                    {adj === 0 ? '—' : adj}
+                                  </td>
+                                </>
+                              )}
+
+                              {showCombined && (
+                                <td
+                                  className="stock-col-enter"
+                                  style={{
+                                    textAlign: 'right',
+                                    fontWeight: inflow !== 0 ? 600 : undefined,
+                                    color: inflow < 0 ? 'var(--amber)' : undefined,
+                                  }}
+                                  title={`Purchase ${pur}  +  Adjustment ${adj}`}
+                                >
+                                  {inflow === 0 ? '—' : inflow}
+                                </td>
+                              )}
+
+                              <td style={{ textAlign: 'right' }}>{row.gross_qty > 0 ? row.gross_qty : '—'}</td>
+                              <td style={{ textAlign: 'right' }}>{row.return_qty > 0 ? row.return_qty : '—'}</td>
+                              <td style={{ textAlign: 'right', fontWeight: 600 }}>{row.net_sale_unit}</td>
+                              <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(row.net_sale_value)}</td>
+                              <td style={{
+                                textAlign: 'right',
+                                fontWeight: 700,
+                                color: closingNeg ? 'var(--amber)' : undefined,
+                              }} title={closingNeg ? 'Negative closing stock — data integrity check needed' : undefined}>
+                                {row.closing_stock}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={3} className="report-tfoot-label">Total</td>
+                          <td className="report-tfoot-num">{stockTotals.opening}</td>
+
+                          {showSplit && (
+                            <>
+                              <td className="report-tfoot-num stock-col-enter" >
+                                {stockTotals.purchase}
+                              </td>
+                              <td className="report-tfoot-num stock-col-enter">
+                                {stockTotals.adjust === 0 ? '—' : stockTotals.adjust}
+                              </td>
+                            </>
+                          )}
+
+                          {showCombined && (
+                            <td className="report-tfoot-num stock-col-enter">
+                              {(stockTotals.purchase + stockTotals.adjust) === 0
+                                ? '—'
+                                : stockTotals.purchase + stockTotals.adjust}
                             </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                    <tfoot>
-                      <tr>
-                        <td colSpan={3} className="report-tfoot-label">Total</td>
-                        <td className="report-tfoot-num">{stockTotals.opening}</td>
-                        <td className="report-tfoot-num">{stockTotals.purchase}</td>
-                        <td className="report-tfoot-num">{stockTotals.adjust === 0 ? '—' : stockTotals.adjust}</td>
-                        <td className="report-tfoot-num">{stockTotals.gross}</td>
-                        <td className="report-tfoot-num">{stockTotals.ret}</td>
-                        <td className="report-tfoot-num">{stockTotals.netU}</td>
-                        <td className="report-tfoot-num">{fmt(stockTotals.netV)}</td>
-                        <td className="report-tfoot-num">{stockTotals.closing}</td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                )}
+                          )}
+
+                          <td className="report-tfoot-num">{stockTotals.gross}</td>
+                          <td className="report-tfoot-num">{stockTotals.ret}</td>
+                          <td className="report-tfoot-num">{stockTotals.netU}</td>
+                          <td className="report-tfoot-num">{fmt(stockTotals.netV)}</td>
+                          <td className="report-tfoot-num">{stockTotals.closing}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  );
+                })()}
               </div>
             </div>
           )}
