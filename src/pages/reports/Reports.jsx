@@ -1108,10 +1108,10 @@ export default function Reports() {
                             </th>
                           )}
 
-                          <th style={{ width: '8%', textAlign: 'right' }}>Gross Sale</th>
+                          <th style={{ width: '8%', textAlign: 'right' }}>Gross</th>
                           <th style={{ width: '6%', textAlign: 'right' }}>Return</th>
-                          <th style={{ width: '9%', textAlign: 'right' }}>Net Sale (Unit)</th>
-                          <th style={{ width: '11%', textAlign: 'right' }}>Net Sale (Value)</th>
+                          <th style={{ width: '9%', textAlign: 'right' }}>Net (Unit)</th>
+                          <th style={{ width: '11%', textAlign: 'right' }}>Net (Value)</th>
                           <th style={{ width: '7%', textAlign: 'right' }}>Closing</th>
                         </tr>
                       </thead>
