@@ -1,8 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import Layout from '../../components/layout/Layout';
 import api from '../../utils/api';
-import { formatDatePKT } from '../../utils/dateUtils';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import {
+  BarChart, Bar, LabelList,
+  LineChart, Line, Legend,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from 'recharts';
 
 // ─── Formatting helpers ────────────────────────────────────────────────────
 // Compact currency ("PKR 1.2M", "PKR 450K") for the visible label. `en-US`
@@ -68,6 +71,13 @@ const SUB_STYLE = {
 
 const GRID = { display: 'grid', gap: 14, marginBottom: 22 };
 
+// Responsive column templates. `auto-fit` + `minmax` lets each grid collapse
+// cleanly to a single-column stack once viewport gets tight — no media
+// queries needed and behaviour matches the Fiori/Lightning wrap rule.
+const STAT_COLS_2 = { gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' };
+const STAT_COLS_3 = { gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' };
+const CHART_COLS  = { gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))' };
+
 // Stat card. Tone is used sparingly — only for alerts and derived profit —
 // so the palette stays quiet enough that important numbers pop on their own.
 function StatCard({ label, value, exact, sub, tone = 'default' }) {
@@ -122,9 +132,29 @@ export default function Dashboard() {
 
   const renderStat = (props) => loading ? <SkeletonCard /> : <StatCard {...props} />;
 
-  const hasLowStock   = !loading && stats?.low_stock_count > 0;
   const hasPendingTax = !loading && stats?.pending_tax > 0;
-  const showAlerts    = hasLowStock || hasPendingTax;
+
+  // Chart-ready projections. Kept out of the JSX so the render tree stays
+  // readable and so recharts sees stable references between renders.
+  const topProducts = (stats?.top_products || []).map(p => ({
+    name:         p.name,
+    total_qty:    parseFloat(p.total_qty)    || 0,
+    gross_profit: parseFloat(p.gross_profit) || 0,
+    // Pre-formatted secondary label rendered at the end of each bar.
+    // Kept short so it doesn't crowd the chart at narrow widths.
+    profit_label: fmtCompact(parseFloat(p.gross_profit) || 0),
+  }));
+
+  const trajectory = (stats?.trajectory || []).map(t => {
+    // "2026-01" → "Jan 26". Short label keeps 12 months readable on the axis.
+    const [y, m] = t.month.split('-');
+    const d = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
+    return {
+      month:     d.toLocaleString('en-US', { month: 'short' }) + " '" + String(y).slice(-2),
+      sales:     parseFloat(t.sales)     || 0,
+      purchases: parseFloat(t.purchases) || 0,
+    };
+  });
 
   return (
     <Layout title="Dashboard">
@@ -136,7 +166,7 @@ export default function Dashboard() {
 
       {/* 1. TODAY — highest-frequency operational read: what happened today. */}
       <div style={SECTION_TITLE_STYLE}>Today</div>
-      <div style={{ ...GRID, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+      <div style={{ ...GRID, ...STAT_COLS_2 }}>
         {renderStat({
           label: "Today's Sale",
           value: fmtCompact(stats?.today_sale),
@@ -153,7 +183,7 @@ export default function Dashboard() {
 
       {/* 2. CASH POSITION — money owed to us and by us. */}
       <div style={SECTION_TITLE_STYLE}>Cash Position</div>
-      <div style={{ ...GRID, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+      <div style={{ ...GRID, ...STAT_COLS_2 }}>
         {renderStat({
           label: 'Total Receivable',
           value: fmtCompact(stats?.total_receivable),
@@ -169,37 +199,24 @@ export default function Dashboard() {
       </div>
 
       {/* 3. ALERTS — surfaced only when non-zero so a clean dashboard stays clean. */}
-      {showAlerts && (
+      {hasPendingTax && (
         <>
           <div style={SECTION_TITLE_STYLE}>Requires Attention</div>
-          <div style={{
-            ...GRID,
-            gridTemplateColumns: `repeat(${(hasLowStock ? 1 : 0) + (hasPendingTax ? 1 : 0)}, minmax(0, 1fr))`,
-          }}>
-            {hasLowStock && (
-              <StatCard
-                label="Low Stock Batches"
-                value={stats.low_stock_count.toLocaleString()}
-                sub="At or below threshold"
-                tone="danger"
-              />
-            )}
-            {hasPendingTax && (
-              <StatCard
-                label="Pending FBR Tax"
-                value={fmtCompact(stats.pending_tax)}
-                exact={fmtExact(stats.pending_tax)}
-                sub="Unsubmitted to FBR"
-                tone="warn"
-              />
-            )}
+          <div style={{ ...GRID, ...STAT_COLS_2 }}>
+            <StatCard
+              label="Pending FBR Tax"
+              value={fmtCompact(stats.pending_tax)}
+              exact={fmtExact(stats.pending_tax)}
+              sub="Unsubmitted to FBR"
+              tone="warn"
+            />
           </div>
         </>
       )}
 
       {/* 4. MONTHLY PERFORMANCE — a step back from the daily view. */}
       <div style={SECTION_TITLE_STYLE}>Monthly Performance</div>
-      <div style={{ ...GRID, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+      <div style={{ ...GRID, ...STAT_COLS_2 }}>
         {renderStat({
           label: 'Monthly Sales',
           value: fmtCompact(stats?.monthly_sales),
@@ -217,7 +234,7 @@ export default function Dashboard() {
       {/* 5. INVENTORY POSITION — stock valued at cost, at retail, and the
              derived gross-profit if it all sold at sale rate today. */}
       <div style={SECTION_TITLE_STYLE}>Inventory Position</div>
-      <div style={{ ...GRID, gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+      <div style={{ ...GRID, ...STAT_COLS_3 }}>
         {renderStat({
           label: 'Inventory Asset Value',
           value: fmtCompact(stats?.inventory_asset_value),
@@ -239,43 +256,68 @@ export default function Dashboard() {
         })}
       </div>
 
-      {/* 6. DETAIL — recent transactional context and top-mover chart. */}
-      <div style={SECTION_TITLE_STYLE}>Recent Activity</div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 14 }}>
+      {/* 6. ANALYTICS — dual chart layout.
+             Left  : Top Products (horizontal bar, gross-profit secondary label).
+             Right : Sales vs Purchase Trajectory (dual-axis rolling 12 months). */}
+      <div style={SECTION_TITLE_STYLE}>Analytics</div>
+      <div style={{ display: 'grid', gap: 14, ...CHART_COLS }}>
         <div className="card">
           <div className="card-header">
-            <div className="card-title">Recent Sales</div>
-            <a href="/sale" className="btn btn-outline btn-sm">View All</a>
+            <div className="card-title">Top Products</div>
+            <div style={{ fontSize: 11, color: 'var(--gray-500)' }}>Qty sold · Gross profit</div>
           </div>
-          <div className="table-wrap">
+          <div className="card-body" style={{ padding: '12px 16px' }}>
             {loading ? (
               <div className="loading-center" style={{ padding: 30 }}><div className="spinner" /></div>
-            ) : stats?.recent_sales?.length ? (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Invoice</th>
-                    <th>Customer</th>
-                    <th>Date</th>
-                    <th>Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {stats.recent_sales.map(s => (
-                    <tr key={s.invoice_no}>
-                      <td><span className="mono badge badge-blue">{s.invoice_no}</span></td>
-                      <td>{s.customer_name}</td>
-                      <td>{formatDatePKT(s.date)}</td>
-                      <td style={{ fontWeight: 700 }} title={fmtExact(s.total_amount)}>
-                        {fmtCompact(s.total_amount)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            ) : topProducts.length ? (
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart
+                  data={topProducts}
+                  layout="vertical"
+                  margin={{ top: 8, right: 60, bottom: 8, left: 8 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--gray-100)" />
+                  <XAxis
+                    type="number"
+                    tick={{ fontSize: 11, fill: 'var(--gray-500)' }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    width={160}
+                    tick={{ fontSize: 11, fill: 'var(--gray-700)' }}
+                    tickFormatter={(v) => (v && v.length > 22 ? v.slice(0, 21) + '…' : v)}
+                    axisLine={false}
+                    tickLine={false}
+                    interval={0}
+                  />
+                  <Tooltip
+                    cursor={{ fill: 'rgba(30,58,138,0.05)' }}
+                    formatter={(value, key, entry) => {
+                      if (key === 'total_qty') return [Number(value).toLocaleString(), 'Units sold'];
+                      return [value, key];
+                    }}
+                    labelFormatter={(label, payload) => {
+                      const row = payload?.[0]?.payload;
+                      if (!row) return label;
+                      return `${label} — Gross profit: ${fmtExact(row.gross_profit)}`;
+                    }}
+                    contentStyle={{ fontSize: 12, borderRadius: 6, border: '1px solid var(--gray-200)' }}
+                  />
+                  <Bar dataKey="total_qty" fill="#1e3a8a" radius={[0, 4, 4, 0]} barSize={18}>
+                    <LabelList
+                      dataKey="profit_label"
+                      position="right"
+                      style={{ fontSize: 10, fill: 'var(--gray-600)', fontWeight: 600 }}
+                    />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             ) : (
               <div className="empty-state" style={{ padding: 30 }}>
-                <div className="empty-state-desc">No sales recorded yet</div>
+                <div className="empty-state-desc">No sales data yet</div>
               </div>
             )}
           </div>
@@ -283,24 +325,79 @@ export default function Dashboard() {
 
         <div className="card">
           <div className="card-header">
-            <div className="card-title">Top Products (by Qty Sold)</div>
+            <div className="card-title">Sales vs Purchase Trajectory</div>
+            <div style={{ fontSize: 11, color: 'var(--gray-500)' }}>Rolling 12 months</div>
           </div>
           <div className="card-body" style={{ padding: '12px 16px' }}>
             {loading ? (
               <div className="loading-center" style={{ padding: 30 }}><div className="spinner" /></div>
-            ) : stats?.top_products?.length ? (
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={stats.top_products} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                  <XAxis type="number"     tick={{ fontSize: 11 }} />
-                  <YAxis type="category"   dataKey="name" tick={{ fontSize: 11 }} width={120} />
-                  <Tooltip formatter={(v) => [v, 'Units']} />
-                  <Bar dataKey="total_qty" fill="#1e3a8a" radius={[0, 4, 4, 0]} />
-                </BarChart>
+            ) : trajectory.length ? (
+              <ResponsiveContainer width="100%" height={280}>
+                <LineChart
+                  data={trajectory}
+                  margin={{ top: 8, right: 16, bottom: 8, left: 8 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--gray-100)" vertical={false} />
+                  <XAxis
+                    dataKey="month"
+                    tick={{ fontSize: 11, fill: 'var(--gray-500)' }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  {/* Sales axis on the left, Purchases on the right — two
+                      axes let both series scale independently even when
+                      one dominates the other (typical when purchase
+                      cadence is chunkier than sale cadence). */}
+                  <YAxis
+                    yAxisId="sales"
+                    orientation="left"
+                    tick={{ fontSize: 10, fill: '#1e3a8a' }}
+                    tickFormatter={(v) => fmtCompact(v).replace('PKR ', '')}
+                    axisLine={false}
+                    tickLine={false}
+                    width={56}
+                  />
+                  <YAxis
+                    yAxisId="purchases"
+                    orientation="right"
+                    tick={{ fontSize: 10, fill: '#b45309' }}
+                    tickFormatter={(v) => fmtCompact(v).replace('PKR ', '')}
+                    axisLine={false}
+                    tickLine={false}
+                    width={56}
+                  />
+                  <Tooltip
+                    formatter={(value, key) => [fmtExact(value), key === 'sales' ? 'Sales' : 'Purchases']}
+                    contentStyle={{ fontSize: 12, borderRadius: 6, border: '1px solid var(--gray-200)' }}
+                  />
+                  <Legend
+                    wrapperStyle={{ fontSize: 11, paddingTop: 4 }}
+                    iconType="circle"
+                    formatter={(v) => v === 'sales' ? 'Sales' : 'Purchases'}
+                  />
+                  <Line
+                    yAxisId="sales"
+                    type="monotone"
+                    dataKey="sales"
+                    stroke="#1e3a8a"
+                    strokeWidth={2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                  />
+                  <Line
+                    yAxisId="purchases"
+                    type="monotone"
+                    dataKey="purchases"
+                    stroke="#b45309"
+                    strokeWidth={2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                  />
+                </LineChart>
               </ResponsiveContainer>
             ) : (
               <div className="empty-state" style={{ padding: 30 }}>
-                <div className="empty-state-desc">No sales data yet</div>
+                <div className="empty-state-desc">No trajectory data yet</div>
               </div>
             )}
           </div>
