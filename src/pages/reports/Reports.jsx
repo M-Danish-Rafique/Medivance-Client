@@ -1398,10 +1398,10 @@ export default function Reports() {
                       <thead>
                         <tr>
                           <th style={{ width: '4%' }}>Sr</th>
-                          <th style={{ width: '9%' }}>Date</th>
+                          <th style={{ width: '10%' }}>Date</th>
                           <th style={{ width: '10%' }}>Invoice No</th>
                           <th>Customer</th>
-                          <th style={{ width: '22%' }}>Ship-To Address</th>
+                          <th style={{ width: '27%' }}>Ship-To Address</th>
                           <th style={{ width: '10%', textAlign: 'right' }}>Gross Qty</th>
                           <th style={{ width: '10%', textAlign: 'right' }}>Return Qty</th>
                           <th style={{ width: '11%', textAlign: 'right' }}>Received Qty</th>
