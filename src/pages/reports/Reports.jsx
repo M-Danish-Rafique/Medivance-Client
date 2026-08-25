@@ -248,6 +248,23 @@ export default function Reports() {
   // match the on-screen shape.
   const [stockDisplayMode, setStockDisplayMode] = useState('none');
 
+  // Batch Activity report state — product + batch are required, dates are
+  // optional (open-ended window means "all activity ever for this batch").
+  // Products come from the main /products list; batches load on demand for
+  // the selected product via /inventory/product/:id, so we always show the
+  // full batch list (including expired / zero-qty ones the batch may have
+  // rolled off to) rather than filtering to active batches only — the
+  // whole point of the report is auditing historical activity.
+  const [products, setProducts] = useState([]);
+  const [batchProductId, setBatchProductId] = useState('');
+  const [batches, setBatches] = useState([]);
+  const [batchNo, setBatchNo] = useState('');
+  const [batchesLoading, setBatchesLoading] = useState(false);
+  const [batchFrom, setBatchFrom] = useState('');
+  const [batchTo, setBatchTo] = useState('');
+  const [batchData, setBatchData] = useState(null);
+  const [batchLoading, setBatchLoading] = useState(false);
+
   useEffect(() => {
     Promise.all([
       api.get('/customers'),
@@ -256,8 +273,9 @@ export default function Reports() {
       api.get('/employees?role=Supplier'),
       api.get('/geography/geo'),
       api.get('/companies'),
+      api.get('/products'),
     ])
-      .then(([c, s, e_sm, e_sp, g, co]) => {
+      .then(([c, s, e_sm, e_sp, g, co, pr]) => {
         setCustomers(c.data);
         setSuppliers(s.data);
         setEmployeesSalesman(e_sm.data);
@@ -265,6 +283,11 @@ export default function Reports() {
         setAreas(g.data.areas);
         setTerritories(g.data.territories);
         setCompanies(co.data || []);
+        // Sort products alphabetically for the Batch Activity picker so
+        // long lists remain easy to scan/typeahead in a native <select>.
+        setProducts((pr.data || []).slice().sort((a, b) =>
+          String(a.name || '').localeCompare(String(b.name || ''))
+        ));
         setDataLoading(false);
       })
       .catch(() => setDataLoading(false));
@@ -447,6 +470,73 @@ export default function Reports() {
     }
   };
 
+  // When the operator picks a product for the Batch Activity report, load
+  // its batches so the batch dropdown can populate. Reuses /inventory/product/:id
+  // WITHOUT `active_only=1` because historical activity for expired /
+  // zero-qty batches is a legitimate reason to run this report.
+  useEffect(() => {
+    if (!batchProductId) { setBatches([]); setBatchNo(''); setBatchData(null); return; }
+    setBatchesLoading(true);
+    api.get(`/inventory/product/${batchProductId}`)
+      .then(r => {
+        const list = Array.isArray(r.data) ? r.data : [];
+        // Sort: active/qty-carrying batches first, then by expiry desc so
+        // recent batches land at the top — the ones an operator is most
+        // likely to be auditing right after a sale round.
+        list.sort((a, b) => {
+          const aq = parseFloat(a.qty) || 0, bq = parseFloat(b.qty) || 0;
+          if ((aq > 0) !== (bq > 0)) return aq > 0 ? -1 : 1;
+          const ae = a.exp_date || '', be = b.exp_date || '';
+          return be.localeCompare(ae);
+        });
+        setBatches(list);
+        setBatchNo('');
+        setBatchData(null);
+      })
+      .catch(() => { setBatches([]); setBatchNo(''); })
+      .finally(() => setBatchesLoading(false));
+  }, [batchProductId]);
+
+  const fetchBatchActivity = async () => {
+    if (!batchProductId) return toast.error('Please select a product');
+    if (!batchNo)        return toast.error('Please select a batch');
+    if (batchFrom && batchTo && batchFrom > batchTo) {
+      return toast.error('From Date cannot be after To Date');
+    }
+    setBatchLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.append('product_id', batchProductId);
+      params.append('batch_no', batchNo);
+      if (batchFrom) params.append('from_date', batchFrom);
+      if (batchTo)   params.append('to_date',   batchTo);
+      const r = await api.get(`/reports/batch-activity?${params}`);
+      setBatchData(r.data);
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Error fetching Batch Activity report');
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  const downloadBatchActivityPDF = async () => {
+    if (!batchProductId || !batchNo) {
+      return toast.error('Please select a product and batch');
+    }
+    const params = new URLSearchParams();
+    params.append('product_id', batchProductId);
+    params.append('batch_no', batchNo);
+    if (batchFrom) params.append('from_date', batchFrom);
+    if (batchTo)   params.append('to_date',   batchTo);
+    try {
+      const res = await api.get(`/reports/batch-activity/pdf?${params}`, { responseType: 'blob' });
+      const safeBatch = String(batchNo).replace(/[^a-z0-9]+/gi, '-');
+      downloadBlob(res, `batch-activity-${safeBatch}.pdf`);
+    } catch {
+      toast.error('Error downloading PDF');
+    }
+  };
+
   const ledgerEntity = ledger?.customer || ledger?.supplier;
   const ledgerRows = ledger?.ledger || [];
   const ob = parseFloat(ledger?.openingBalance || 0);
@@ -511,6 +601,7 @@ export default function Reports() {
           { id: 'recovery', label: 'Recovery Report', icon: 'account_balance_wallet' },
           { id: 'summary', label: 'Sale Summary', icon: 'layers' },
           { id: 'saleStock', label: 'Sale & Stock', icon: 'inventory_2' },
+          { id: 'batchActivity', label: 'Batch Activity', icon: 'science' },
         ].map(tab => (
           <button
             key={tab.id}
@@ -1016,6 +1107,14 @@ export default function Reports() {
                   </>
                 }
               />
+              <div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 12, lineHeight: 1.55 }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 14, verticalAlign: 'text-bottom', marginRight: 4 }}>info</span>
+                Batches are consolidated per product. Opening &amp; Closing are real physical stock at the period boundaries.
+                Purchase includes both purchase entries and manufacturing yields added in the period.
+                Adjustment is the signed net of manual inventory adds/edits (positive = added, negative = removed).
+                Net Sale (Value) is the actual billed revenue net of discounts and returns.
+                Closing = Opening + Purchase + Adjustment − Gross Sale + Return.
+              </div>
             </div>
           </div>
 
@@ -1108,10 +1207,10 @@ export default function Reports() {
                             </th>
                           )}
 
-                          <th style={{ width: '8%', textAlign: 'right' }}>Gross</th>
+                          <th style={{ width: '8%', textAlign: 'right' }}>Gross Sale</th>
                           <th style={{ width: '6%', textAlign: 'right' }}>Return</th>
-                          <th style={{ width: '9%', textAlign: 'right' }}>Net (Unit)</th>
-                          <th style={{ width: '11%', textAlign: 'right' }}>Net (Value)</th>
+                          <th style={{ width: '9%', textAlign: 'right' }}>Net Sale (Unit)</th>
+                          <th style={{ width: '11%', textAlign: 'right' }}>Net Sale (Value)</th>
                           <th style={{ width: '7%', textAlign: 'right' }}>Closing</th>
                         </tr>
                       </thead>
@@ -1215,6 +1314,352 @@ export default function Reports() {
               </div>
             </div>
           )}
+        </>
+      )}
+
+      {/* ── Batch Activity Report ── */}
+      {reportTab === 'batchActivity' && (
+        <>
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div className="card-header"><div className="card-title">Batch Activity Report</div></div>
+            <div className="card-body">
+              <ReportFilterLayout
+                loading={batchLoading}
+                onGenerate={fetchBatchActivity}
+                onDownload={downloadBatchActivityPDF}
+                hasData={!!batchData}
+                generateDisabled={!batchProductId || !batchNo}
+                fields={
+                  <>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Product *</label>
+                      <select
+                        className="form-control"
+                        value={batchProductId}
+                        onChange={e => {
+                          setBatchProductId(e.target.value);
+                          setBatchData(null);
+                        }}
+                      >
+                        <option value="">— Select product —</option>
+                        {products.map(p => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}{p.pack_size ? ` · ${p.pack_size}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Batch *</label>
+                      <select
+                        className="form-control"
+                        value={batchNo}
+                        onChange={e => { setBatchNo(e.target.value); setBatchData(null); }}
+                        disabled={!batchProductId || batchesLoading}
+                      >
+                        <option value="">
+                          {!batchProductId ? '— Pick a product first —'
+                            : batchesLoading   ? 'Loading batches…'
+                            : batches.length === 0 ? 'No batches found'
+                            : '— Select batch —'}
+                        </option>
+                        {batches.map(b => {
+                          const q = parseInt(b.qty, 10) || 0;
+                          const expLabel = b.exp_date ? ` · exp ${formatDatePKT(b.exp_date)}` : '';
+                          return (
+                            <option key={b.batch_no} value={b.batch_no}>
+                              {b.batch_no}  ·  qty {q}{expLabel}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">From Date</label>
+                      <input className="form-control" type="date" value={batchFrom}
+                        onChange={e => { setBatchFrom(e.target.value); setBatchData(null); }} />
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">To Date</label>
+                      <input className="form-control" type="date" value={batchTo}
+                        onChange={e => { setBatchTo(e.target.value); setBatchData(null); }} />
+                    </div>
+                  </>
+                }
+              />
+              <div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 12, lineHeight: 1.55 }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 14, verticalAlign: 'text-bottom', marginRight: 4 }}>info</span>
+                Shows every sale line drawn from the selected batch in the date range,
+                alongside customer, ship-to address, gross line value, returns, and
+                the net received (Gross − Return). Leave both dates blank to include all activity.
+              </div>
+            </div>
+          </div>
+
+          {batchData && (() => {
+            const meta   = batchData.meta   || {};
+            const rows   = batchData.rows   || [];
+            const totals = batchData.totals || { gross: 0, ret: 0, received: 0 };
+            const statusIsActive = meta.status === 'Active';
+
+            // Tokens tuned to match the app's palette but skewed toward the
+            // "modern, low-chrome" spec: subtle horizontal dividers, no
+            // vertical grid, alternating rows on a very light tint.
+            const CARD_STYLE = {
+              padding: 20,
+              borderRadius: 10,
+              background: 'var(--white, #ffffff)',
+              border: '1px solid var(--gray-200, #e2e6ec)',
+            };
+            const META_LABEL = {
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: 0.4,
+              color: 'var(--gray-500, #6b7280)',
+              textTransform: 'uppercase',
+              marginBottom: 4,
+            };
+            const META_VALUE = {
+              fontSize: 15,
+              fontWeight: 700,
+              color: 'var(--gray-900, #111827)',
+              lineHeight: 1.35,
+            };
+
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {/* 1) Executive header block */}
+                <div style={CARD_STYLE}>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                    gap: '16px 24px',
+                  }}>
+                    <div>
+                      <div style={META_LABEL}>Product</div>
+                      <div style={META_VALUE}>
+                        {meta.product_name || '—'}
+                        {meta.pack_size ? (
+                          <span style={{ fontWeight: 500, color: 'var(--gray-500, #6b7280)' }}>
+                            {'  ·  ' + meta.pack_size}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={META_LABEL}>Batch Number</div>
+                      <div style={{ ...META_VALUE, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}>
+                        {meta.batch_no || '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={META_LABEL}>Company</div>
+                      <div style={META_VALUE}>{meta.company_name || '—'}</div>
+                    </div>
+                    <div>
+                      <div style={META_LABEL}>Date Range</div>
+                      <div style={META_VALUE}>
+                        {(meta.from_date || 'Beginning')} → {(meta.to_date || 'Present')}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={META_LABEL}>Batch Expiry</div>
+                      <div style={META_VALUE}>{meta.exp_date ? formatDatePKT(meta.exp_date) : '—'}</div>
+                    </div>
+                    <div>
+                      <div style={META_LABEL}>Status</div>
+                      <div>
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            padding: '4px 10px',
+                            borderRadius: 999,
+                            fontSize: 12.5,
+                            fontWeight: 700,
+                            letterSpacing: 0.2,
+                            background: statusIsActive ? 'rgba(16,185,129,0.10)' : 'rgba(107,114,128,0.10)',
+                            color:      statusIsActive ? 'var(--green, #059669)'  : 'var(--gray-600, #4b5563)',
+                            border: `1px solid ${statusIsActive ? 'rgba(16,185,129,0.25)' : 'rgba(107,114,128,0.25)'}`,
+                          }}
+                        >
+                          <span style={{
+                            width: 7, height: 7, borderRadius: '50%',
+                            background: statusIsActive ? 'var(--green, #059669)' : 'var(--gray-500, #6b7280)',
+                          }} />
+                          {meta.status || 'Closed'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{
+                    marginTop: 14,
+                    paddingTop: 12,
+                    borderTop: '1px solid var(--gray-100, #eef1f5)',
+                    fontSize: 12,
+                    color: 'var(--gray-500, #6b7280)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    flexWrap: 'wrap',
+                  }}>
+                    <span>Report generated on {formatDatePKT(todayPKT())}</span>
+                    <span>Current on-hand: <strong style={{ color: 'var(--gray-900, #111827)' }}>{meta.current_qty ?? 0}</strong></span>
+                  </div>
+                </div>
+
+                {/* 2) Summary metrics (TL;DR) */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                  gap: 12,
+                }}>
+                  {[
+                    { label: 'Total Gross',   value: totals.gross,    tone: 'neutral' },
+                    { label: 'Total Returns', value: totals.ret,      tone: 'warn'    },
+                    { label: 'Net Received',  value: totals.received, tone: 'good'    },
+                  ].map((m, i) => (
+                    <div key={i} style={{
+                      ...CARD_STYLE,
+                      padding: 18,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                    }}>
+                      <div style={{ ...META_LABEL, marginBottom: 0 }}>{m.label}</div>
+                      <div style={{
+                        fontSize: 26,
+                        fontWeight: 800,
+                        lineHeight: 1.1,
+                        color: m.tone === 'good' ? 'var(--green, #059669)'
+                              : m.tone === 'warn' ? 'var(--amber, #d97706)'
+                              : 'var(--gray-900, #111827)',
+                      }}>
+                        {fmt(m.value)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* 3) Activity table — zebra, no vertical rules */}
+                <div style={CARD_STYLE}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginBottom: 12,
+                    gap: 8,
+                    flexWrap: 'wrap',
+                  }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--gray-900, #111827)' }}>
+                      Sale Activity
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--gray-500, #6b7280)' }}>
+                      {rows.length} row{rows.length !== 1 ? 's' : ''}
+                    </div>
+                  </div>
+
+                  {rows.length === 0 ? (
+                    <div className="empty-state">
+                      <div className="empty-state-title">No activity for this batch in the selected period</div>
+                      <div className="empty-state-subtitle">Try widening the date range or check that sales exist for this batch.</div>
+                    </div>
+                  ) : (
+                    <div style={{ overflowX: 'auto' }}>
+                      {/* Scoped styles: modern activity table — subtle
+                          horizontal dividers only, zebra rows, no vertical
+                          grid, uppercase small-caps header labels. */}
+                      <style>{`
+                        .batch-activity-table {
+                          width: 100%;
+                          border-collapse: collapse;
+                          font-size: 13px;
+                          color: var(--gray-900, #111827);
+                        }
+                        .batch-activity-table thead th {
+                          font-size: 11px;
+                          font-weight: 700;
+                          letter-spacing: 0.5px;
+                          text-transform: uppercase;
+                          color: var(--gray-500, #6b7280);
+                          padding: 10px 10px;
+                          border: 0;
+                          border-bottom: 1px solid var(--gray-200, #e2e6ec);
+                          background: transparent;
+                        }
+                        .batch-activity-table tbody td {
+                          padding: 10px 10px;
+                          border: 0;
+                          border-bottom: 1px solid var(--gray-100, #eef1f5);
+                          vertical-align: top;
+                        }
+                        .batch-activity-table tbody tr:nth-child(even) td {
+                          background: var(--gray-50, #f7f9fb);
+                        }
+                        .batch-activity-table tfoot td {
+                          padding: 12px 10px;
+                          border: 0;
+                          border-top: 2px solid var(--gray-300, #d7dee6);
+                          font-weight: 800;
+                          background: transparent;
+                        }
+                        .batch-activity-table .mono {
+                          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                          font-size: 12.5px;
+                        }
+                        .batch-activity-table .num { text-align: right; }
+                        .batch-activity-table .num.tabular { font-variant-numeric: tabular-nums; }
+                      `}</style>
+                      <table className="batch-activity-table">
+                        <thead>
+                          <tr>
+                            <th className="num" style={{ width: '4%' }}>Seq</th>
+                            <th style={{ width: '8%' }}>Date</th>
+                            <th style={{ width: '10%' }}>Invoice No</th>
+                            <th style={{ width: '20%' }}>Customer</th>
+                            <th style={{ width: '28%' }}>Ship-To Address</th>
+                            <th className="num" style={{ width: '10%' }}>Gross</th>
+                            <th className="num" style={{ width: '10%' }}>Return</th>
+                            <th className="num" style={{ width: '10%' }}>Received</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((r, i) => {
+                            const ret = parseFloat(r.return_amount) || 0;
+                            return (
+                              <tr key={`${r.sale_id}-${i}`}>
+                                <td className="num tabular">{i + 1}</td>
+                                <td>{formatDatePKT(r.date)}</td>
+                                <td className="mono">{r.invoice_no || '—'}</td>
+                                <td style={{ fontWeight: 600 }}>{r.customer_name || '—'}</td>
+                                <td style={{ color: 'var(--gray-600, #4b5563)' }}>{r.ship_to || '—'}</td>
+                                <td className="num tabular">{fmt(r.gross)}</td>
+                                <td className="num tabular" style={{ color: ret > 0 ? 'var(--amber, #d97706)' : 'var(--gray-400, #9ca3af)' }}>
+                                  {ret > 0 ? fmt(ret) : '—'}
+                                </td>
+                                <td className="num tabular" style={{ fontWeight: 700 }}>{fmt(r.received)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr>
+                            <td colSpan={5} style={{ textAlign: 'right', color: 'var(--gray-600, #4b5563)', letterSpacing: 0.4, textTransform: 'uppercase', fontSize: 12 }}>
+                              Total
+                            </td>
+                            <td className="num tabular">{fmt(totals.gross)}</td>
+                            <td className="num tabular">{fmt(totals.ret)}</td>
+                            <td className="num tabular">{fmt(totals.received)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
         </>
       )}
     </Layout>
