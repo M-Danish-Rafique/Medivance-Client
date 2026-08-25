@@ -1384,7 +1384,7 @@ export default function Reports() {
 
           {batchData && (() => {
             const batchRows   = batchData.rows   || [];
-            const batchTotals = batchData.totals || { gross: 0, ret: 0, received: 0 };
+            const batchTotals = batchData.totals || { gross_qty: 0, return_qty: 0, received_qty: 0 };
             return (
               <div className="card">
                 <div className="card-header">
@@ -1398,35 +1398,38 @@ export default function Reports() {
                       <thead>
                         <tr>
                           <th style={{ width: '4%' }}>Sr</th>
-                          <th style={{ width: '10%' }}>Date</th>
+                          <th style={{ width: '9%' }}>Date</th>
                           <th style={{ width: '10%' }}>Invoice No</th>
                           <th>Customer</th>
-                          <th style={{ width: '25%' }}>Ship-To Address</th>
-                          <th style={{ width: '11%', textAlign: 'right' }}>Gross</th>
-                          <th style={{ width: '10%', textAlign: 'right' }}>Return</th>
-                          <th style={{ width: '11%', textAlign: 'right' }}>Received</th>
+                          <th style={{ width: '22%' }}>Ship-To Address</th>
+                          <th style={{ width: '10%', textAlign: 'right' }}>Gross Qty</th>
+                          <th style={{ width: '10%', textAlign: 'right' }}>Return Qty</th>
+                          <th style={{ width: '11%', textAlign: 'right' }}>Received Qty</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {batchRows.map((row, i) => (
-                          <tr key={`${row.sale_id}-${i}`}>
-                            <td>{i + 1}</td>
-                            <td>{formatDatePKT(row.date)}</td>
-                            <td className="mono">{row.invoice_no}</td>
-                            <td style={{ fontWeight: 600 }}>{row.customer_name}</td>
-                            <td>{row.ship_to || '—'}</td>
-                            <td style={{ textAlign: 'right' }}>{fmt(row.gross)}</td>
-                            <td style={{ textAlign: 'right' }}>{parseFloat(row.return_amount) > 0 ? fmt(row.return_amount) : '—'}</td>
-                            <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(row.received)}</td>
-                          </tr>
-                        ))}
+                        {batchRows.map((row, i) => {
+                          const ret = parseInt(row.return_qty, 10) || 0;
+                          return (
+                            <tr key={`${row.sale_id}-${i}`}>
+                              <td>{i + 1}</td>
+                              <td>{formatDatePKT(row.date)}</td>
+                              <td className="mono">{row.invoice_no}</td>
+                              <td style={{ fontWeight: 600 }}>{row.customer_name}</td>
+                              <td>{row.ship_to || '—'}</td>
+                              <td style={{ textAlign: 'right' }}>{parseInt(row.gross_qty, 10) || 0}</td>
+                              <td style={{ textAlign: 'right' }}>{ret > 0 ? ret : '—'}</td>
+                              <td style={{ textAlign: 'right', fontWeight: 700 }}>{parseInt(row.received_qty, 10) || 0}</td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                       <tfoot>
                         <tr>
                           <td colSpan={5} className="report-tfoot-label">Total</td>
-                          <td className="report-tfoot-num">{fmt(batchTotals.gross)}</td>
-                          <td className="report-tfoot-num">{fmt(batchTotals.ret)}</td>
-                          <td className="report-tfoot-num">{fmt(batchTotals.received)}</td>
+                          <td className="report-tfoot-num">{batchTotals.gross_qty || 0}</td>
+                          <td className="report-tfoot-num">{batchTotals.return_qty || 0}</td>
+                          <td className="report-tfoot-num">{batchTotals.received_qty || 0}</td>
                         </tr>
                       </tfoot>
                     </table>
