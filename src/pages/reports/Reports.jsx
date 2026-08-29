@@ -248,6 +248,34 @@ export default function Reports() {
   // match the on-screen shape.
   const [stockDisplayMode, setStockDisplayMode] = useState('none');
 
+  // Batch Activity report state — product + batch are required, dates are
+  // optional (open-ended window means "all activity ever for this batch").
+  // Products come from the main /products list; batches load on demand for
+  // the selected product via /inventory/product/:id, so we always show the
+  // full batch list (including expired / zero-qty ones the batch may have
+  // rolled off to) rather than filtering to active batches only — the
+  // whole point of the report is auditing historical activity.
+  const [products, setProducts] = useState([]);
+  const [batchProductId, setBatchProductId] = useState('');
+  const [batches, setBatches] = useState([]);
+  const [batchNo, setBatchNo] = useState('');
+  const [batchesLoading, setBatchesLoading] = useState(false);
+  const [batchFrom, setBatchFrom] = useState('');
+  const [batchTo, setBatchTo] = useState('');
+  const [batchData, setBatchData] = useState(null);
+  const [batchLoading, setBatchLoading] = useState(false);
+
+  // Product Sales report state — per-product revenue/cost/profit register
+  // over a required date window. Default the window to current-PKT-month
+  // start → today for the same reason Sale & Stock does: prevents the
+  // operator from generating an unbounded report that would take seconds
+  // to run and produce a meaningless "all time" number set.
+  const [prodSalesCompany, setProdSalesCompany] = useState('');
+  const [prodSalesFrom, setProdSalesFrom] = useState(_defaultStockRange.from);
+  const [prodSalesTo, setProdSalesTo] = useState(_defaultStockRange.to);
+  const [prodSalesRows, setProdSalesRows] = useState(null);
+  const [prodSalesLoading, setProdSalesLoading] = useState(false);
+
   useEffect(() => {
     Promise.all([
       api.get('/customers'),
@@ -256,8 +284,9 @@ export default function Reports() {
       api.get('/employees?role=Supplier'),
       api.get('/geography/geo'),
       api.get('/companies'),
+      api.get('/products'),
     ])
-      .then(([c, s, e_sm, e_sp, g, co]) => {
+      .then(([c, s, e_sm, e_sp, g, co, pr]) => {
         setCustomers(c.data);
         setSuppliers(s.data);
         setEmployeesSalesman(e_sm.data);
@@ -265,6 +294,11 @@ export default function Reports() {
         setAreas(g.data.areas);
         setTerritories(g.data.territories);
         setCompanies(co.data || []);
+        // Sort products alphabetically for the Batch Activity picker so
+        // long lists remain easy to scan/typeahead in a native <select>.
+        setProducts((pr.data || []).slice().sort((a, b) =>
+          String(a.name || '').localeCompare(String(b.name || ''))
+        ));
         setDataLoading(false);
       })
       .catch(() => setDataLoading(false));
@@ -447,6 +481,111 @@ export default function Reports() {
     }
   };
 
+  // When the operator picks a product for the Batch Activity report, load
+  // its batches so the batch dropdown can populate. Reuses /inventory/product/:id
+  // WITHOUT `active_only=1` because historical activity for expired /
+  // zero-qty batches is a legitimate reason to run this report.
+  useEffect(() => {
+    if (!batchProductId) { setBatches([]); setBatchNo(''); setBatchData(null); return; }
+    setBatchesLoading(true);
+    api.get(`/inventory/product/${batchProductId}`)
+      .then(r => {
+        const list = Array.isArray(r.data) ? r.data : [];
+        // Sort: active/qty-carrying batches first, then by expiry desc so
+        // recent batches land at the top — the ones an operator is most
+        // likely to be auditing right after a sale round.
+        list.sort((a, b) => {
+          const aq = parseFloat(a.qty) || 0, bq = parseFloat(b.qty) || 0;
+          if ((aq > 0) !== (bq > 0)) return aq > 0 ? -1 : 1;
+          const ae = a.exp_date || '', be = b.exp_date || '';
+          return be.localeCompare(ae);
+        });
+        setBatches(list);
+        setBatchNo('');
+        setBatchData(null);
+      })
+      .catch(() => { setBatches([]); setBatchNo(''); })
+      .finally(() => setBatchesLoading(false));
+  }, [batchProductId]);
+
+  const fetchBatchActivity = async () => {
+    if (!batchProductId) return toast.error('Please select a product');
+    if (!batchNo)        return toast.error('Please select a batch');
+    if (batchFrom && batchTo && batchFrom > batchTo) {
+      return toast.error('From Date cannot be after To Date');
+    }
+    setBatchLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.append('product_id', batchProductId);
+      params.append('batch_no', batchNo);
+      if (batchFrom) params.append('from_date', batchFrom);
+      if (batchTo)   params.append('to_date',   batchTo);
+      const r = await api.get(`/reports/batch-activity?${params}`);
+      setBatchData(r.data);
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Error fetching Batch Activity report');
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  const downloadBatchActivityPDF = async () => {
+    if (!batchProductId || !batchNo) {
+      return toast.error('Please select a product and batch');
+    }
+    const params = new URLSearchParams();
+    params.append('product_id', batchProductId);
+    params.append('batch_no', batchNo);
+    if (batchFrom) params.append('from_date', batchFrom);
+    if (batchTo)   params.append('to_date',   batchTo);
+    try {
+      const res = await api.get(`/reports/batch-activity/pdf?${params}`, { responseType: 'blob' });
+      const safeBatch = String(batchNo).replace(/[^a-z0-9]+/gi, '-');
+      downloadBlob(res, `batch-activity-${safeBatch}.pdf`);
+    } catch {
+      toast.error('Error downloading PDF');
+    }
+  };
+
+  const fetchProductSales = async () => {
+    if (!prodSalesFrom || !prodSalesTo) {
+      return toast.error('Please select both From Date and To Date');
+    }
+    if (prodSalesFrom > prodSalesTo) {
+      return toast.error('From Date cannot be after To Date');
+    }
+    setProdSalesLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.append('from_date', prodSalesFrom);
+      params.append('to_date',   prodSalesTo);
+      if (prodSalesCompany) params.append('company_id', prodSalesCompany);
+      const r = await api.get(`/reports/product-sales?${params}`);
+      setProdSalesRows(r.data.rows || []);
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Error fetching Product Sales report');
+    } finally {
+      setProdSalesLoading(false);
+    }
+  };
+
+  const downloadProductSalesPDF = async () => {
+    if (!prodSalesFrom || !prodSalesTo) {
+      return toast.error('Please select both From Date and To Date');
+    }
+    const params = new URLSearchParams();
+    params.append('from_date', prodSalesFrom);
+    params.append('to_date',   prodSalesTo);
+    if (prodSalesCompany) params.append('company_id', prodSalesCompany);
+    try {
+      const res = await api.get(`/reports/product-sales/pdf?${params}`, { responseType: 'blob' });
+      downloadBlob(res, 'product-sales-report.pdf');
+    } catch {
+      toast.error('Error downloading PDF');
+    }
+  };
+
   const ledgerEntity = ledger?.customer || ledger?.supplier;
   const ledgerRows = ledger?.ledger || [];
   const ob = parseFloat(ledger?.openingBalance || 0);
@@ -494,6 +633,20 @@ export default function Reports() {
     closing:  t.closing  + (parseInt(r.closing_stock,   10) || 0),
   }), { opening: 0, purchase: 0, adjust: 0, gross: 0, ret: 0, netU: 0, netV: 0, closing: 0 });
 
+  const prodSalesTotals = (prodSalesRows || []).reduce((t, r) => ({
+    gross_qty:    t.gross_qty    + (parseInt(r.gross_qty,   10) || 0),
+    return_qty:   t.return_qty   + (parseInt(r.return_qty,  10) || 0),
+    net_qty:      t.net_qty      + (parseInt(r.net_qty,     10) || 0),
+    net_revenue:  t.net_revenue  + (parseFloat(r.net_revenue)  || 0),
+    cogs:         t.cogs         + (parseFloat(r.cogs)         || 0),
+    gross_profit: t.gross_profit + (parseFloat(r.gross_profit) || 0),
+  }), { gross_qty: 0, return_qty: 0, net_qty: 0, net_revenue: 0, cogs: 0, gross_profit: 0 });
+  // Any product with a NULL purchase_rate_snapshot on at least one line
+  // will report an understated COGS (and an inflated Gross Profit). We
+  // surface that with a footnote/tooltip so the operator knows to check
+  // legacy invoices, but keep the number as-is (no silent adjustment).
+  const prodSalesHasMissingCost = (prodSalesRows || []).some(r => (r.missing_cost_lines || 0) > 0);
+
   if (dataLoading) {
     return (
       <Layout title="Reports">
@@ -511,6 +664,8 @@ export default function Reports() {
           { id: 'recovery', label: 'Recovery Report', icon: 'account_balance_wallet' },
           { id: 'summary', label: 'Sale Summary', icon: 'layers' },
           { id: 'saleStock', label: 'Sale & Stock', icon: 'inventory_2' },
+          { id: 'batchActivity', label: 'Batch Activity', icon: 'science' },
+          { id: 'productSales', label: 'Product Sales', icon: 'bar_chart' },
         ].map(tab => (
           <button
             key={tab.id}
@@ -1108,10 +1263,10 @@ export default function Reports() {
                             </th>
                           )}
 
-                          <th style={{ width: '8%', textAlign: 'right' }}>Gross</th>
+                          <th style={{ width: '8%', textAlign: 'right' }}>Gross Sale</th>
                           <th style={{ width: '6%', textAlign: 'right' }}>Return</th>
-                          <th style={{ width: '9%', textAlign: 'right' }}>Net (Unit)</th>
-                          <th style={{ width: '11%', textAlign: 'right' }}>Net (Value)</th>
+                          <th style={{ width: '9%', textAlign: 'right' }}>Net Sale (Unit)</th>
+                          <th style={{ width: '11%', textAlign: 'right' }}>Net Sale (Value)</th>
                           <th style={{ width: '7%', textAlign: 'right' }}>Closing</th>
                         </tr>
                       </thead>
@@ -1212,6 +1367,281 @@ export default function Reports() {
                     </table>
                   );
                 })()}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ── Batch Activity Report ── */}
+      {reportTab === 'batchActivity' && (
+        <>
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div className="card-header"><div className="card-title">Batch Activity Report</div></div>
+            <div className="card-body">
+              <ReportFilterLayout
+                loading={batchLoading}
+                onGenerate={fetchBatchActivity}
+                onDownload={downloadBatchActivityPDF}
+                hasData={!!batchData}
+                generateDisabled={!batchProductId || !batchNo}
+                fields={
+                  <>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Product *</label>
+                      <select
+                        className="form-control"
+                        value={batchProductId}
+                        onChange={e => {
+                          setBatchProductId(e.target.value);
+                          setBatchData(null);
+                        }}
+                      >
+                        <option value="">— Select product —</option>
+                        {products.map(p => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}{p.pack_size ? ` · ${p.pack_size}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Batch *</label>
+                      <select
+                        className="form-control"
+                        value={batchNo}
+                        onChange={e => { setBatchNo(e.target.value); setBatchData(null); }}
+                        disabled={!batchProductId || batchesLoading}
+                      >
+                        <option value="">
+                          {!batchProductId ? '— Pick a product first —'
+                            : batchesLoading   ? 'Loading batches…'
+                            : batches.length === 0 ? 'No batches found'
+                            : '— Select batch —'}
+                        </option>
+                        {batches.map(b => {
+                          const q = parseInt(b.qty, 10) || 0;
+                          const expLabel = b.exp_date ? ` · exp ${formatDatePKT(b.exp_date)}` : '';
+                          return (
+                            <option key={b.batch_no} value={b.batch_no}>
+                              {b.batch_no}  ·  qty {q}{expLabel}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">From Date</label>
+                      <input className="form-control" type="date" value={batchFrom}
+                        onChange={e => { setBatchFrom(e.target.value); setBatchData(null); }} />
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">To Date</label>
+                      <input className="form-control" type="date" value={batchTo}
+                        onChange={e => { setBatchTo(e.target.value); setBatchData(null); }} />
+                    </div>
+                  </>
+                }
+              />
+            </div>
+          </div>
+
+          {batchData && (() => {
+            const batchRows   = batchData.rows   || [];
+            const batchTotals = batchData.totals || { gross_qty: 0, return_qty: 0, received_qty: 0 };
+            return (
+              <div className="card">
+                <div className="card-header">
+                  <div className="card-title">{batchRows.length} row{batchRows.length !== 1 ? 's' : ''}</div>
+                </div>
+                <div className="table-wrap">
+                  {batchRows.length === 0 ? (
+                    <div className="empty-state"><div className="empty-state-title">No activity for this batch in selected period</div></div>
+                  ) : (
+                    <table className="report-table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: '4%' }}>Sr</th>
+                          <th style={{ width: '10%' }}>Date</th>
+                          <th style={{ width: '10%' }}>Invoice No</th>
+                          <th>Customer</th>
+                          <th style={{ width: '27%' }}>Ship-To Address</th>
+                          <th style={{ width: '10%', textAlign: 'right' }}>Gross Qty</th>
+                          <th style={{ width: '10%', textAlign: 'right' }}>Return Qty</th>
+                          <th style={{ width: '11%', textAlign: 'right' }}>Received Qty</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {batchRows.map((row, i) => {
+                          const ret = parseInt(row.return_qty, 10) || 0;
+                          return (
+                            <tr key={`${row.sale_id}-${i}`}>
+                              <td>{i + 1}</td>
+                              <td>{formatDatePKT(row.date)}</td>
+                              <td className="mono">{row.invoice_no}</td>
+                              <td style={{ fontWeight: 600 }}>{row.customer_name}</td>
+                              <td>{row.ship_to || '—'}</td>
+                              <td style={{ textAlign: 'right' }}>{parseInt(row.gross_qty, 10) || 0}</td>
+                              <td style={{ textAlign: 'right' }}>{ret > 0 ? ret : '—'}</td>
+                              <td style={{ textAlign: 'right', fontWeight: 700 }}>{parseInt(row.received_qty, 10) || 0}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={5} className="report-tfoot-label">Total</td>
+                          <td className="report-tfoot-num">{batchTotals.gross_qty || 0}</td>
+                          <td className="report-tfoot-num">{batchTotals.return_qty || 0}</td>
+                          <td className="report-tfoot-num">{batchTotals.received_qty || 0}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+        </>
+      )}
+
+      {/* ── Product Sales Report ── */}
+      {reportTab === 'productSales' && (
+        <>
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div className="card-header"><div className="card-title">Product Sales Report</div></div>
+            <div className="card-body">
+              <ReportFilterLayout
+                loading={prodSalesLoading}
+                onGenerate={fetchProductSales}
+                onDownload={downloadProductSalesPDF}
+                hasData={!!prodSalesRows}
+                generateDisabled={!prodSalesFrom || !prodSalesTo}
+                fields={
+                  <>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Company</label>
+                      <select
+                        className="form-control"
+                        value={prodSalesCompany}
+                        onChange={e => { setProdSalesCompany(e.target.value); setProdSalesRows(null); }}
+                      >
+                        <option value="">All Companies</option>
+                        {companies.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">From Date *</label>
+                      <input className="form-control" type="date" value={prodSalesFrom} required
+                        onChange={e => { setProdSalesFrom(e.target.value); setProdSalesRows(null); }} />
+                    </div>
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">To Date *</label>
+                      <input className="form-control" type="date" value={prodSalesTo} required
+                        onChange={e => { setProdSalesTo(e.target.value); setProdSalesRows(null); }} />
+                    </div>
+                  </>
+                }
+              />
+            </div>
+          </div>
+
+          {prodSalesRows && (
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title">
+                  {prodSalesRows.length} product{prodSalesRows.length !== 1 ? 's' : ''}
+                  {prodSalesCompany && (() => {
+                    const c = companies.find(x => String(x.id) === String(prodSalesCompany));
+                    return c ? (
+                      <span style={{ fontWeight: 400, color: 'var(--gray-500)', marginLeft: 8 }}>
+                        · {c.name}
+                      </span>
+                    ) : null;
+                  })()}
+                  {prodSalesHasMissingCost && (
+                    <span
+                      title="Some sold lines have no purchase_rate_snapshot recorded (legacy pre-2026 data). COGS is understated and Gross Profit is inflated for the affected products. Values are shown as-is; no silent adjustment is applied."
+                      style={{
+                        marginLeft: 10, fontSize: 12, fontWeight: 600,
+                        color: 'var(--amber, #d97706)',
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                      }}
+                    >
+                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>warning</span>
+                      COGS partially unknown
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="table-wrap">
+                {prodSalesRows.length === 0 ? (
+                  <div className="empty-state">
+                    <div className="empty-state-title">No product sales in selected period</div>
+                    <div className="empty-state-subtitle">Try widening the date range or clearing the company filter.</div>
+                  </div>
+                ) : (
+                  <table className="report-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: '4%' }}>Sr</th>
+                        <th>Product Name</th>
+                        <th style={{ width: '9%' }}>Pack</th>
+                        <th style={{ width: '8%', textAlign: 'right' }}>Gross Qty</th>
+                        <th style={{ width: '8%', textAlign: 'right' }}>Return Qty</th>
+                        <th style={{ width: '8%', textAlign: 'right' }}>Net Sold</th>
+                        <th style={{ width: '12%', textAlign: 'right' }}>Net Revenue</th>
+                        <th style={{ width: '12%', textAlign: 'right' }}>COGS</th>
+                        <th style={{ width: '12%', textAlign: 'right' }}>Gross Profit</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {prodSalesRows.map((row, i) => {
+                        const gp        = parseFloat(row.gross_profit) || 0;
+                        const missing   = (row.missing_cost_lines || 0) > 0;
+                        return (
+                          <tr key={row.product_id}>
+                            <td>{i + 1}</td>
+                            <td style={{ fontWeight: 600 }}>
+                              {row.product_name}
+                              {missing && (
+                                <span
+                                  title={`${row.missing_cost_lines} line${row.missing_cost_lines !== 1 ? 's' : ''} in this period have no purchase-rate snapshot; COGS below excludes their cost.`}
+                                  style={{ marginLeft: 6, color: 'var(--amber, #d97706)', cursor: 'help', fontSize: 12 }}
+                                >⚠</span>
+                              )}
+                            </td>
+                            <td style={{ color: 'var(--gray-500)' }}>{row.pack_size || '—'}</td>
+                            <td style={{ textAlign: 'right' }}>{row.gross_qty}</td>
+                            <td style={{ textAlign: 'right' }}>{row.return_qty > 0 ? row.return_qty : '—'}</td>
+                            <td style={{ textAlign: 'right', fontWeight: 600 }}>{row.net_qty}</td>
+                            <td style={{ textAlign: 'right' }}>{fmt(row.net_revenue)}</td>
+                            <td style={{ textAlign: 'right' }}>{fmt(row.cogs)}</td>
+                            <td style={{
+                              textAlign: 'right', fontWeight: 700,
+                              color: gp < 0 ? 'var(--amber, #d97706)' : undefined,
+                            }}>
+                              {fmt(row.gross_profit)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={3} className="report-tfoot-label">Total</td>
+                        <td className="report-tfoot-num">{prodSalesTotals.gross_qty}</td>
+                        <td className="report-tfoot-num">{prodSalesTotals.return_qty}</td>
+                        <td className="report-tfoot-num">{prodSalesTotals.net_qty}</td>
+                        <td className="report-tfoot-num">{fmt(prodSalesTotals.net_revenue)}</td>
+                        <td className="report-tfoot-num">{fmt(prodSalesTotals.cogs)}</td>
+                        <td className="report-tfoot-num">{fmt(prodSalesTotals.gross_profit)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                )}
               </div>
             </div>
           )}
