@@ -1,6 +1,6 @@
 import api from './api';
 
-const DEFAULT_COMPANY = { name: 'Medivance', address: '', phone: '', email: '', logo_url: '' };
+const DEFAULT_COMPANY = { name: 'Medivance', address: '', phone: '', email: '', logo_url: '', signature_url: '' };
 
 // Everything InvoiceDocument needs to render, fetched the same way for
 // both the live /invoice/:id/print page and the Print Queue's background
@@ -12,11 +12,15 @@ export async function fetchInvoiceRenderData(saleId) {
   ]);
   const saleData = saleRes.data;
   const company = {
-    name: companyRes.data?.name || DEFAULT_COMPANY.name,
-    address: companyRes.data?.address || '',
-    phone: companyRes.data?.phone || '',
-    email: companyRes.data?.email || '',
-    logo_url: companyRes.data?.logo_url || '',
+    name:          companyRes.data?.name    || DEFAULT_COMPANY.name,
+    address:       companyRes.data?.address || '',
+    phone:         companyRes.data?.phone   || '',
+    email:         companyRes.data?.email   || '',
+    logo_url:      companyRes.data?.logo_url      || '',
+    // Base64 data URL (or hosted URL) of the authorized signature.
+    // Rendered above the sign line in WarrantySection when non-empty;
+    // absence falls back to the manual wet-ink whitespace.
+    signature_url: companyRes.data?.signature_url || '',
   };
   let customerBalance = 0;
   try {
