@@ -69,7 +69,14 @@ function WarrantySection({ company }) {
             Note: This warranty does not apply to Unani, Homeopathic, Bio Chemic System of Medicine and General Items, if
           </div>
         </div>
-        <div className="warranty-sign">
+        <div className={`warranty-sign${company.signature_url ? ' warranty-sign--has-image' : ''}`}>
+          {company.signature_url && (
+            <img
+              className="warranty-signature-img"
+              src={company.signature_url}
+              alt="Authorized signature"
+            />
+          )}
           <div className="warranty-sign-line" />
           <div>For <strong>{company.name}</strong></div>
         </div>
@@ -401,6 +408,18 @@ export const INVOICE_STYLES = `
   .warranty-body { text-align: justify; }
   .warranty-note { margin-top: 3px; }
   .warranty-sign { flex: 0.75; text-align: center; padding-top: 100px; font-size: 9pt; }
+  /* When an authorized-signature image is uploaded on Company Settings,
+     shrink the top padding so the image sits in what would otherwise be
+     the manual wet-ink whitespace. Absence falls back to the original
+     100px padding automatically. */
+  .warranty-sign--has-image { padding-top: 20px; }
+  .warranty-signature-img {
+    display: block;
+    margin: 0 auto -2px;
+    max-width: 60%;
+    max-height: 70px;
+    object-fit: contain;
+  }
   .warranty-sign-line { border-top: 1px solid #000; width: 78%; margin: 0 auto 4px; }
   .drap-box {
     border: 1px solid #000;
