@@ -2,6 +2,7 @@ import React from 'react';
 import { computeInvoiceRows } from '../../utils/invoiceCalculations';
 import { formatDatePKT, formatMonthYearPKT } from '../../utils/dateUtils';
 import CompanyLogo from '../../components/common/CompanyLogo';
+import { formatTaxId } from '../../components/common/TaxIdInput';
 
 export function numberToWords(num) {
   const ones = ['', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE',
@@ -107,6 +108,7 @@ export default function InvoiceDocument({ saleData, type, customerBalance, compa
   const {
     invoice_no, date, customer_name, customer_address, customer_id,
     city_name, area_name, territory_name, license_no,
+    ntn, strn,
     salesman_name, delivery_by_name, items = [],
   } = saleData;
 
@@ -159,6 +161,24 @@ export default function InvoiceDocument({ saleData, type, customerBalance, compa
               <div className="party-row party-row-tight">
                 <span className="party-label">License No:</span>
                 <span className="party-value">{license_no}</span>
+              </div>
+            )}
+            {/* Pakistan tax identifiers. Each row — label AND value — is
+                hidden together when the corresponding field is NULL /
+                empty on the customer record, per the spec. Clean digits
+                stored in the DB are re-masked for display via the shared
+                formatTaxId helper from TaxIdInput, so what prints matches
+                what the operator sees on Customers.js. */}
+            {ntn && (
+              <div className="party-row party-row-tight">
+                <span className="party-label">NTN:</span>
+                <span className="party-value">{formatTaxId(ntn, 'NTN')}</span>
+              </div>
+            )}
+            {strn && (
+              <div className="party-row party-row-tight">
+                <span className="party-label">STRN:</span>
+                <span className="party-value">{formatTaxId(strn, 'STRN')}</span>
               </div>
             )}
           </div>
