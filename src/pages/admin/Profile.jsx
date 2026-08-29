@@ -38,7 +38,7 @@ export default function Profile() {
   const isAdmin = user?.role === 'admin';
   const [tab, setTab] = useState('company');
 
-  const [company, setCompany] = useState({ name: '', address: '', phone: '', email: '' });
+  const [company, setCompany] = useState({ name: '', address: '', phone: '', email: '', signature_url: '' });
   const [savingCompany, setSavingCompany] = useState(false);
 
   const [users, setUsers] = useState([]);
@@ -61,8 +61,14 @@ export default function Profile() {
   const loadCompany = useCallback(async () => {
     try {
       const r = await api.get('/admin/company');
-      const { name, address, phone, email } = r.data || {};
-      setCompany({ name: name || '', address: address || '', phone: phone || '', email: email || '' });
+      const { name, address, phone, email, signature_url } = r.data || {};
+      setCompany({
+        name:          name    || '',
+        address:       address || '',
+        phone:         phone   || '',
+        email:         email   || '',
+        signature_url: signature_url || '',
+      });
     } catch (_) {}
   }, []);
 
@@ -101,13 +107,35 @@ export default function Profile() {
     if (!company.name?.trim()) return toast.error('Company name is required');
     setSavingCompany(true);
     try {
-      const { name, address, phone, email } = company;
-      await api.put('/admin/company', { name, address, phone, email });
+      const { name, address, phone, email, signature_url } = company;
+      await api.put('/admin/company', { name, address, phone, email, signature_url });
       toast.success('Company details updated');
       refreshCompany(); // update sidebar/login branding immediately
     }
     catch (err) { toast.error(err.response?.data?.message || 'Error saving'); }
     setSavingCompany(false);
+  };
+
+  // Read a chosen PNG/JPG as a base64 data URL and stash it on the
+  // company state. Client-side we cap at 500 KB — the field is LONGTEXT
+  // in the DB but keeping the payload small means every /admin/company
+  // response and every invoice-render fetch stays snappy. The input's
+  // .value is reset on failure so the same file can be re-selected.
+  const onSignatureFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!/^image\/(png|jpe?g)$/i.test(file.type)) {
+      e.target.value = '';
+      return toast.error('Please choose a PNG or JPG image.');
+    }
+    if (file.size > 500 * 1024) {
+      e.target.value = '';
+      return toast.error('Signature image is too large — keep it under 500 KB.');
+    }
+    const reader = new FileReader();
+    reader.onload  = () => setCompany(p => ({ ...p, signature_url: reader.result }));
+    reader.onerror = () => toast.error('Could not read the file.');
+    reader.readAsDataURL(file);
   };
 
   const openCreateUser = () => {
@@ -258,6 +286,56 @@ export default function Profile() {
                 <label className="form-label">Email</label>
                 <input className="form-control" type="email" value={company.email || ''} disabled={!isAdmin}
                   onChange={e => setCompany(p => ({ ...p, email: e.target.value }))} />
+              </div>
+
+              {/* Authorized signature — rendered on warranty invoices
+                  above the manual sign line (see WarrantySection in
+                  InvoiceDocument.js). Editable by admins only. */}
+              <div className="form-group" style={{ gridColumn: '1 / -1', marginTop: 4 }}>
+                <label className="form-label">Authorized Signature (for warranty invoices)</label>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 14, padding: 12,
+                  background: 'var(--gray-50)', border: '1px solid var(--gray-200)', borderRadius: 8
+                }}>
+                  <div style={{
+                    flex: '0 0 180px', height: 70,
+                    background: '#fff', border: '1px dashed var(--gray-300)', borderRadius: 6,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden'
+                  }}>
+                    {company.signature_url ? (
+                      <img src={company.signature_url} alt="Authorized signature"
+                        style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                    ) : (
+                      <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>No signature uploaded</span>
+                    )}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {isAdmin ? (
+                      <>
+                        <input
+                          type="file" accept="image/png,image/jpeg"
+                          onChange={onSignatureFile}
+                          style={{ fontSize: 12 }}
+                        />
+                        <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 6, lineHeight: 1.5 }}>
+                          Prints above the signature line on warranty invoices. Best results
+                          with a transparent PNG at ~500&times;160&nbsp;px. Max 500&nbsp;KB.
+                        </div>
+                        {company.signature_url && (
+                          <button type="button" className="btn btn-ghost btn-sm"
+                            style={{ marginTop: 6, color: 'var(--red)', padding: '3px 8px' }}
+                            onClick={() => setCompany(p => ({ ...p, signature_url: '' }))}>
+                            Remove signature
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>
+                        Only admins can change the authorized signature.
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
             {isAdmin ? (
