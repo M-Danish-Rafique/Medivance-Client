@@ -8,10 +8,16 @@ import { formatCurrency, formatPhone, handlePhoneInput } from '../../utils/forma
 import { formatDatePKT } from '../../utils/dateUtils';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
+import TaxIdInput from '../../components/common/TaxIdInput';
 
 const emptyForm = {
   name: '', address: '', phone: '', license_no: '', license_expiry: '',
-  city_id: '', area_id: '', territory_id: '', is_licensed: true
+  city_id: '', area_id: '', territory_id: '', is_licensed: true,
+  // Pakistan tax identifiers, stored as clean digits (no dashes).
+  // TaxIdInput applies XXXXXXX-X / XXXXX-XXXXXXX-X / XX-XX-XXXX-XXX-XX
+  // masks at render time; formatTaxId re-applies the same masks on the
+  // printed invoice.
+  ntn: '', strn: ''
 };
 
 // Customer segmentation. "Licensed" covers outlets that legally require a
@@ -77,7 +83,11 @@ export default function Customers() {
       name: item.name, address: item.address || '', phone: item.phone || '',
       license_no: cleanLicenseNo(item.license_no), license_expiry: item.license_expiry ? item.license_expiry.split('T')[0] : '',
       city_id: item.city_id || '', area_id: item.area_id || '', territory_id: item.territory_id || '',
-      is_licensed: !!item.is_licensed
+      is_licensed: !!item.is_licensed,
+      // Strip anything non-numeric on the way in — legacy rows might
+      // still carry dashes or spaces if imported from another system.
+      ntn:  String(item.ntn  || '').replace(/\D/g, ''),
+      strn: String(item.strn || '').replace(/\D/g, '')
     });
     setModal(true);
   };
@@ -329,6 +339,31 @@ export default function Customers() {
             </div>
           </div>
         )}
+
+        {/* Pakistan tax identifiers. Applies to both licensed and
+            non-licensed customers, so the block sits outside the
+            is_licensed guard above. TaxIdInput handles digit-only
+            input, live dash masking, and clean-value state — what
+            reaches `form.ntn` / `form.strn` is always the raw digit
+            string. Empty strings are normalised to NULL by the backend. */}
+        <div className="form-grid form-grid-2">
+          <div className="form-group">
+            <label className="form-label">NTN</label>
+            <TaxIdInput
+              type="NTN"
+              value={form.ntn}
+              onChange={digits => setForm(p => ({ ...p, ntn: digits }))}
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label">STRN</label>
+            <TaxIdInput
+              type="STRN"
+              value={form.strn}
+              onChange={digits => setForm(p => ({ ...p, strn: digits }))}
+            />
+          </div>
+        </div>
 
         <div className="divider" />
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Location</div>
