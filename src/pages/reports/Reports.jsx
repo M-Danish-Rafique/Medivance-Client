@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Layout from '../../components/layout/Layout';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
@@ -18,48 +18,173 @@ const SUMMARY_ENTITY_OPTIONS = [
 ];
 const SUMMARY_ENTITY_LABEL = Object.fromEntries(SUMMARY_ENTITY_OPTIONS.map(o => [o.key, o.label]));
 
-// ─── Sale & Stock: in-flow display modes ────────────────────────────────
-// Segmented control above the table lets the operator choose how the
-// Purchase and Adjustment (manual inventory add/edit) columns are shown.
-// The chosen mode is also sent to the PDF endpoint so print output matches
-// the on-screen shape.
-const STOCK_MODES = [
+const SUMMARY_VALUE_COLUMN_OPTIONS = [
+  { key: 'gross_qty', label: 'Gross Qty', type: 'qty' },
+  { key: 'ret_qty', label: 'Ret Qty', type: 'qty' },
+  { key: 'net_qty', label: 'Net Qty', type: 'qty' },
+  { key: 'gross', label: 'Gross Sale', type: 'money' },
+  { key: 'disc', label: 'Discount', type: 'money' },
+  { key: 'ret', label: 'Return', type: 'money' },
+  { key: 'net', label: 'Net Sale', type: 'money' },
+  { key: 'rec', label: 'Recovered', type: 'money' },
+];
+
+const SUMMARY_DEFAULT_VALUE_VISIBILITY = {
+  gross_qty: false,
+  ret_qty: false,
+  net_qty: true,
+  gross: true,
+  disc: true,
+  ret: true,
+  net: true,
+  rec: true,
+};
+
+function SearchableMultiSelect({ options, value, onChange, placeholder = 'Search and select…' }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const boxRef = useRef(null);
+  const selected = value || [];
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e) => {
+      if (!boxRef.current?.contains(e.target)) setOpen(false);
+    };
+    const onEsc = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onEsc);
+    };
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    const q = (query || '').trim().toLowerCase();
+    if (!q) return options;
+    return options.filter(o => String(o.label || '').toLowerCase().includes(q));
+  }, [options, query]);
+
+  const selectedLabel = (() => {
+    if (selected.length === 0) return 'All';
+    if (selected.length === 1) {
+      const one = options.find(o => String(o.value) === String(selected[0]));
+      return one?.label || '1 selected';
+    }
+    return `${selected.length} selected`;
+  })();
+
+  const toggleValue = (v) => {
+    const exists = selected.some(x => String(x) === String(v));
+    if (exists) onChange(selected.filter(x => String(x) !== String(v)));
+    else onChange([...selected, String(v)]);
+  };
+
+  return (
+    <div ref={boxRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        className="form-control"
+        onClick={() => setOpen(v => !v)}
+        style={{
+          textAlign: 'left',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedLabel}</span>
+        <span className="material-symbols-outlined" style={{ fontSize: 16, color: 'var(--gray-500)' }}>
+          {open ? 'expand_less' : 'expand_more'}
+        </span>
+      </button>
+      {open && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            left: 0,
+            right: 0,
+            zIndex: 40,
+            background: 'white',
+            border: '1px solid var(--gray-200)',
+            borderRadius: 8,
+            boxShadow: '0 8px 20px rgba(0,0,0,0.08)',
+            overflow: 'hidden',
+          }}
+        >
+          <div style={{ padding: 8, borderBottom: '1px solid var(--gray-100)' }}>
+            <input
+              className="form-control"
+              placeholder={placeholder}
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              style={{ fontSize: 12, padding: '7px 8px' }}
+            />
+          </div>
+          <div style={{ maxHeight: 220, overflowY: 'auto', padding: 6 }}>
+            {filtered.length === 0 ? (
+              <div style={{ fontSize: 12, color: 'var(--gray-500)', padding: 8 }}>No matches</div>
+            ) : (
+              filtered.map(opt => {
+                const checked = selected.some(x => String(x) === String(opt.value));
+                return (
+                  <label
+                    key={opt.value}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '5px 6px',
+                      borderRadius: 6,
+                      cursor: 'pointer',
+                      fontSize: 12,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleValue(opt.value)}
+                      style={{ margin: 0, cursor: 'pointer' }}
+                    />
+                    <span>{opt.label}</span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Sale & Stock: in-flow display menu options ──────────────────────────
+// Default mode remains "none" (hide Purchase + Adjustment columns).
+// Operators can opt into either a split view or a combined view through
+// a kebab menu in the table header.
+const STOCK_COLUMN_OPTIONS = [
   {
-    key:   'none',
-    label: 'None',
-    icon:  'visibility_off',
-    hint:  'Hide Purchase and Adjustment columns.',
+    key: 'split',
+    title: 'Show Purchase and Adjustment Separately',
+    description: 'Displays dedicated Purchase and Adjustment columns.',
   },
   {
-    key:   'split',
-    label: 'Split',
-    icon:  'view_column',
-    hint:  'Show Purchase and Adjustment as separate columns.',
-  },
-  {
-    key:   'combined',
-    label: 'Combined',
-    icon:  'merge_type',
-    hint:  'Show a single Purchase + Adjustment column.',
+    key: 'combined',
+    title: 'Show Purchase and Adjustment Combined',
+    description: 'Displays one merged Purchase + Adjustment column.',
   },
 ];
-const STOCK_MODE_TOOLTIP =
-  'Choose how inventory in-flows are displayed:\n' +
-  '• None — hides Purchase & Adjustment columns\n' +
-  '• Split — separate columns for Purchase and Adjustment\n' +
-  '• Combined — merged Pur + Adj column\n' +
-  'The choice also applies to the downloaded PDF.';
 
-// Small, dependency-free segmented control (radio group semantics).
-// Rendered inline where used — kept module-local since it's specific to
-// this report's shape/tokens.
-function StockModeSegment({ value, onChange }) {
+function GroupByToggle({ value, onChange, options, ariaLabel }) {
   return (
     <div
       role="radiogroup"
-      aria-label="Inventory in-flow display mode"
-      title={STOCK_MODE_TOOLTIP}
-      className="stock-mode-segment"
+      aria-label={ariaLabel}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -70,44 +195,35 @@ function StockModeSegment({ value, onChange }) {
         border: '1px solid var(--gray-200, #e2e6ec)',
       }}
     >
-      {STOCK_MODES.map(m => {
-        const active = value === m.key;
+      {options.map(opt => {
+        const active = value === opt.key;
         return (
           <button
-            key={m.key}
+            key={opt.key}
             type="button"
             role="radio"
             aria-checked={active}
-            title={m.hint}
-            onClick={() => onChange(m.key)}
-            className={`stock-mode-segment__btn${active ? ' is-active' : ''}`}
+            onClick={() => onChange(opt.key)}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
-              padding: '6px 12px',
+              padding: '6px 14px',
               border: 0,
               borderRadius: 999,
               cursor: 'pointer',
               fontSize: 12.5,
-              fontWeight: active ? 600 : 500,
+              fontWeight: active ? 700 : 600,
               lineHeight: 1,
               background: active ? 'var(--white, #fff)' : 'transparent',
-              color:      active ? 'var(--gray-900, #0f172a)' : 'var(--gray-600, #4b5563)',
-              boxShadow:  active
+              color: active ? 'var(--gray-900, #0f172a)' : 'var(--gray-600, #4b5563)',
+              boxShadow: active
                 ? '0 1px 2px rgba(15,23,42,0.08), 0 0 0 1px rgba(15,23,42,0.06)'
                 : 'none',
               transition: 'background 180ms ease, color 180ms ease, box-shadow 180ms ease',
             }}
           >
-            <span
-              className="material-symbols-outlined"
-              aria-hidden="true"
-              style={{ fontSize: 15, opacity: active ? 1 : 0.75 }}
-            >
-              {m.icon}
-            </span>
-            {m.label}
+            {opt.label}
           </button>
         );
       })}
@@ -217,6 +333,10 @@ export default function Reports() {
   const [summaryLayers, setSummaryLayers] = useState([]); // ordered array of entity keys, e.g. ['salesman','company']
   const [summaryData, setSummaryData] = useState(null);   // { rows, layers }
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryLayerFilters, setSummaryLayerFilters] = useState({});
+  const [summaryValueVisibility, setSummaryValueVisibility] = useState(SUMMARY_DEFAULT_VALUE_VISIBILITY);
+  const [summaryShowColumnMenu, setSummaryShowColumnMenu] = useState(false);
+  const summaryColumnMenuRef = useRef(null);
 
   // Sale & Stock report state — dates are REQUIRED (see fetchSaleStock).
   // Pre-filled with a sensible default window (start of current month → today
@@ -247,6 +367,8 @@ export default function Reports() {
   // context on demand. Sent through to the PDF endpoint so downloads
   // match the on-screen shape.
   const [stockDisplayMode, setStockDisplayMode] = useState('none');
+  const [stockShowColumnMenu, setStockShowColumnMenu] = useState(false);
+  const stockColumnMenuRef = useRef(null);
 
   // Batch Activity report state — product + batch are required, dates are
   // optional (open-ended window means "all activity ever for this batch").
@@ -265,12 +387,13 @@ export default function Reports() {
   const [batchData, setBatchData] = useState(null);
   const [batchLoading, setBatchLoading] = useState(false);
 
-  // Product Sales report state — per-product revenue/cost/profit register
+  // Profit report state — grouped revenue/cost/profit register
   // over a required date window. Default the window to current-PKT-month
   // start → today for the same reason Sale & Stock does: prevents the
   // operator from generating an unbounded report that would take seconds
   // to run and produce a meaningless "all time" number set.
-  const [prodSalesCompany, setProdSalesCompany] = useState('');
+  const [profitGroupBy, setProfitGroupBy] = useState('company');
+  const [profitEntityIds, setProfitEntityIds] = useState([]);
   const [prodSalesFrom, setProdSalesFrom] = useState(_defaultStockRange.from);
   const [prodSalesTo, setProdSalesTo] = useState(_defaultStockRange.to);
   const [prodSalesRows, setProdSalesRows] = useState(null);
@@ -303,6 +426,48 @@ export default function Reports() {
       })
       .catch(() => setDataLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!summaryShowColumnMenu) return;
+    const onDocClick = (e) => {
+      if (!summaryColumnMenuRef.current?.contains(e.target)) setSummaryShowColumnMenu(false);
+    };
+    const onEsc = (e) => {
+      if (e.key === 'Escape') setSummaryShowColumnMenu(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onEsc);
+    };
+  }, [summaryShowColumnMenu]);
+
+  useEffect(() => {
+    if (!stockShowColumnMenu) return;
+    const onDocClick = (e) => {
+      if (!stockColumnMenuRef.current?.contains(e.target)) setStockShowColumnMenu(false);
+    };
+    const onEsc = (e) => {
+      if (e.key === 'Escape') setStockShowColumnMenu(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onEsc);
+    };
+  }, [stockShowColumnMenu]);
+
+  useEffect(() => {
+    // Keep only filters for currently selected layer entities.
+    setSummaryLayerFilters(prev => {
+      const keep = Object.fromEntries(
+        Object.entries(prev).filter(([k]) => summaryLayers.includes(k))
+      );
+      return keep;
+    });
+  }, [summaryLayers]);
 
   const fetchLedger = async () => {
     if (!ledgerEntityId) return toast.error('Please select a customer or supplier');
@@ -409,6 +574,41 @@ export default function Reports() {
     setSummaryData(null);
   };
 
+  const summaryVisibleValueColumns = SUMMARY_VALUE_COLUMN_OPTIONS.filter(c => summaryValueVisibility[c.key] !== false);
+  const summaryMaxValueColumns = Math.max(0, 10 - summaryLayers.length);
+
+  const toggleSummaryValueColumn = (key) => {
+    setSummaryValueVisibility(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const resetSummaryValueColumns = () => {
+    setSummaryValueVisibility(SUMMARY_DEFAULT_VALUE_VISIBILITY);
+  };
+
+  const toggleStockColumnOption = (nextMode) => {
+    setStockDisplayMode(prev => (prev === nextMode ? 'none' : nextMode));
+  };
+
+  const appendSummaryLayerFilters = (params) => {
+    if ((summaryLayerFilters.salesman || []).length) params.append('salesman_ids', summaryLayerFilters.salesman.join(','));
+    if ((summaryLayerFilters.company || []).length) params.append('company_ids', summaryLayerFilters.company.join(','));
+    if ((summaryLayerFilters.product || []).length) params.append('product_ids', summaryLayerFilters.product.join(','));
+    if ((summaryLayerFilters.customer || []).length) params.append('customer_ids', summaryLayerFilters.customer.join(','));
+  };
+
+  const validateSummaryPdfColumnLimit = () => {
+    const selectedValueCount = summaryVisibleValueColumns.length;
+    if (selectedValueCount === 0) {
+      toast.error('Please select at least one value column for PDF.');
+      return false;
+    }
+    if (selectedValueCount <= summaryMaxValueColumns) return true;
+    toast.error(
+      `With ${summaryLayers.length} tier${summaryLayers.length !== 1 ? 's' : ''}, you can select only ${summaryMaxValueColumns} value column${summaryMaxValueColumns !== 1 ? 's' : ''}.`
+    );
+    return false;
+  };
+
   const fetchSaleSummary = async () => {
     if (summaryLayers.length === 0) return toast.error('Please select at least Layer 1');
     setSummaryLoading(true);
@@ -417,6 +617,7 @@ export default function Reports() {
       if (summaryFrom) params.append('from_date', summaryFrom);
       if (summaryTo) params.append('to_date', summaryTo);
       params.append('layers', summaryLayers.join(','));
+      appendSummaryLayerFilters(params);
       const r = await api.get(`/reports/sale-summary?${params}`);
       setSummaryData(r.data);
     } catch (err) {
@@ -428,10 +629,13 @@ export default function Reports() {
 
   const downloadSaleSummaryPDF = async () => {
     if (summaryLayers.length === 0) return toast.error('Please select at least Layer 1');
+    if (!validateSummaryPdfColumnLimit()) return;
     const params = new URLSearchParams();
     if (summaryFrom) params.append('from_date', summaryFrom);
     if (summaryTo) params.append('to_date', summaryTo);
     params.append('layers', summaryLayers.join(','));
+    params.append('value_cols', summaryVisibleValueColumns.map(c => c.key).join(','));
+    appendSummaryLayerFilters(params);
     try {
       const res = await api.get(`/reports/sale-summary/pdf?${params}`, { responseType: 'blob' });
       downloadBlob(res, 'sale-summary-report.pdf');
@@ -560,11 +764,12 @@ export default function Reports() {
       const params = new URLSearchParams();
       params.append('from_date', prodSalesFrom);
       params.append('to_date',   prodSalesTo);
-      if (prodSalesCompany) params.append('company_id', prodSalesCompany);
+      params.append('group_by', profitGroupBy);
+      if (profitEntityIds.length) params.append('entity_ids', profitEntityIds.join(','));
       const r = await api.get(`/reports/product-sales?${params}`);
       setProdSalesRows(r.data.rows || []);
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Error fetching Product Sales report');
+      toast.error(err?.response?.data?.message || 'Error fetching Profit report');
     } finally {
       setProdSalesLoading(false);
     }
@@ -577,10 +782,11 @@ export default function Reports() {
     const params = new URLSearchParams();
     params.append('from_date', prodSalesFrom);
     params.append('to_date',   prodSalesTo);
-    if (prodSalesCompany) params.append('company_id', prodSalesCompany);
+    params.append('group_by', profitGroupBy);
+    if (profitEntityIds.length) params.append('entity_ids', profitEntityIds.join(','));
     try {
       const res = await api.get(`/reports/product-sales/pdf?${params}`, { responseType: 'blob' });
-      downloadBlob(res, 'product-sales-report.pdf');
+      downloadBlob(res, 'profit-report.pdf');
     } catch {
       toast.error('Error downloading PDF');
     }
@@ -615,12 +821,15 @@ export default function Reports() {
   const summaryRows = summaryData?.rows || [];
   const summaryLayerLabels = summaryData?.layers?.map(l => l.label) || summaryLayers.map(k => SUMMARY_ENTITY_LABEL[k]);
   const summaryTotals = summaryRows.reduce((t, r) => ({
+    gross_qty: t.gross_qty + (parseInt(r.gross_qty, 10) || 0),
+    ret_qty: t.ret_qty + (parseInt(r.return_qty, 10) || 0),
+    net_qty: t.net_qty + (parseInt(r.net_qty, 10) || 0),
     gross: t.gross + parseFloat(r.gross_amount || 0),
     ret: t.ret + parseFloat(r.return_amount || 0),
     net: t.net + parseFloat(r.net_amount || 0),
     disc: t.disc + parseFloat(r.discount || 0),
     rec: t.rec + parseFloat(r.recovered_amount || 0),
-  }), { gross: 0, ret: 0, net: 0, disc: 0, rec: 0 });
+  }), { gross_qty: 0, ret_qty: 0, net_qty: 0, gross: 0, ret: 0, net: 0, disc: 0, rec: 0 });
 
   const stockTotals = (stockRows || []).reduce((t, r) => ({
     opening:  t.opening  + (parseInt(r.opening_stock,   10) || 0),
@@ -634,13 +843,10 @@ export default function Reports() {
   }), { opening: 0, purchase: 0, adjust: 0, gross: 0, ret: 0, netU: 0, netV: 0, closing: 0 });
 
   const prodSalesTotals = (prodSalesRows || []).reduce((t, r) => ({
-    gross_qty:    t.gross_qty    + (parseInt(r.gross_qty,   10) || 0),
-    return_qty:   t.return_qty   + (parseInt(r.return_qty,  10) || 0),
-    net_qty:      t.net_qty      + (parseInt(r.net_qty,     10) || 0),
-    net_revenue:  t.net_revenue  + (parseFloat(r.net_revenue)  || 0),
+    revenue:      t.revenue      + (parseFloat(r.revenue)  || 0),
     cogs:         t.cogs         + (parseFloat(r.cogs)         || 0),
     gross_profit: t.gross_profit + (parseFloat(r.gross_profit) || 0),
-  }), { gross_qty: 0, return_qty: 0, net_qty: 0, net_revenue: 0, cogs: 0, gross_profit: 0 });
+  }), { revenue: 0, cogs: 0, gross_profit: 0 });
   // Any product with a NULL purchase_rate_snapshot on at least one line
   // will report an understated COGS (and an inflated Gross Profit). We
   // surface that with a footnote/tooltip so the operator knows to check
@@ -665,7 +871,7 @@ export default function Reports() {
           { id: 'summary', label: 'Sale Summary', icon: 'layers' },
           { id: 'saleStock', label: 'Sale & Stock', icon: 'inventory_2' },
           { id: 'batchActivity', label: 'Batch Activity', icon: 'science' },
-          { id: 'productSales', label: 'Product Sales', icon: 'bar_chart' },
+          { id: 'productSales', label: 'Profit Report', icon: 'bar_chart' },
         ].map(tab => (
           <button
             key={tab.id}
@@ -984,7 +1190,7 @@ export default function Reports() {
                 Choose how to group your sales — add up to 4 grouping levels.
               </div>
 
-              <div className="form-grid form-grid-4">
+              <div className="form-grid form-grid-4" style={{ marginBottom: 10 }}>
                 {[0, 1, 2, 3].map(idx => {
                   // Only render this slot if it's the first ("Group By"), or
                   // the previous slot has already been filled in.
@@ -1011,6 +1217,34 @@ export default function Reports() {
                 })}
               </div>
 
+              {summaryLayers.length > 0 && (
+                <div className="form-grid form-grid-4" style={{ marginBottom: 18 }}>
+                  {summaryLayers.map(layerKey => {
+                    const options = layerKey === 'salesman'
+                      ? employeesSalesman.map(e => ({ value: String(e.id), label: e.name }))
+                      : layerKey === 'company'
+                      ? companies.map(c => ({ value: String(c.id), label: c.name }))
+                      : layerKey === 'product'
+                      ? products.map(p => ({ value: String(p.id), label: `${p.name}${p.pack_size ? ` · ${p.pack_size}` : ''}` }))
+                      : customers.map(c => ({ value: String(c.id), label: c.name }));
+                    return (
+                      <div className="form-group" style={{ margin: 0 }} key={`filter-${layerKey}`}>
+                        <label className="form-label">{SUMMARY_ENTITY_LABEL[layerKey]} Filter</label>
+                        <SearchableMultiSelect
+                          options={options}
+                          value={summaryLayerFilters[layerKey] || []}
+                          onChange={(ids) => {
+                            setSummaryLayerFilters(prev => ({ ...prev, [layerKey]: ids }));
+                            setSummaryData(null);
+                          }}
+                          placeholder={`Search ${SUMMARY_ENTITY_LABEL[layerKey]}…`}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
                 <button className="btn btn-primary" onClick={fetchSaleSummary}
                   disabled={summaryLoading || summaryLayers.length === 0}>
@@ -1029,16 +1263,98 @@ export default function Reports() {
           {summaryData && (() => {
             const nLayers = summaryLayerLabels.length;
             const spans = buildSummarySpans(summaryRows, nLayers);
-            let runningSubtotal = { gross: 0, ret: 0, net: 0, disc: 0, rec: 0 };
+            let runningSubtotal = { gross_qty: 0, ret_qty: 0, net_qty: 0, gross: 0, ret: 0, net: 0, disc: 0, rec: 0 };
+
+            const summaryValueReaders = {
+              gross_qty: (row) => parseInt(row.gross_qty, 10) || 0,
+              ret_qty: (row) => parseInt(row.return_qty, 10) || 0,
+              net_qty: (row) => parseInt(row.net_qty, 10) || 0,
+              gross: (row) => parseFloat(row.gross_amount || 0),
+              disc: (row) => parseFloat(row.discount || 0),
+              ret: (row) => parseFloat(row.return_amount || 0),
+              net: (row) => parseFloat(row.net_amount || 0),
+              rec: (row) => parseFloat(row.recovered_amount || 0),
+            };
+
+            const summaryValueFormatter = (key, val) => {
+              if (key.endsWith('_qty')) return val > 0 ? String(val) : (key === 'net_qty' ? '0' : '—');
+              if (key === 'disc' || key === 'ret' || key === 'rec') return val > 0 ? fmt(val) : '—';
+              return fmt(val);
+            };
 
             return (
               <div className="card">
-                <div className="card-header">
+                <div
+                  className="card-header"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}
+                >
                   <div className="card-title">
                     {summaryRows.length} group{summaryRows.length !== 1 ? 's' : ''}
                     <span style={{ fontWeight: 400, color: 'var(--gray-500)', marginLeft: 8 }}>
-                      (Grouped By: {summaryLayerLabels.join(', ')})
+                      Grouped By: {summaryLayerLabels.join(', ')}
                     </span>
+                  </div>
+                  <div ref={summaryColumnMenuRef} style={{ position: 'relative' }}>
+                    <button
+                      type="button"
+                      title="Table Column Options"
+                      aria-label="Table Column Options"
+                      aria-haspopup="true"
+                      aria-expanded={summaryShowColumnMenu}
+                      onClick={(e) => { e.stopPropagation(); setSummaryShowColumnMenu(v => !v); }}
+                      className="btn btn-outline"
+                      style={{ padding: '6px 8px', minWidth: 36 }}
+                    >
+                      <span className="material-symbols-outlined" style={{ fontSize: 18 }}>more_vert</span>
+                    </button>
+                    {summaryShowColumnMenu && (
+                      <div
+                        role="menu"
+                        style={{
+                          position: 'absolute',
+                          top: 38,
+                          right: 0,
+                          zIndex: 40,
+                          background: 'white',
+                          border: '1px solid var(--gray-200)',
+                          borderRadius: 8,
+                          boxShadow: '0 6px 18px rgba(0,0,0,0.08)',
+                          minWidth: 220,
+                          padding: 6,
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div style={{ padding: '6px 8px', fontSize: 11, fontWeight: 700, color: 'var(--gray-500)' }}>
+                          VALUE COLUMNS
+                        </div>
+                        {SUMMARY_VALUE_COLUMN_OPTIONS.map(col => {
+                          const checked = summaryValueVisibility[col.key] !== false;
+                          return (
+                            <label
+                              key={col.key}
+                              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleSummaryValueColumn(col.key)}
+                                style={{ margin: 0 }}
+                              />
+                              <span style={{ flex: 1 }}>{col.label}</span>
+                            </label>
+                          );
+                        })}
+                        <div style={{ borderTop: '1px solid var(--gray-100)', marginTop: 6, paddingTop: 6, textAlign: 'right' }}>
+                          <button
+                            type="button"
+                            onClick={resetSummaryValueColumns}
+                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--gray-500)', fontSize: 11 }}
+                          >
+                            Reset to default
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="table-wrap">
@@ -1050,29 +1366,31 @@ export default function Reports() {
                         <tr>
                           <th style={{ width: '4%' }}>Sr</th>
                           {summaryLayerLabels.map((lbl, i) => <th key={i}>{lbl}</th>)}
-                          <th style={{ width: '11%', textAlign: 'right' }}>Gross Sale</th>
-                          <th style={{ width: '10%', textAlign: 'right' }}>Discount</th>
-                          <th style={{ width: '10%', textAlign: 'right' }}>Return</th>
-                          <th style={{ width: '11%', textAlign: 'right' }}>Net Sale</th>
-                          <th style={{ width: '11%', textAlign: 'right' }}>Recovered</th>
+                          {summaryVisibleValueColumns.map(col => (
+                            <th key={col.key} style={{ width: '10%', textAlign: 'right' }}>{col.label}</th>
+                          ))}
                         </tr>
                       </thead>
                       <tbody>
                         {summaryRows.map((row, r) => {
-                          const gross = parseFloat(row.gross_amount) || 0;
-                          const ret = parseFloat(row.return_amount) || 0;
-                          const net = parseFloat(row.net_amount) || 0;
-                          const disc = parseFloat(row.discount) || 0;
-                          const rec = parseFloat(row.recovered_amount) || 0;
+                          const rowValues = Object.fromEntries(
+                            SUMMARY_VALUE_COLUMN_OPTIONS.map(c => [c.key, summaryValueReaders[c.key](row)])
+                          );
                           runningSubtotal = {
-                            gross: runningSubtotal.gross + gross, ret: runningSubtotal.ret + ret,
-                            net: runningSubtotal.net + net, disc: runningSubtotal.disc + disc, rec: runningSubtotal.rec + rec,
+                            gross_qty: runningSubtotal.gross_qty + rowValues.gross_qty,
+                            ret_qty: runningSubtotal.ret_qty + rowValues.ret_qty,
+                            net_qty: runningSubtotal.net_qty + rowValues.net_qty,
+                            gross: runningSubtotal.gross + rowValues.gross,
+                            ret: runningSubtotal.ret + rowValues.ret,
+                            net: runningSubtotal.net + rowValues.net,
+                            disc: runningSubtotal.disc + rowValues.disc,
+                            rec: runningSubtotal.rec + rowValues.rec,
                           };
 
                           const isLastRow = r === summaryRows.length - 1;
                           const layer1Ends = nLayers > 1 && (isLastRow || (row.layer1 || '') !== (summaryRows[r + 1].layer1 || ''));
                           const subtotalToRender = layer1Ends ? runningSubtotal : null;
-                          if (layer1Ends) runningSubtotal = { gross: 0, ret: 0, net: 0, disc: 0, rec: 0 };
+                          if (layer1Ends) runningSubtotal = { gross_qty: 0, ret_qty: 0, net_qty: 0, gross: 0, ret: 0, net: 0, disc: 0, rec: 0 };
 
                           return (
                             <React.Fragment key={r}>
@@ -1090,22 +1408,29 @@ export default function Reports() {
                                     </td>
                                   ) : null
                                 ))}
-                                <td style={{ textAlign: 'right', verticalAlign: 'top' }}>{fmt(row.gross_amount)}</td>
-                                <td style={{ textAlign: 'right', verticalAlign: 'top' }}>{disc > 0 ? fmt(row.discount) : '—'}</td>
-                                <td style={{ textAlign: 'right', verticalAlign: 'top' }}>{ret > 0 ? fmt(row.return_amount) : '—'}</td>
-                                <td style={{ textAlign: 'right', verticalAlign: 'top', fontWeight: 700 }}>{fmt(row.net_amount)}</td>
-                                <td style={{ textAlign: 'right', verticalAlign: 'top' }}>{rec > 0 ? fmt(row.recovered_amount) : '—'}</td>
+                                {summaryVisibleValueColumns.map(col => (
+                                  <td
+                                    key={col.key}
+                                    style={{
+                                      textAlign: 'right',
+                                      verticalAlign: 'top',
+                                      fontWeight: col.key === 'net' || col.key === 'net_qty' ? 700 : undefined,
+                                    }}
+                                  >
+                                    {summaryValueFormatter(col.key, rowValues[col.key])}
+                                  </td>
+                                ))}
                               </tr>
                               {subtotalToRender && (
                                 <tr style={summarySubtotalStyle}>
                                   <td colSpan={1 + nLayers} style={summarySubtotalStyle}>
                                     {row.layer1 ? `Subtotal — ${row.layer1}` : 'Subtotal'}
                                   </td>
-                                  <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{fmt(subtotalToRender.gross)}</td>
-                                  <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{subtotalToRender.disc > 0 ? fmt(subtotalToRender.disc) : '—'}</td>
-                                  <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{subtotalToRender.ret > 0 ? fmt(subtotalToRender.ret) : '—'}</td>
-                                  <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{fmt(subtotalToRender.net)}</td>
-                                  <td style={{ ...summarySubtotalStyle, textAlign: 'right' }}>{fmt(subtotalToRender.rec)}</td>
+                                  {summaryVisibleValueColumns.map(col => (
+                                    <td key={col.key} style={{ ...summarySubtotalStyle, textAlign: 'right' }}>
+                                      {summaryValueFormatter(col.key, subtotalToRender[col.key])}
+                                    </td>
+                                  ))}
                                 </tr>
                               )}
                             </React.Fragment>
@@ -1115,11 +1440,11 @@ export default function Reports() {
                       <tfoot>
                         <tr>
                           <td colSpan={1 + nLayers} className="report-tfoot-label">Grand Total</td>
-                          <td className="report-tfoot-num">{fmt(summaryTotals.gross)}</td>
-                          <td className="report-tfoot-num">{summaryTotals.disc > 0 ? fmt(summaryTotals.disc) : '—'}</td>
-                          <td className="report-tfoot-num">{summaryTotals.ret > 0 ? fmt(summaryTotals.ret) : '—'}</td>
-                          <td className="report-tfoot-num">{fmt(summaryTotals.net)}</td>
-                          <td className="report-tfoot-num">{fmt(summaryTotals.rec)}</td>
+                          {summaryVisibleValueColumns.map(col => (
+                            <td key={col.key} className="report-tfoot-num">
+                              {summaryValueFormatter(col.key, summaryTotals[col.key])}
+                            </td>
+                          ))}
                         </tr>
                       </tfoot>
                     </table>
@@ -1210,10 +1535,69 @@ export default function Reports() {
                     ) : null;
                   })()}
                 </div>
-                <StockModeSegment
-                  value={stockDisplayMode}
-                  onChange={setStockDisplayMode}
-                />
+                <div ref={stockColumnMenuRef} style={{ position: 'relative' }}>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    aria-label="Purchase and Adjustment Column Layout"
+                    title="Purchase and Adjustment Column Layout"
+                    aria-haspopup="true"
+                    aria-expanded={stockShowColumnMenu}
+                    onClick={(e) => { e.stopPropagation(); setStockShowColumnMenu(v => !v); }}
+                    style={{ padding: '6px 10px' }}
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: 16 }}>tune</span>
+                  </button>
+                  {stockShowColumnMenu && (
+                    <div
+                      role="menu"
+                      style={{
+                        position: 'absolute',
+                        top: 38,
+                        right: 0,
+                        zIndex: 40,
+                        background: 'white',
+                        border: '1px solid var(--gray-200)',
+                        borderRadius: 8,
+                        boxShadow: '0 6px 18px rgba(0,0,0,0.08)',
+                        minWidth: 320,
+                        padding: 6,
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div style={{ padding: '6px 8px', fontSize: 11, fontWeight: 700, color: 'var(--gray-500)' }}>
+                        PURCHASE & ADJUSTMENT COLUMNS
+                      </div>
+                      {STOCK_COLUMN_OPTIONS.map(opt => {
+                        const checked = stockDisplayMode === opt.key;
+                        return (
+                          <label
+                            key={opt.key}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'flex-start',
+                              gap: 8,
+                              padding: '6px 8px',
+                              borderRadius: 6,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleStockColumnOption(opt.key)}
+                              style={{ marginTop: 3 }}
+                            />
+                            <div>
+                              <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--gray-700)' }}>{opt.title}</div>
+                              <div style={{ fontSize: 11.5, color: 'var(--gray-500)', marginTop: 2 }}>{opt.description}</div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="table-wrap">
                 {stockRows.length === 0 ? (
@@ -1505,11 +1889,28 @@ export default function Reports() {
         </>
       )}
 
-      {/* ── Product Sales Report ── */}
+      {/* ── Profit Report ── */}
       {reportTab === 'productSales' && (
         <>
           <div className="card" style={{ marginBottom: 20 }}>
-            <div className="card-header"><div className="card-title">Product Sales Report</div></div>
+            <div
+              className="card-header"
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}
+            >
+              <div className="card-title">Profit Report</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <GroupByToggle
+                  value={profitGroupBy}
+                  onChange={(key) => {
+                    setProfitGroupBy(key);
+                    setProfitEntityIds([]);
+                    setProdSalesRows(null);
+                  }}
+                  options={[{ key: 'company', label: 'Company' }, { key: 'salesman', label: 'Salesman' }]}
+                  ariaLabel="Profit report grouping"
+                />
+              </div>
+            </div>
             <div className="card-body">
               <ReportFilterLayout
                 loading={prodSalesLoading}
@@ -1520,17 +1921,16 @@ export default function Reports() {
                 fields={
                   <>
                     <div className="form-group" style={{ margin: 0 }}>
-                      <label className="form-label">Company</label>
-                      <select
-                        className="form-control"
-                        value={prodSalesCompany}
-                        onChange={e => { setProdSalesCompany(e.target.value); setProdSalesRows(null); }}
-                      >
-                        <option value="">All Companies</option>
-                        {companies.map(c => (
-                          <option key={c.id} value={c.id}>{c.name}</option>
-                        ))}
-                      </select>
+                      <label className="form-label">{profitGroupBy === 'company' ? 'Company' : 'Salesman'} Filter</label>
+                      <SearchableMultiSelect
+                        options={(profitGroupBy === 'company' ? companies : employeesSalesman).map(x => ({ value: String(x.id), label: x.name }))}
+                        value={profitEntityIds}
+                        onChange={(ids) => {
+                          setProfitEntityIds(ids);
+                          setProdSalesRows(null);
+                        }}
+                        placeholder={`Search ${profitGroupBy === 'company' ? 'company' : 'salesman'}…`}
+                      />
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">From Date *</label>
@@ -1552,18 +1952,13 @@ export default function Reports() {
             <div className="card">
               <div className="card-header">
                 <div className="card-title">
-                  {prodSalesRows.length} product{prodSalesRows.length !== 1 ? 's' : ''}
-                  {prodSalesCompany && (() => {
-                    const c = companies.find(x => String(x.id) === String(prodSalesCompany));
-                    return c ? (
-                      <span style={{ fontWeight: 400, color: 'var(--gray-500)', marginLeft: 8 }}>
-                        · {c.name}
-                      </span>
-                    ) : null;
-                  })()}
+                  {prodSalesRows.length} row{prodSalesRows.length !== 1 ? 's' : ''}
+                  <span style={{ fontWeight: 400, color: 'var(--gray-500)', marginLeft: 8 }}>
+                    · Grouped by {profitGroupBy === 'company' ? 'Company' : 'Salesman'}
+                  </span>
                   {prodSalesHasMissingCost && (
                     <span
-                      title="Some sold lines have no purchase_rate_snapshot recorded (legacy pre-2026 data). COGS is understated and Gross Profit is inflated for the affected products. Values are shown as-is; no silent adjustment is applied."
+                      title="Some sold lines have no purchase_rate_snapshot recorded (legacy pre-2026 data). COGS is understated and Gross Profit is inflated for the affected group rows. Values are shown as-is; no silent adjustment is applied."
                       style={{
                         marginLeft: 10, fontSize: 12, fontWeight: 600,
                         color: 'var(--amber, #d97706)',
@@ -1579,20 +1974,16 @@ export default function Reports() {
               <div className="table-wrap">
                 {prodSalesRows.length === 0 ? (
                   <div className="empty-state">
-                    <div className="empty-state-title">No product sales in selected period</div>
-                    <div className="empty-state-subtitle">Try widening the date range or clearing the company filter.</div>
+                    <div className="empty-state-title">No profit rows in selected period</div>
+                    <div className="empty-state-subtitle">Try widening the date range or clearing the selected filters.</div>
                   </div>
                 ) : (
                   <table className="report-table">
                     <thead>
                       <tr>
                         <th style={{ width: '4%' }}>Sr</th>
-                        <th>Product Name</th>
-                        <th style={{ width: '9%' }}>Pack</th>
-                        <th style={{ width: '8%', textAlign: 'right' }}>Gross Qty</th>
-                        <th style={{ width: '8%', textAlign: 'right' }}>Return Qty</th>
-                        <th style={{ width: '8%', textAlign: 'right' }}>Net Sold</th>
-                        <th style={{ width: '12%', textAlign: 'right' }}>Net Revenue</th>
+                        <th>{profitGroupBy === 'company' ? 'Company' : 'Salesman'}</th>
+                        <th style={{ width: '12%', textAlign: 'right' }}>Revenue</th>
                         <th style={{ width: '12%', textAlign: 'right' }}>COGS</th>
                         <th style={{ width: '12%', textAlign: 'right' }}>Gross Profit</th>
                       </tr>
@@ -1602,10 +1993,10 @@ export default function Reports() {
                         const gp        = parseFloat(row.gross_profit) || 0;
                         const missing   = (row.missing_cost_lines || 0) > 0;
                         return (
-                          <tr key={row.product_id}>
+                          <tr key={`${row.group_id || 'null'}-${i}`}>
                             <td>{i + 1}</td>
                             <td style={{ fontWeight: 600 }}>
-                              {row.product_name}
+                              {row.group_name || '—'}
                               {missing && (
                                 <span
                                   title={`${row.missing_cost_lines} line${row.missing_cost_lines !== 1 ? 's' : ''} in this period have no purchase-rate snapshot; COGS below excludes their cost.`}
@@ -1613,11 +2004,7 @@ export default function Reports() {
                                 >⚠</span>
                               )}
                             </td>
-                            <td style={{ color: 'var(--gray-500)' }}>{row.pack_size || '—'}</td>
-                            <td style={{ textAlign: 'right' }}>{row.gross_qty}</td>
-                            <td style={{ textAlign: 'right' }}>{row.return_qty > 0 ? row.return_qty : '—'}</td>
-                            <td style={{ textAlign: 'right', fontWeight: 600 }}>{row.net_qty}</td>
-                            <td style={{ textAlign: 'right' }}>{fmt(row.net_revenue)}</td>
+                            <td style={{ textAlign: 'right' }}>{fmt(row.revenue)}</td>
                             <td style={{ textAlign: 'right' }}>{fmt(row.cogs)}</td>
                             <td style={{
                               textAlign: 'right', fontWeight: 700,
@@ -1631,11 +2018,8 @@ export default function Reports() {
                     </tbody>
                     <tfoot>
                       <tr>
-                        <td colSpan={3} className="report-tfoot-label">Total</td>
-                        <td className="report-tfoot-num">{prodSalesTotals.gross_qty}</td>
-                        <td className="report-tfoot-num">{prodSalesTotals.return_qty}</td>
-                        <td className="report-tfoot-num">{prodSalesTotals.net_qty}</td>
-                        <td className="report-tfoot-num">{fmt(prodSalesTotals.net_revenue)}</td>
+                        <td colSpan={2} className="report-tfoot-label">Total</td>
+                        <td className="report-tfoot-num">{fmt(prodSalesTotals.revenue)}</td>
                         <td className="report-tfoot-num">{fmt(prodSalesTotals.cogs)}</td>
                         <td className="report-tfoot-num">{fmt(prodSalesTotals.gross_profit)}</td>
                       </tr>
