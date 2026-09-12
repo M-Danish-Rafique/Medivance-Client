@@ -394,10 +394,10 @@ export default function Reports() {
   // to run and produce a meaningless "all time" number set.
   const [profitGroupBy, setProfitGroupBy] = useState('company');
   const [profitEntityIds, setProfitEntityIds] = useState([]);
-  const [prodSalesFrom, setProdSalesFrom] = useState(_defaultStockRange.from);
-  const [prodSalesTo, setProdSalesTo] = useState(_defaultStockRange.to);
-  const [prodSalesRows, setProdSalesRows] = useState(null);
-  const [prodSalesLoading, setProdSalesLoading] = useState(false);
+  const [profitFrom, setProfitFrom] = useState(_defaultStockRange.from);
+  const [profitTo, setProfitTo] = useState(_defaultStockRange.to);
+  const [profitRows, setProfitRows] = useState(null);
+  const [profitLoading, setProfitLoading] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -752,40 +752,40 @@ export default function Reports() {
     }
   };
 
-  const fetchProductSales = async () => {
-    if (!prodSalesFrom || !prodSalesTo) {
+  const fetchProfitReport = async () => {
+    if (!profitFrom || !profitTo) {
       return toast.error('Please select both From Date and To Date');
     }
-    if (prodSalesFrom > prodSalesTo) {
+    if (profitFrom > profitTo) {
       return toast.error('From Date cannot be after To Date');
     }
-    setProdSalesLoading(true);
+    setProfitLoading(true);
     try {
       const params = new URLSearchParams();
-      params.append('from_date', prodSalesFrom);
-      params.append('to_date',   prodSalesTo);
+      params.append('from_date', profitFrom);
+      params.append('to_date',   profitTo);
       params.append('group_by', profitGroupBy);
       if (profitEntityIds.length) params.append('entity_ids', profitEntityIds.join(','));
-      const r = await api.get(`/reports/product-sales?${params}`);
-      setProdSalesRows(r.data.rows || []);
+      const r = await api.get(`/reports/profit-report?${params}`);
+      setProfitRows(r.data.rows || []);
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Error fetching Profit report');
     } finally {
-      setProdSalesLoading(false);
+      setProfitLoading(false);
     }
   };
 
-  const downloadProductSalesPDF = async () => {
-    if (!prodSalesFrom || !prodSalesTo) {
+  const downloadProfitReportPDF = async () => {
+    if (!profitFrom || !profitTo) {
       return toast.error('Please select both From Date and To Date');
     }
     const params = new URLSearchParams();
-    params.append('from_date', prodSalesFrom);
-    params.append('to_date',   prodSalesTo);
+    params.append('from_date', profitFrom);
+    params.append('to_date',   profitTo);
     params.append('group_by', profitGroupBy);
     if (profitEntityIds.length) params.append('entity_ids', profitEntityIds.join(','));
     try {
-      const res = await api.get(`/reports/product-sales/pdf?${params}`, { responseType: 'blob' });
+      const res = await api.get(`/reports/profit-report/pdf?${params}`, { responseType: 'blob' });
       downloadBlob(res, 'profit-report.pdf');
     } catch {
       toast.error('Error downloading PDF');
@@ -842,16 +842,14 @@ export default function Reports() {
     closing:  t.closing  + (parseInt(r.closing_stock,   10) || 0),
   }), { opening: 0, purchase: 0, adjust: 0, gross: 0, ret: 0, netU: 0, netV: 0, closing: 0 });
 
-  const prodSalesTotals = (prodSalesRows || []).reduce((t, r) => ({
-    revenue:      t.revenue      + (parseFloat(r.revenue)  || 0),
+  const profitTotals = (profitRows || []).reduce((t, r) => ({
+    revenue:      t.revenue      + (parseFloat(r.revenue)      || 0),
     cogs:         t.cogs         + (parseFloat(r.cogs)         || 0),
     gross_profit: t.gross_profit + (parseFloat(r.gross_profit) || 0),
   }), { revenue: 0, cogs: 0, gross_profit: 0 });
   // Any product with a NULL purchase_rate_snapshot on at least one line
   // will report an understated COGS (and an inflated Gross Profit). We
-  // surface that with a footnote/tooltip so the operator knows to check
-  // legacy invoices, but keep the number as-is (no silent adjustment).
-  const prodSalesHasMissingCost = (prodSalesRows || []).some(r => (r.missing_cost_lines || 0) > 0);
+  const profitHasMissingCost = (profitRows || []).some(r => (r.missing_cost_lines || 0) > 0);
 
   if (dataLoading) {
     return (
@@ -871,7 +869,7 @@ export default function Reports() {
           { id: 'summary', label: 'Sale Summary', icon: 'layers' },
           { id: 'saleStock', label: 'Sale & Stock', icon: 'inventory_2' },
           { id: 'batchActivity', label: 'Batch Activity', icon: 'science' },
-          { id: 'productSales', label: 'Profit Report', icon: 'bar_chart' },
+          { id: 'profitReport', label: 'Profit Report', icon: 'bar_chart' },
         ].map(tab => (
           <button
             key={tab.id}
