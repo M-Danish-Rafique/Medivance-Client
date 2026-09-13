@@ -1888,7 +1888,7 @@ export default function Reports() {
       )}
 
       {/* ── Profit Report ── */}
-      {reportTab === 'profitReport' && (
+      {reportTab === 'productSales' && (
         <>
           <div className="card" style={{ marginBottom: 20 }}>
             <div
@@ -1902,7 +1902,7 @@ export default function Reports() {
                   onChange={(key) => {
                     setProfitGroupBy(key);
                     setProfitEntityIds([]);
-                    setProdSalesRows(null);
+                    setProfitRows(null);
                   }}
                   options={[{ key: 'company', label: 'Company' }, { key: 'salesman', label: 'Salesman' }]}
                   ariaLabel="Profit report grouping"
@@ -1911,11 +1911,11 @@ export default function Reports() {
             </div>
             <div className="card-body">
               <ReportFilterLayout
-                loading={prodSalesLoading}
-                onGenerate={fetchProductSales}
-                onDownload={downloadProductSalesPDF}
-                hasData={!!prodSalesRows}
-                generateDisabled={!prodSalesFrom || !prodSalesTo}
+                loading={profitLoading}
+                onGenerate={fetchProfitReport}
+                onDownload={downloadProfitReportPDF}
+                hasData={!!profitRows}
+                generateDisabled={!profitFrom || !profitTo}
                 fields={
                   <>
                     <div className="form-group" style={{ margin: 0 }}>
@@ -1925,20 +1925,20 @@ export default function Reports() {
                         value={profitEntityIds}
                         onChange={(ids) => {
                           setProfitEntityIds(ids);
-                          setProdSalesRows(null);
+                          setProfitRows(null);
                         }}
                         placeholder={`Search ${profitGroupBy === 'company' ? 'company' : 'salesman'}…`}
                       />
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">From Date *</label>
-                      <input className="form-control" type="date" value={prodSalesFrom} required
-                        onChange={e => { setProdSalesFrom(e.target.value); setProdSalesRows(null); }} />
+                      <input className="form-control" type="date" value={profitFrom} required
+                        onChange={e => { setProfitFrom(e.target.value); setProfitRows(null); }} />
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">To Date *</label>
-                      <input className="form-control" type="date" value={prodSalesTo} required
-                        onChange={e => { setProdSalesTo(e.target.value); setProdSalesRows(null); }} />
+                      <input className="form-control" type="date" value={profitTo} required
+                        onChange={e => { setProfitTo(e.target.value); setProfitRows(null); }} />
                     </div>
                   </>
                 }
@@ -1946,15 +1946,15 @@ export default function Reports() {
             </div>
           </div>
 
-          {prodSalesRows && (
+          {profitRows && (
             <div className="card">
               <div className="card-header">
                 <div className="card-title">
-                  {prodSalesRows.length} row{prodSalesRows.length !== 1 ? 's' : ''}
+                  {profitRows.length} row{profitRows.length !== 1 ? 's' : ''}
                   <span style={{ fontWeight: 400, color: 'var(--gray-500)', marginLeft: 8 }}>
                     · Grouped by {profitGroupBy === 'company' ? 'Company' : 'Salesman'}
                   </span>
-                  {prodSalesHasMissingCost && (
+                  {profitHasMissingCost && (
                     <span
                       title="Some sold lines have no purchase_rate_snapshot recorded (legacy pre-2026 data). COGS is understated and Gross Profit is inflated for the affected group rows. Values are shown as-is; no silent adjustment is applied."
                       style={{
@@ -1970,7 +1970,7 @@ export default function Reports() {
                 </div>
               </div>
               <div className="table-wrap">
-                {prodSalesRows.length === 0 ? (
+                {profitRows.length === 0 ? (
                   <div className="empty-state">
                     <div className="empty-state-title">No profit rows in selected period</div>
                     <div className="empty-state-subtitle">Try widening the date range or clearing the selected filters.</div>
@@ -1987,7 +1987,7 @@ export default function Reports() {
                       </tr>
                     </thead>
                     <tbody>
-                      {prodSalesRows.map((row, i) => {
+                      {profitRows.map((row, i) => {
                         const gp        = parseFloat(row.gross_profit) || 0;
                         const missing   = (row.missing_cost_lines || 0) > 0;
                         return (
@@ -2017,9 +2017,9 @@ export default function Reports() {
                     <tfoot>
                       <tr>
                         <td colSpan={2} className="report-tfoot-label">Total</td>
-                        <td className="report-tfoot-num">{fmt(prodSalesTotals.revenue)}</td>
-                        <td className="report-tfoot-num">{fmt(prodSalesTotals.cogs)}</td>
-                        <td className="report-tfoot-num">{fmt(prodSalesTotals.gross_profit)}</td>
+                        <td className="report-tfoot-num">{fmt(profitTotals.revenue)}</td>
+                        <td className="report-tfoot-num">{fmt(profitTotals.cogs)}</td>
+                        <td className="report-tfoot-num">{fmt(profitTotals.gross_profit)}</td>
                       </tr>
                     </tfoot>
                   </table>
