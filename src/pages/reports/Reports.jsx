@@ -1888,7 +1888,7 @@ export default function Reports() {
       )}
 
       {/* ── Profit Report ── */}
-      {reportTab === 'productSales' && (
+      {reportTab === 'profitReport' && (
         <>
           <div className="card" style={{ marginBottom: 20 }}>
             <div
