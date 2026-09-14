@@ -47,6 +47,61 @@ function cleanLicenseExpiry(value) {
   return /^0000-00-00/.test(str) ? '' : str;
 }
 
+// Sortable-column comparator map — same convention as src/pages/sale/Sale.jsx.
+// String columns use localeCompare so accented / mixed-case names sort
+// consistently. created_at is an ISO timestamp string, which sorts correctly
+// lexically, so it's handled the same way as Sale.jsx's `date` column.
+const SORT_COMPARATORS = {
+  name: (a, b) => (a.name || '').localeCompare(b.name || ''),
+  area_name: (a, b) => (a.area_name || '').localeCompare(b.area_name || ''),
+  territory_name: (a, b) => (a.territory_name || '').localeCompare(b.territory_name || ''),
+  is_licensed: (a, b) => (a.is_licensed ? 1 : 0) - (b.is_licensed ? 1 : 0),
+  created_at: (a, b) => (a.created_at || '').localeCompare(b.created_at || ''),
+  balance: (a, b) => (parseFloat(a.balance) || 0) - (parseFloat(b.balance) || 0),
+};
+
+// Sortable table header cell — identical pattern to Sale.jsx's SortableHeader,
+// duplicated locally per that file's own convention (no shared component).
+// Shows a subtle tri-state chevron: dual arrows (unfold_more) when the
+// column isn't the active sort, or a single up/down arrow when it is.
+// Click cycles asc ↔ desc on the active column, or switches to a new
+// column (starting ascending).
+function SortableHeader({ column, label, sortConfig, onSort, align, style }) {
+  const active = sortConfig.column === column;
+  const iconName = active
+    ? (sortConfig.direction === 'asc' ? 'arrow_upward' : 'arrow_downward')
+    : 'unfold_more';
+  const isRight = align === 'right';
+  return (
+    <th
+      onClick={() => onSort(column)}
+      style={{
+        cursor: 'pointer',
+        userSelect: 'none',
+        textAlign: align || 'left',
+        ...(style || {})
+      }}
+      title={`Sort by ${label}`}
+    >
+      <span style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 3,
+        justifyContent: isRight ? 'flex-end' : 'flex-start',
+        width: '100%'
+      }}>
+        {label}
+        <span className="material-symbols-outlined" style={{
+          fontSize: 14,
+          color: active ? 'var(--gray-700)' : 'var(--gray-300)',
+          transition: 'color 0.2s ease',
+          lineHeight: 1
+        }}>{iconName}</span>
+      </span>
+    </th>
+  );
+}
+
 export default function Customers() {
   const [data, setData] = useState([]);
   const [geo, setGeo] = useState({ cities: [], areas: [], territories: [] });
@@ -64,6 +119,19 @@ export default function Customers() {
   const [subModal, setSubModal] = useState(null);
   const [subForm, setSubForm] = useState({});
   const [subSaving, setSubSaving] = useState(false);
+
+  // Sortable table column state. Defaults to created_at DESC — matches the
+  // backend's `ORDER BY cu.created_at DESC, cu.id DESC`, so an operator who
+  // never touches a header sees the same order the server delivered
+  // (newest customer first).
+  const [sortConfig, setSortConfig] = useState({ column: 'created_at', direction: 'desc' });
+  const handleSort = (column) => {
+    setSortConfig(prev =>
+      prev.column === column
+        ? { column, direction: prev.direction === 'asc' ? 'desc' : 'asc' }
+        : { column, direction: 'asc' }
+    );
+  };
 
   const load = () => {
     setLoading(true);
@@ -86,12 +154,11 @@ export default function Customers() {
       is_licensed: !!item.is_licensed,
       // Strip anything non-numeric on the way in — legacy rows might
       // still carry dashes or spaces if imported from another system.
-      ntn:  String(item.ntn  || '').replace(/\D/g, ''),
+      ntn: String(item.ntn || '').replace(/\D/g, ''),
       strn: String(item.strn || '').replace(/\D/g, '')
     });
     setModal(true);
   };
-
   const openView = (item) => {
     setViewCustomer(item);
     setViewModal(true);
@@ -165,18 +232,31 @@ export default function Customers() {
       if (typeFilter === 'unlicensed') return !c.is_licensed;
       return true;
     });
-  const { page, setPage, pageSize, setPageSize, totalPages, totalItems, pageItems: pagedCustomers } = usePagination(filtered, 25);
+
+  // Sort applied on top of filtered, before pagination — same order of
+  // operations as Sale.jsx's filteredSales -> sortedSales -> pagedSales.
+  const sortedCustomers = (() => {
+    const cmp = SORT_COMPARATORS[sortConfig.column];
+    if (!cmp) return filtered;
+    const dir = sortConfig.direction === 'asc' ? 1 : -1;
+    return [...filtered].sort((a, b) => cmp(a, b) * dir);
+  })();
+
+  const { page, setPage, pageSize, setPageSize, totalPages, totalItems, pageItems: pagedCustomers } = usePagination(sortedCustomers, 25);
 
   return (
     <Layout title="Customers">
       <style>{`
         .mv-customers-table { table-layout: fixed; width: 100%; }
         .mv-customer-name { font-weight: 600; font-size: 14px; line-height: 1.3; }
-        .mv-customer-id { font-weight: 500; font-size: 12.5px; color: var(--gray-400, #9ca3af); }
+        .mv-customer-id { font-weight: 500; font-size: 12.5px; color: var(--gray-400); }
         .mv-customer-sub { font-size: 12px; color: var(--gray-500); margin-top: 2px; }
+        .mv-created-cell { font-size: 12.5px; color: var(--gray-500); white-space: nowrap; }
         .mv-customers-table tbody tr { transition: background-color 0.12s ease; }
         .mv-customers-table tbody tr.mv-clickable-row { cursor: pointer; }
-        .mv-customers-table tbody tr:hover { background-color: var(--gray-50, #f9fafb); }
+        /* Extra vertical breathing room on rows — the only deliberate
+           deviation from the global table's default td padding. */
+        .mv-customers-table tbody td { padding: 15px 14px; }
         .mv-balance-cell { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 13.5px; }
         .mv-type-badge {
           display: inline-flex; align-items: center; gap: 6px;
@@ -215,6 +295,7 @@ export default function Customers() {
             <button className="btn btn-primary" onClick={openAdd}>+ Add Customer</button>
           </div>
         </div>
+
         <div className="table-wrap">
           {loading ? (
             <div className="loading-center"><div className="spinner" /></div>
@@ -224,42 +305,50 @@ export default function Customers() {
             <table className="mv-customers-table">
               <thead>
                 <tr>
-                  <th style={{ width: '34%' }}>Customer</th>
-                  <th style={{ width: '16%' }}>Area</th>
-                  <th style={{ width: '16%' }}>Territory</th>
-                  <th style={{ width: '12%' }}>Type</th>
-                  <th style={{ width: '12%', textAlign: 'right' }}>Balance</th>
+                  <SortableHeader column="name" label="Customer" sortConfig={sortConfig} onSort={handleSort} style={{ width: '27%' }} />
+                  <SortableHeader column="area_name" label="Area" sortConfig={sortConfig} onSort={handleSort} style={{ width: '13%' }} />
+                  <SortableHeader column="territory_name" label="Territory" sortConfig={sortConfig} onSort={handleSort} style={{ width: '13%' }} />
+                  <SortableHeader column="is_licensed" label="Type" sortConfig={sortConfig} onSort={handleSort} style={{ width: '11%' }} />
+                  <SortableHeader column="created_at" label="Created" sortConfig={sortConfig} onSort={handleSort} style={{ width: '13%' }} />
+                  <SortableHeader column="balance" label="Balance" sortConfig={sortConfig} onSort={handleSort} align="right" style={{ width: '13%' }} />
                   <th style={{ width: '10%', textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {pagedCustomers.map(c => {
+                  const bal = parseFloat(c.balance) || 0;
+                  // Color carries financial meaning only: red = outstanding
+                  // debt, neutral gray/black = settled, green = credit.
+                  const balColor = bal > 0 ? 'var(--red)' : bal < 0 ? 'var(--green)' : 'var(--gray-900)';
                   return (
                     <tr key={c.id} className="mv-clickable-row" onClick={() => openView(c)}>
                       <td>
                         <div className="mv-customer-name">{c.name}</div>
                       </td>
-                      <td>{c.area_name ? <span className="badge badge-blue">{c.area_name}</span> : <span className="mv-customer-sub">—</span>}</td>
-                      <td>{c.territory_name ? <span className="badge badge-teal">{c.territory_name}</span> : <span className="mv-customer-sub">—</span>}</td>
+                      <td>{c.area_name ? <span className="badge badge-gray">{c.area_name}</span> : <span className="mv-customer-sub">—</span>}</td>
+                      <td>{c.territory_name ? <span className="badge badge-gray">{c.territory_name}</span> : <span className="mv-customer-sub">—</span>}</td>
                       <td>
                         <span
                           className="mv-type-badge"
                           style={{
-                            color: c.is_licensed ? '#047857' : '#6b7280',
-                            background: c.is_licensed ? 'rgba(5,150,105,0.12)' : 'var(--gray-100, #f3f4f6)'
+                            color: c.is_licensed ? '#047857' : 'var(--gray-600)',
+                            background: c.is_licensed ? 'rgba(5,150,105,0.08)' : 'var(--gray-100)'
                           }}
                         >
-                          <span className="mv-type-dot" style={{ background: c.is_licensed ? '#059669' : '#9ca3af' }} />
+                          <span className="mv-type-dot" style={{ background: c.is_licensed ? 'var(--green)' : 'var(--gray-400)' }} />
                           {c.is_licensed ? CUSTOMER_TYPE_LABEL.licensed : CUSTOMER_TYPE_LABEL.unlicensed}
                         </span>
                       </td>
-                      <td className="mv-balance-cell" style={{ textAlign: 'right', color: parseFloat(c.balance) > 0 ? 'var(--red)' : 'var(--green)' }}>
+                      <td className="mv-created-cell">
+                        {c.created_at ? formatDatePKT(c.created_at) : '—'}
+                      </td>
+                      <td className="mv-balance-cell" style={{ textAlign: 'right', color: balColor }}>
                         {formatCurrency(c.balance)}
                       </td>
                       <td style={{ textAlign: 'right' }}>
                         <div className="flex gap-2" style={{ justifyContent: 'flex-end' }} onClick={e => e.stopPropagation()}>
                           <button className="btn btn-outline btn-sm btn-icon" title="Edit customer" aria-label="Edit customer" onClick={() => openEdit(c)}><span className="material-symbols-outlined" style={{ fontSize: 16 }}>edit</span></button>
-                          <button className="btn btn-danger btn-sm btn-icon" title="Delete customer" aria-label="Delete customer" onClick={() => { setSelected(c); setDeleteModal(true); }}><span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span></button>
+                          <button className="btn btn-outline-danger btn-sm btn-icon" title="Delete customer" aria-label="Delete customer" onClick={() => { setSelected(c); setDeleteModal(true); }}><span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span></button>
                         </div>
                       </td>
                     </tr>
@@ -269,6 +358,7 @@ export default function Customers() {
             </table>
           )}
         </div>
+
         <Pagination page={page} totalPages={totalPages} totalItems={totalItems}
           pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
       </div>
@@ -292,7 +382,6 @@ export default function Customers() {
 
         <div className="divider" />
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Customer Type</div>
-
         <div className="form-group">
           <div
             className="flex items-center justify-between"
@@ -367,7 +456,6 @@ export default function Customers() {
 
         <div className="divider" />
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Location</div>
-
         <div className="form-group">
           <div className="flex items-center justify-between mb-1">
             <label className="form-label" style={{ margin: 0 }}>City</label>
@@ -466,6 +554,7 @@ export default function Customers() {
             <div><strong>City:</strong> {viewCustomer.city_name || '—'}</div>
             <div><strong>Area:</strong> {viewCustomer.area_name || '—'}</div>
             <div><strong>Territory:</strong> {viewCustomer.territory_name || '—'}</div>
+            <div><strong>Created:</strong> {viewCustomer.created_at ? formatDatePKT(viewCustomer.created_at) : '—'}</div>
             <div><strong>Balance:</strong> <span style={{ fontWeight: 700, color: parseFloat(viewCustomer.balance) > 0 ? 'var(--red)' : 'var(--green)' }}>{formatCurrency(viewCustomer.balance)}</span></div>
           </div>
         ) : null}
