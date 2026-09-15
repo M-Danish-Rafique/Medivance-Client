@@ -9,6 +9,7 @@ import { formatDatePKT } from '../../utils/dateUtils';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
 import TaxIdInput from '../../components/common/TaxIdInput';
+import LocationSelect from '../../components/common/LocationSelect';
 
 const emptyForm = {
   name: '', address: '', phone: '', license_no: '', license_expiry: '',
@@ -141,9 +142,6 @@ export default function Customers() {
   };
   useEffect(load, []);
 
-  const filteredAreas = geo.areas.filter(a => !form.city_id || a.city_id === parseInt(form.city_id));
-  const filteredTerritories = geo.territories.filter(t => !form.area_id || t.area_id === parseInt(form.area_id));
-
   const openAdd = () => { setSelected(null); setForm(emptyForm); setModal(true); };
   const openEdit = (item) => {
     setSelected(item);
@@ -166,6 +164,7 @@ export default function Customers() {
 
   const handleSave = async () => {
     if (!form.name) return toast.error('Customer name required');
+    if (!form.territory_id) return toast.error('Please select a location (territory)');
     setSaving(true);
     try {
       if (selected) { await api.put(`/customers/${selected.id}`, form); toast.success('Customer updated'); }
@@ -216,7 +215,11 @@ export default function Customers() {
       const r = await api.post('/geography/territories', subForm);
       const newGeo = await api.get('/geography/geo');
       setGeo(newGeo.data);
-      setForm(p => ({ ...p, area_id: subForm.area_id, territory_id: r.data.id }));
+      // Derive city_id from the sub-form's own selection rather than the
+      // outer form's — the two are independent now that Location is a
+      // single Territory combobox instead of cascading City→Area→Territory
+      // selects.
+      setForm(p => ({ ...p, city_id: subForm.city_id, area_id: subForm.area_id, territory_id: r.data.id }));
       setSubModal(null); toast.success('Territory added');
     } catch (err) { toast.error('Error'); } finally { setSubSaving(false); }
   };
@@ -458,36 +461,21 @@ export default function Customers() {
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Location</div>
         <div className="form-group">
           <div className="flex items-center justify-between mb-1">
-            <label className="form-label" style={{ margin: 0 }}>City</label>
-            <button type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11, color: 'var(--blue)', padding: '2px 8px' }}
-              onClick={() => { setSubForm({ name: '' }); setSubModal('city'); }}>+ New City</button>
+            <label className="form-label" style={{ margin: 0 }}>Territory *</label>
+            <div className="flex gap-2">
+              <button type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11, color: 'var(--blue)', padding: '2px 8px' }}
+                onClick={() => { setSubForm({ name: '' }); setSubModal('city'); }}>+ City</button>
+              <button type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11, color: 'var(--blue)', padding: '2px 8px' }}
+                onClick={() => { setSubForm({ name: '', city_id: form.city_id || '' }); setSubModal('area'); }}>+ Area</button>
+              <button type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11, color: 'var(--blue)', padding: '2px 8px' }}
+                onClick={() => { setSubForm({ name: '', area_id: form.area_id || '', city_id: form.city_id || '' }); setSubModal('territory'); }}>+ Territory</button>
+            </div>
           </div>
-          <select className="form-control" value={form.city_id} onChange={e => setForm(p => ({ ...p, city_id: e.target.value, area_id: '', territory_id: '' }))}>
-            <option value="">— Select City —</option>
-            {geo.cities.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>
-        <div className="form-group">
-          <div className="flex items-center justify-between mb-1">
-            <label className="form-label" style={{ margin: 0 }}>Area</label>
-            <button type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11, color: 'var(--blue)', padding: '2px 8px' }}
-              onClick={() => { setSubForm({ name: '', city_id: form.city_id || '' }); setSubModal('area'); }}>+ New Area</button>
-          </div>
-          <select className="form-control" value={form.area_id} onChange={e => setForm(p => ({ ...p, area_id: e.target.value, territory_id: '' }))} disabled={!form.city_id}>
-            <option value="">— Select Area —</option>
-            {filteredAreas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-        </div>
-        <div className="form-group">
-          <div className="flex items-center justify-between mb-1">
-            <label className="form-label" style={{ margin: 0 }}>Territory</label>
-            <button type="button" className="btn btn-ghost btn-sm" style={{ fontSize: 11, color: 'var(--blue)', padding: '2px 8px' }}
-              onClick={() => { setSubForm({ name: '', area_id: form.area_id || '', city_id: form.city_id || '' }); setSubModal('territory'); }}>+ New Territory</button>
-          </div>
-          <select className="form-control" value={form.territory_id} onChange={e => setForm(p => ({ ...p, territory_id: e.target.value }))} disabled={!form.area_id}>
-            <option value="">— Select Territory —</option>
-            {filteredTerritories.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
+          <LocationSelect
+            geo={geo}
+            value={form.territory_id}
+            onChange={(t) => setForm(p => ({ ...p, territory_id: t.id, area_id: t.area_id, city_id: t.city_id }))}
+          />
         </div>
       </Modal>
 
