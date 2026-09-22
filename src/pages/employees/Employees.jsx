@@ -51,7 +51,12 @@ export default function Employees() {
     try {
       await api.delete(`/employees/${selected.id}`);
       toast.success('Employee deleted'); setDeleteModal(false); load();
-    } catch (err) { toast.error('Error deleting'); } finally { setDeleting(false); }
+    } catch (err) {
+      // The server refuses (409) when Sales or Recoveries still reference this
+      // employee and names the modules involved — show that instead of a
+      // generic message the user can do nothing with.
+      toast.error(err?.response?.data?.message || 'Could not delete this employee.');
+    } finally { setDeleting(false); }
   };
 
   const filtered = data.filter(e =>

@@ -31,6 +31,12 @@ import Yields from './pages/manufacturing/Yields';
 import ManufacturedProducts from './pages/manufacturing/ManufacturedProducts';
 import TaxLedger from './pages/manufacturing/TaxLedger';
 import Profile from './pages/admin/Profile';
+import HrEmployees from './pages/hr/HrEmployees';
+import HrEmployeeDetail from './pages/hr/HrEmployeeDetail';
+import Attendance from './pages/hr/Attendance';
+import SalarySlips from './pages/hr/SalarySlips';
+import SalarySlipBatchPrint from './pages/hr/SalarySlipBatchPrint';
+import JobSetup from './pages/hr/JobSetup';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -63,6 +69,10 @@ export default function App() {
               <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
               <Route path="/invoice/:id/print" element={<PrivateRoute><InvoicePrint /></PrivateRoute>} />
               <Route path="/sales/print-batch" element={<PrivateRoute><BatchPrint /></PrivateRoute>} />
+              {/* Salary slips print the same way invoices do: a standalone
+                  route with no app shell, rendered client-side and handed to
+                  the browser's own print / Save-as-PDF dialog. */}
+              <Route path="/hr/salary-slips/print" element={<PrivateRoute><SalarySlipBatchPrint /></PrivateRoute>} />
 
               {/* Persistent app shell — Sidebar stays mounted across navigations */}
               <Route element={<PrivateRoute><AppLayout /></PrivateRoute>}>
@@ -86,6 +96,16 @@ export default function App() {
                 <Route path="/manufacturing/yields" element={<Yields />} />
                 <Route path="/manufacturing/products" element={<ManufacturedProducts />} />
                 <Route path="/manufacturing/tax-ledger" element={<TaxLedger />} />
+                {/* Workforce Management */}
+                <Route path="/hr/employees" element={<HrEmployees />} />
+                <Route path="/hr/employees/:id" element={<HrEmployeeDetail />} />
+                <Route path="/hr/attendance" element={<Attendance />} />
+                <Route path="/hr/salary-slips" element={<SalarySlips />} />
+                {/* One page, two tabs. The old paths still resolve so links
+                    and bookmarks keep working. */}
+                <Route path="/hr/job-setup" element={<JobSetup />} />
+                <Route path="/hr/departments" element={<JobSetup />} />
+                <Route path="/hr/designations" element={<JobSetup />} />
                 <Route path="/profile" element={<Profile />} />
               </Route>
 

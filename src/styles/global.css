@@ -189,10 +189,14 @@ input.no-spinner[type=number] {
   text-transform: uppercase;
 }
 .sidebar-nav { flex: 1; padding: 12px 0; }
+/* Structural headers, not links. They sit BELOW the nav items in the
+   hierarchy, so they are lighter in weight than the links (500 vs 600) and
+   dimmer than them (0.38 vs 0.6 white). Raising their brightness would make
+   them compete with the items they group — the excess was the 700 weight. */
 .nav-section-title {
-  font-size: 10px;
-  font-weight: 700;
-  color: rgba(255,255,255,0.3);
+  font-size: 10.5px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.38);
   letter-spacing: 1px;
   text-transform: uppercase;
   padding: 12px 20px 6px;
@@ -318,6 +322,15 @@ input.no-spinner[type=number] {
   line-height: 1.4;
 }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Keyboard focus ring. Without this the browser paints its own black outline
+   on any focused button — which is what showed on a dialog's close button the
+   moment dialogs started managing focus. :focus-visible, so a mouse click
+   never rings a button. */
+.btn:focus-visible,
+.tab-btn:focus-visible {
+  outline: 2px solid var(--blue-light);
+  outline-offset: 2px;
+}
 .btn-primary { background: var(--blue); color: white; }
 .btn-primary:hover:not(:disabled) { background: #1d55d1; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25); }
 .btn-primary:active:not(:disabled) { transform: translateY(1px); box-shadow: none; }
@@ -505,6 +518,9 @@ textarea.form-control { resize: vertical; min-height: 80px; line-height: 1.5; }
   overflow-y: auto;
   animation: slideUp 0.2s ease;
 }
+/* The dialog takes focus when it opens so screen readers announce it; that
+   is a programmatic target, not something to ring. */
+.modal:focus { outline: none; }
 .modal-sm { max-width: 440px; }
 .modal-md { max-width: 620px; }
 .modal-lg { max-width: 860px; }

@@ -25,11 +25,17 @@ const ALL_PERMS = [
   { key: 'perm_mfg_raw_materials', label: 'Raw Materials',        section: 'Manufacturing' },
   { key: 'perm_mfg_batches',       label: 'Batches',              section: 'Manufacturing' },
   { key: 'perm_mfg_yields',        label: 'Yield (End Products)', section: 'Manufacturing' },
+  // Workforce Management. Unlike the older modules, these three are enforced
+  // server-side as well (middleware/requirePermission.js) — the routes carry
+  // salaries, CNICs and bank details.
+  { key: 'perm_hr_employees',      label: 'Employees, Departments & Designations', section: 'Workforce' },
+  { key: 'perm_hr_attendance',     label: 'Attendance',           section: 'Workforce' },
+  { key: 'perm_hr_payroll',        label: 'Payroll',              section: 'Workforce' },
   { key: 'perm_finance',           label: 'Finance',              section: 'Finance & Reports' },
   { key: 'perm_reports',           label: 'Reports',       section: 'Finance & Reports' },
   { key: 'perm_tax_ledger',        label: 'FBR Tax Ledger',       section: 'Finance & Reports' },
 ];
-const PERM_SECTIONS = ['Master Data', 'Distribution', 'Manufacturing', 'Finance & Reports'];
+const PERM_SECTIONS = ['Master Data', 'Distribution', 'Manufacturing', 'Workforce', 'Finance & Reports'];
 const emptyPerms = () => Object.fromEntries(ALL_PERMS.map(p => [p.key, false]));
 
 export default function Profile() {
