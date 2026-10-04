@@ -1710,19 +1710,6 @@ export const HR_STYLES = `
   .pr-net { font-weight: 700; color: var(--gray-900); }
   .pr-zero { margin-left: 4px; font-size: 11px; font-weight: 600; color: var(--gray-500); }
   .pr-warn { font-size: 12px; font-weight: 600; color: var(--gray-500); font-style: italic; }
-  .pr-closed-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    height: 32px;
-    padding: 0 16px;
-    border-radius: 8px;
-    background: var(--gray-100);
-    color: var(--gray-600);
-    font-size: 12px;
-    font-weight: 700;
-  }
-  .pr-closed-tag .material-symbols-outlined { font-size: 16px; }
   /* Clickable-row affordance: quiet at rest, clear on hover or focus. */
   .pr-row-chevron {
     font-size: 20px;

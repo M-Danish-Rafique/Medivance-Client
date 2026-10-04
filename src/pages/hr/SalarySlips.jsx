@@ -1109,12 +1109,8 @@ export default function SalarySlips() {
                 </button>
               </span>
             )}
-            {runClosed && (
-              <span className="pr-closed-tag">
-                <span className="material-symbols-outlined" aria-hidden="true">lock</span>
-                Closed
-              </span>
-            )}
+            {/* Closed runs show nothing here: the picker's CLOSED badge and
+                the "Closed <date> by <name>" line already state it. */}
           </div>
 
           {loading ? (
