@@ -265,7 +265,10 @@ function useAnchoredMenu(open, triggerRef, menuRef, itemCount) {
   return style;
 }
 
-export function KebabMenu({ items, label = 'Row actions' }) {
+// `trigger` turns the icon-only kebab into a labelled menu button (for
+// example "Record" with a chevron) while keeping the same portal, focus and
+// keyboard behaviour: { label, icon?, className? }.
+export function KebabMenu({ items, label = 'Row actions', trigger }) {
   const [open, setOpen] = useState(false);
   const wrapRef    = useRef(null);
   const menuRef    = useRef(null);
@@ -326,16 +329,26 @@ export function KebabMenu({ items, label = 'Row actions' }) {
       <button
         ref={triggerRef}
         type="button"
-        className="btn btn-outline btn-sm btn-icon"
+        className={trigger ? (trigger.className || 'btn btn-outline btn-sm') : 'btn btn-outline btn-sm btn-icon'}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        aria-label={label}
-        title={label}
+        aria-label={trigger ? undefined : label}
+        title={trigger ? undefined : label}
         onClick={() => setOpen(o => !o)}
         onKeyDown={(e) => { if (e.key === 'ArrowDown' && !open) { e.preventDefault(); setOpen(true); } }}
       >
-        <span className="material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden="true">more_vert</span>
+        {trigger ? (
+          <>
+            {trigger.icon && <span className="material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden="true">{trigger.icon}</span>}
+            {trigger.label}
+            <span className="material-symbols-outlined" style={{ fontSize: 16, marginRight: -4 }} aria-hidden="true">
+              {open ? 'expand_less' : 'expand_more'}
+            </span>
+          </>
+        ) : (
+          <span className="material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden="true">more_vert</span>
+        )}
       </button>
 
       {open && menuStyle && createPortal(
@@ -541,6 +554,150 @@ export function Pill({ icon, tone, children, title }) {
       {icon && <span className="material-symbols-outlined" aria-hidden="true">{icon}</span>}
       {children}
     </span>
+  );
+}
+
+// ── Info popover ───────────────────────────────────────────────────────────
+// Progressive disclosure for detail the user rarely needs but must be able to
+// check (e.g. the entries behind a payslip's advance salary figure). An "i"
+// button beside the figure; hover or keyboard focus opens a preview, a click
+// pins it open, Escape or a click outside closes it. Portalled to <body> and
+// positioned `fixed` like KebabMenu, so a sticky bar or a scrolling table
+// never clips it; it opens above the trigger when there is no room below.
+const POPOVER_GAP = 8;
+const POPOVER_MARGIN = 12;
+
+export function InfoPopover({ label, title, children, width = 320 }) {
+  const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const [style, setStyle] = useState(null);
+  const triggerRef = useRef(null);
+  const popRef = useRef(null);
+  const closeTimer = useRef(null);
+  const popId = useId();
+
+  const place = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const height = popRef.current ? popRef.current.offsetHeight : 160;
+    const below = window.innerHeight - rect.bottom - POPOVER_GAP;
+    const above = rect.top - POPOVER_GAP;
+    const up = below < height && above > below;
+    const centred = rect.left + rect.width / 2 - width / 2;
+    setStyle({
+      width,
+      left: Math.round(Math.min(Math.max(POPOVER_MARGIN, centred), window.innerWidth - width - POPOVER_MARGIN)),
+      top: up ? undefined : Math.round(rect.bottom + POPOVER_GAP),
+      bottom: up ? Math.round(window.innerHeight - rect.top + POPOVER_GAP) : undefined,
+    });
+  }, [width]);
+
+  useLayoutEffect(() => {
+    if (!open) { setStyle(null); return undefined; }
+    place();
+    const raf = requestAnimationFrame(place);
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [open, place]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (e) => {
+      if (triggerRef.current?.contains(e.target) || popRef.current?.contains(e.target)) return;
+      setOpen(false); setPinned(false);
+    };
+    const onKeyDown = (e) => {
+      if (e.key !== 'Escape') return;
+      setOpen(false); setPinned(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
+
+  const show = () => { clearTimeout(closeTimer.current); setOpen(true); };
+  // A short grace period lets the pointer travel from the icon into the panel.
+  const hide = () => {
+    if (pinned) return;
+    clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setOpen(false), 160);
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`hr-info-btn${open ? ' is-open' : ''}`}
+        aria-label={label}
+        aria-expanded={open}
+        aria-controls={open ? popId : undefined}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+        onClick={() => {
+          if (pinned) { setPinned(false); setOpen(false); } else { setPinned(true); setOpen(true); }
+        }}
+      >
+        <span className="material-symbols-outlined" aria-hidden="true">info</span>
+      </button>
+      {open && createPortal(
+        <div
+          ref={popRef}
+          id={popId}
+          role="dialog"
+          aria-label={title || label}
+          className="hr-popover"
+          style={style || { visibility: 'hidden', width }}
+          onMouseEnter={show}
+          onMouseLeave={hide}
+        >
+          {title && <div className="hr-popover-title">{title}</div>}
+          <div className="hr-popover-body">{children}</div>
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
+
+// ── Notice ─────────────────────────────────────────────────────────────────
+// The one format for a message shown inside a screen (see the KB's
+// ui-standards.md): a short TITLE that states the outcome, then one or two
+// plain sentences giving the figures and the way forward. Figures sit in the
+// sentence at normal weight — the title carries the emphasis, so no amount
+// competes with it. Tones: info (neutral consequence), warning (allowed but
+// worth a second look), danger (blocks the action).
+const NOTICE_ICONS = { info: 'info', warning: 'warning', danger: 'block', success: 'check_circle' };
+
+export function Notice({ tone = 'info', title, children, icon, style }) {
+  return (
+    <div
+      className={`hr-notice is-${tone}`}
+      role={tone === 'danger' ? 'alert' : 'status'}
+      style={style}
+    >
+      <span className="material-symbols-outlined hr-notice-icon" aria-hidden="true">
+        {icon || NOTICE_ICONS[tone]}
+      </span>
+      <div className="hr-notice-body">
+        {title && <div className="hr-notice-title">{title}</div>}
+        {children && <div className="hr-notice-text">{children}</div>}
+      </div>
+    </div>
   );
 }
 

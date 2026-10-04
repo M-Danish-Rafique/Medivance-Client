@@ -596,7 +596,7 @@ export default function HrEmployees() {
             <input
               id="hr-name"
               className={`form-control${errorFor('name') ? ' hr-invalid' : ''}`}
-              placeholder="Full name as printed on CNIC"
+              placeholder="As printed on the CNIC"
               value={form.name}
               maxLength={200}
               onChange={e => setField('name', e.target.value)}
@@ -773,7 +773,7 @@ export default function HrEmployees() {
                 id="exit-reason"
                 className={`form-control${exitErrorFor('reason_for_leaving') ? ' hr-invalid' : ''}`}
                 rows={3}
-                placeholder="Resignation, end of contract, relocation…"
+                placeholder="Enter the reason for leaving"
                 value={exitForm.reason_for_leaving}
                 onChange={e => {
                   setExitForm(p => ({ ...p, reason_for_leaving: e.target.value }));

@@ -5,13 +5,18 @@ import api from '../../utils/api';
 import { formatCurrency, formatDecimal } from '../../utils/formatters';
 import { formatDatePKT } from '../../utils/dateUtils';
 import toast from 'react-hot-toast';
+import { toBase, fromBase } from '../../utils/uom';
+
+const emptyComputed = {
+  _product: null, _pack_volume_base: 0, _tax_rate: 0, _uom_error: null,
+  _batch_cost_per_unit: 0, _pkg_cost_per_unit: 0, _total_unit_cost: 0, _unit_cost_with_tax: 0,
+  _volume_base: 0, _profit_pct: null, _sale_rate: 0,
+};
 
 const emptyYieldItem = {
   product_id: '', units_manufactured: '', pack_volume: '', pack_volume_uom_id: '',
   packaging_material_ids: [],
-  _product: null,
-  _batch_cost_per_unit: 0, _pkg_cost_per_unit: 0, _total_unit_cost: 0, _unit_cost_with_tax: 0,
-  _volume_base: 0, _profit_pct: null, _sale_rate: 0,
+  ...emptyComputed,
 };
 
 const fmtPKR = formatCurrency;
@@ -69,14 +74,24 @@ export default function Yields() {
     } catch { toast.error('Error loading batch'); }
   };
 
-  /* ─── Compute per-item costs live ─── */
-  const computeItem = (item, batch) => {
-    if (!batch || !item.product_id || !item.pack_volume || !item.pack_volume_uom_id) return item;
-    const uom = uoms.find(u => u.id === parseInt(item.pack_volume_uom_id));
-    const packFactor = parseFloat(uom?.to_base_factor || 1);
-    const packVolumeBase = parseFloat(item.pack_volume) * packFactor;
+  const uomById = (id) => uoms.find(u => u.id === parseInt(id));
 
-    const batchCostPerUnit = parseFloat(batch.cost_per_base_unit || 0) * packVolumeBase;
+  /* ─── Compute per-item costs live (mirrors POST /manufacturing/yields) ─── */
+  const computeItem = (item, batch) => {
+    const blank = { ...item, ...emptyComputed };
+    if (!batch || !item.product_id || !item.pack_volume || !item.pack_volume_uom_id) return blank;
+    const batchUom = uomById(batch.volume_uom_id);
+    const packUom = uomById(item.pack_volume_uom_id);
+    if (!batchUom || !packUom) return blank;
+    if (packUom.base_type !== batchUom.base_type) {
+      return { ...blank, _product: products.find(p => p.id === parseInt(item.product_id)), _uom_error: `${packUom.symbol} is a ${packUom.base_type} unit but this batch is measured in ${batchUom.symbol} (${batchUom.base_type})` };
+    }
+    // Both sides in base units (g / ml): 100 ml → 100, 27 L → 27,000
+    const packVolumeBase = toBase(item.pack_volume, packUom);
+    const batchVolumeBase = toBase(batch.total_volume, batchUom);
+    const costPerBaseUnit = batchVolumeBase > 0 ? parseFloat(batch.total_cost || 0) / batchVolumeBase : 0;
+
+    const batchCostPerUnit = costPerBaseUnit * packVolumeBase;
 
     let pkgCostPerUnit = 0;
     if (Array.isArray(item.packaging_material_ids) && item.packaging_material_ids.length > 0) {
@@ -92,7 +107,7 @@ export default function Yields() {
     const unitCostWithTax = totalUnitCost * (1 + taxRate / 100);
     const saleRate = parseFloat(prod?.sale_rate || 0);
     const profitPct = saleRate > 0 ? ((saleRate - unitCostWithTax) / saleRate * 100) : null;
-    const volumeBase = packVolumeBase * parseInt(item.units_manufactured || 0);
+    const volumeBase = packVolumeBase * (Number(item.units_manufactured) || 0);
 
     return { ...item, _pack_volume_base: packVolumeBase, _batch_cost_per_unit: batchCostPerUnit, _pkg_cost_per_unit: pkgCostPerUnit, _total_unit_cost: totalUnitCost, _unit_cost_with_tax: unitCostWithTax, _sale_rate: saleRate, _profit_pct: profitPct, _volume_base: volumeBase, _product: prod, _tax_rate: taxRate };
   };
@@ -120,11 +135,10 @@ export default function Yields() {
     [yieldItems]
   );
 
-  const batchVolumeBase = useMemo(() => {
-    if (!selectedBatch) return 0;
-    const uom = uoms.find(u => u.id === parseInt(selectedBatch.volume_uom_id));
-    return parseFloat(selectedBatch.total_volume) * parseFloat(uom?.to_base_factor || 1);
-  }, [selectedBatch, uoms]);
+  const volUom = selectedBatch ? uomById(selectedBatch.volume_uom_id) : null;
+  const batchVolumeBase = selectedBatch && volUom ? toBase(selectedBatch.total_volume, volUom) : 0;
+  // Shown to the user in the batch's own unit (e.g. L), never in raw base units
+  const inBatchUom = (base) => `${formatDecimal(fromBase(base, volUom), 4)} ${volUom?.symbol || ''}`;
 
   const volumeDiff = Math.abs(totalPackagedBase - batchVolumeBase);
   const volumeOk = batchVolumeBase > 0 && volumeDiff <= batchVolumeBase * 0.01 + 1;
@@ -134,7 +148,12 @@ export default function Yields() {
     if (!selectedBatchId) return toast.error('Select a batch');
     const validItems = yieldItems.filter(i => i.product_id && i.units_manufactured && i.pack_volume && i.pack_volume_uom_id);
     if (!validItems.length) return toast.error('Add at least one yield item');
-    if (!volumeOk) return toast.error(`Volume mismatch: batch has ${formatDecimal(batchVolumeBase)} base units, yield uses ${formatDecimal(totalPackagedBase)}`);
+    const uomError = validItems.find(i => i._uom_error);
+    if (uomError) return toast.error(`Product "${uomError._product?.name || uomError.product_id}": ${uomError._uom_error}`);
+    if (validItems.some(i => !Number.isInteger(Number(i.units_manufactured)) || Number(i.units_manufactured) <= 0)) {
+      return toast.error('Units must be a whole number greater than 0');
+    }
+    if (!volumeOk) return toast.error(`Volume mismatch: batch has ${inBatchUom(batchVolumeBase)}, yield packs ${inBatchUom(totalPackagedBase)}`);
 
     // Check if any sale rate < cost
     for (const item of validItems) {
@@ -166,8 +185,6 @@ export default function Yields() {
       setViewData(r.data); setViewModal(true);
     } catch { toast.error('Error loading yield'); }
   };
-
-  const volUom = uoms.find(u => u.id === parseInt(selectedBatch?.volume_uom_id));
 
   return (
     <Layout title="Manufacturing — Yield (End Products)">
@@ -238,9 +255,10 @@ export default function Yields() {
             <div style={{ display: 'flex', gap: 16, fontSize: 13, alignItems: 'center' }}>
               {selectedBatch && (
                 <>
-                  <span>Batch Volume: <strong>{formatDecimal(selectedBatch.total_volume)} {volUom?.symbol}</strong> ({formatDecimal(batchVolumeBase)})</span>
-                  <span>Packaged: <strong style={{ color: volumeOk ? 'var(--green)' : 'var(--red)' }}>{formatDecimal(totalPackagedBase)} base</strong></span>
-                  {!volumeOk && batchVolumeBase > 0 && <span style={{ color: 'var(--red)', fontWeight: 700 }}>Volume mismatch: {formatDecimal(volumeDiff)} units off</span>}
+                  {!volUom && <span style={{ color: 'var(--red)', fontWeight: 700 }}>This batch has no valid volume unit</span>}
+                  {volUom && <span>Batch Volume: <strong>{inBatchUom(batchVolumeBase)}</strong></span>}
+                  {volUom && <span>Packaged: <strong style={{ color: volumeOk ? 'var(--green)' : 'var(--red)' }}>{inBatchUom(totalPackagedBase)}</strong></span>}
+                  {!volumeOk && batchVolumeBase > 0 && <span style={{ color: 'var(--red)', fontWeight: 700 }}>Volume mismatch: {totalPackagedBase < batchVolumeBase ? 'short' : 'over'} by {inBatchUom(volumeDiff)}</span>}
                   {volumeOk && batchVolumeBase > 0 && <span style={{ color: 'var(--green)', fontWeight: 700 }}>Volume matched</span>}
                 </>
               )}
@@ -268,7 +286,9 @@ export default function Yields() {
             <div><span style={{ color: 'var(--gray-500)' }}>Batch:</span> <strong>{selectedBatch.batch_code}</strong></div>
             <div><span style={{ color: 'var(--gray-500)' }}>Expiry:</span> <strong>{formatDatePKT(selectedBatch.expiry_date)}</strong></div>
             <div><span style={{ color: 'var(--gray-500)' }}>Total Cost:</span> <strong>{fmtPKR2(selectedBatch.total_cost)}</strong></div>
-            <div><span style={{ color: 'var(--gray-500)' }}>Cost/base unit:</span> <strong>{fmtPKR(selectedBatch.cost_per_base_unit)}</strong></div>
+            {volUom && parseFloat(selectedBatch.total_volume) > 0 && (
+              <div><span style={{ color: 'var(--gray-500)' }}>Cost per {volUom.symbol}:</span> <strong>{fmtPKR(parseFloat(selectedBatch.total_cost) / parseFloat(selectedBatch.total_volume))}</strong></div>
+            )}
           </div>
         )}
 
@@ -295,14 +315,14 @@ export default function Yields() {
                   <option value="">— Product —</option>
                   {products.map(p => <option key={p.id} value={p.id}>{p.name} ({p.pack_size || '—'})</option>)}
                 </select>
-                <input className="form-control" type="number" style={{ fontSize: 12, padding: '5px 7px' }} placeholder="Units"
+                <input className="form-control" type="number" min="1" step="1" style={{ fontSize: 12, padding: '5px 7px' }} placeholder="Units"
                   value={item.units_manufactured} onChange={e => updateItem(idx, 'units_manufactured', e.target.value)} />
                 <input className="form-control" type="number" step="0.01" style={{ fontSize: 12, padding: '5px 7px' }} placeholder="Vol"
                   value={item.pack_volume} onChange={e => updateItem(idx, 'pack_volume', e.target.value)} />
                 <select className="form-control" style={{ fontSize: 12, padding: '5px 7px' }}
                   value={item.pack_volume_uom_id} onChange={e => updateItem(idx, 'pack_volume_uom_id', e.target.value)}>
                   <option value="">— UOM —</option>
-                  {uoms.filter(u => u.base_type !== 'count').map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  {uoms.filter(u => (volUom ? u.base_type === volUom.base_type : u.base_type !== 'count') || u.id === parseInt(item.pack_volume_uom_id)).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </select>
                 <div style={{ display: 'flex', justifyContent: 'center', position: 'relative' }}>
                   <button type="button" className="btn btn-outline btn-sm" onClick={() => {
@@ -349,11 +369,16 @@ export default function Yields() {
                 </button>
               </div>
               {/* Per-row info strip */}
+              {item._uom_error && (
+                <div style={{ padding: '5px 10px', background: 'var(--gray-50)', borderRadius: '0 0 8px 8px', fontSize: 11, fontWeight: 700, color: 'var(--red)' }}>
+                  Unit mismatch: {item._uom_error}. Pick a {volUom?.base_type} unit.
+                </div>
+              )}
               {item._product && item._unit_cost_with_tax > 0 && (
                 <div style={{ display: 'flex', gap: 16, padding: '5px 10px', background: 'var(--gray-50)', borderRadius: '0 0 8px 8px', fontSize: 11, borderTop: 'none' }}>
                   <span style={{ color: 'var(--gray-500)' }}>Sale Rate: <strong>{fmtPKR2(item._sale_rate)}</strong></span>
                   {item._tax_rate > 0 && <span style={{ color: 'var(--gray-500)' }}>Tax: <strong>{item._tax_rate}%</strong></span>}
-                  <span style={{ color: 'var(--gray-500)' }}>Volume used: <strong>{formatDecimal(item._volume_base)} base units</strong></span>
+                  <span style={{ color: 'var(--gray-500)' }}>Volume used: <strong>{inBatchUom(item._volume_base)}</strong></span>
                   <span style={{ fontWeight: 700, color: profitColor }}>
                     Profit: {item._profit_pct !== null ? `${formatDecimal(item._profit_pct, 1)}%` : '—'}
                     {item._unit_cost_with_tax > item._sale_rate && ' ⛔ Cost exceeds sale rate!'}

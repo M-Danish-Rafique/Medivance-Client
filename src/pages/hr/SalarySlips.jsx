@@ -9,8 +9,8 @@ import SalarySlipDocument, { SLIP_STYLES } from './SalarySlipDocument';
 import {
   HrStyles, SortableHeader, useSort, sortRows, byText, byNumber,
   TableSkeleton, EmptyState, BusyButton, Select, KebabMenu,
-  fmtMoney, fmtAmount, fmtMonth, num, money, initials,
-  apiError, blockWheelChange,
+  fmtMoney, fmtAmount, fmtDate, fmtMonth, num, money, initials,
+  apiError, blockWheelChange, Notice, InfoPopover,
 } from './HrKit';
 
 // ─── Payroll ───────────────────────────────────────────────────────────────
@@ -30,13 +30,18 @@ import {
 // is payable minus pending, so a slip belonging to someone who has since left
 // can never push it past 100%.
 //
-// Money on every screen is split the same way:
-//   Gross earnings − Deductions (tax, fines…) − Loan & advance recoveries
-//   = Net pay (cash to disburse)
+// Money on every screen is split the same way (product decision 2026-09-30):
+//   Gross earnings − Deductions (tax, fines…) − Loan repayments = Net salary
+//   Net salary − Advance salary                                 = Net payable
+// Net payable is the cash still to disburse (salary_slips.net_pay) and can
+// never be negative. The advance is recorded on the employee's profile and is
+// always deducted in full: the editor shows it but cannot change it. Loans are
+// repaid per loan in the editor, but print as ONE "Loan Deduction" row.
 // Cost to Company is ONE figure per month, recorded on the Pay Run when it is
-// closed: the close dialog pre-fills the calculated figure (total gross
-// earnings) and the operator may edit it. Deductions never reduce it — tax is
-// still the company's money and a recovery settles a loan already paid out.
+// closed: the close dialog pre-fills the calculated figure and the operator may
+// edit it. Calculated = gross earnings less deductions, EXCLUDING loan
+// repayments (they settle money already lent) and never reduced by advance
+// salary (the same salary, paid earlier). Product decision 2026-10-01.
 //
 // Payslips are never deletable. The server enforces all of this; the UI only
 // stops offering what would be refused.
@@ -94,19 +99,59 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 let lineKeySeq = 0;
 
-// `loanContext` maps loan_id -> balance as it would be WITHOUT this slip. That
-// is what caps a repayment line while editing: the plain remaining balance
-// would already have this slip's own repayment subtracted, so an unchanged line
-// would look overdrawn.
-const toLines = (rows, loanContext) => (rows || []).map(row => ({
+/** Ordinary (typed) lines. Loan repayment lines are kept apart — see toLoanLines. */
+const toLines = (rows) => (rows || []).filter(row => !row.loan_id).map(row => ({
   key: `l${++lineKeySeq}`,
   title: row.title || '',
   amount: String(num(row.amount)),
-  loan_id: row.loan_id,
-  loan_remaining: row.loan_id && loanContext
-    ? loanContext.get(row.loan_id)
-    : row.loan_remaining,
 }));
+
+// One row per loan the employee still owes on, each with its own repayment.
+// Every such loan is listed — a loan being skipped this month stays on screen
+// at 0 rather than disappearing — and the printed payslip merges them into a
+// single "Loan Deduction" row.
+//
+// New payslip: the draft's loan lines already carry `loan_remaining`.
+// Amending: the balance is taken from `loan_context` as it would be WITHOUT
+// this slip. The plain remaining balance would already have this slip's own
+// repayment subtracted, so an unchanged line would look overdrawn.
+const toLoanLines = (deductionRows, loanContext) => {
+  const repaid = new Map();
+  (deductionRows || []).filter(row => row.loan_id).forEach(row => {
+    const prev = repaid.get(row.loan_id);
+    repaid.set(row.loan_id, {
+      title: prev?.title || row.title,
+      amount: num(prev?.amount) + num(row.amount),
+      loan_title: row.loan_title,
+      loan_remaining: row.loan_remaining,
+    });
+  });
+
+  if (!loanContext) {
+    return [...repaid.entries()].map(([loanId, line]) => ({
+      key: `l${++lineKeySeq}`,
+      loan_id: loanId,
+      loan_title: line.loan_title || line.title,
+      title: line.title,
+      amount: String(money(line.amount)),
+      loan_remaining: num(line.loan_remaining),
+    }));
+  }
+
+  return loanContext
+    .filter(loan => num(loan.remaining_excluding_slip) > 0.005 || repaid.has(loan.id))
+    .map(loan => {
+      const line = repaid.get(loan.id);
+      return {
+        key: `l${++lineKeySeq}`,
+        loan_id: loan.id,
+        loan_title: loan.title,
+        title: line?.title || `Loan repayment — ${loan.title}`,
+        amount: String(money(line?.amount || 0)),
+        loan_remaining: num(loan.remaining_excluding_slip),
+      };
+    });
+};
 
 const Dash = ({ title }) => <span className="att-dash" title={title}>—</span>;
 
@@ -159,7 +204,8 @@ export default function SalarySlips() {
   const [draft, setDraft] = useState(null);
   const [editingSlipId, setEditingSlipId] = useState(null);
   const [earnings, setEarnings] = useState([]);
-  const [deductions, setDeductions] = useState([]);
+  const [deductions, setDeductions] = useState([]);   // ordinary deductions only
+  const [loanLines, setLoanLines] = useState([]);     // one per outstanding loan
   const [generating, setGenerating] = useState(false);
   const [savingSlip, setSavingSlip] = useState(false);
   // Monthly Cost to Company, edited in the close dialog. null = calculated.
@@ -242,22 +288,35 @@ export default function SalarySlips() {
 
   const monthTotals = useMemo(() => {
     const sum = (key) => money(slips.reduce((total, x) => total + num(x[key]), 0));
+    const earnings = sum('total_earnings');
+    const other    = sum('other_deductions');
+    const loans    = sum('loan_recoveries');
     return {
-      earnings: sum('total_earnings'),
-      other:    sum('other_deductions'),
-      loans:    sum('loan_recoveries'),
-      net:      sum('net_pay'),
+      earnings,
+      other,
+      loans,
+      netSalary: money(earnings - other - loans),
+      advance:   sum('advance_amount'),
+      net:       sum('net_pay'),   // net payable — what is still to disburse
+      // Cost to Company (product decision 2026-10-01): gross earnings less
+      // deductions, EXCLUDING loan repayments (they return money lent earlier)
+      // and never reduced by advance salary (the same salary, paid early).
+      // Mirrors calculatedCtc in routes/payrollRuns.js.
+      ctc:       money(earnings - other),
     };
   }, [slips]);
 
   // What the pending list will cost if processed as it stands: the salary
-  // structure less its deductions and, as the draft pre-fills, the whole
-  // outstanding loan balance.
-  const estNet = (p) => money(num(p.structure_earnings) - num(p.structure_deductions) - num(p.loan_outstanding));
+  // structure less its deductions, the whole outstanding loan balance (as the
+  // draft pre-fills it) and the month's advance.
+  const estNet = (p) => money(
+    num(p.structure_earnings) - num(p.structure_deductions) - num(p.loan_outstanding) - num(p.advance_amount)
+  );
   const pendingTotals = useMemo(() => ({
     earnings:   money(pending.reduce((s, p) => s + num(p.structure_earnings), 0)),
     deductions: money(pending.reduce((s, p) => s + num(p.structure_deductions), 0)),
     loans:      money(pending.reduce((s, p) => s + num(p.loan_outstanding), 0)),
+    advance:    money(pending.reduce((s, p) => s + num(p.advance_amount), 0)),
     net:        money(pending.reduce((s, p) => s + Math.max(0, estNet(p)), 0)),
   }), [pending]);
 
@@ -284,7 +343,7 @@ export default function SalarySlips() {
   };
 
   const openCloseDialog = () => {
-    setCloseCtc(String(monthTotals.earnings));
+    setCloseCtc(String(monthTotals.ctc));
     setCtcEditing(false);
     setCompleteOpen(true);
   };
@@ -292,14 +351,14 @@ export default function SalarySlips() {
   // The month's Cost to Company as it will be recorded.
   const recordedCtc = money(num(closeCtc));
   const closeCtcInvalid = String(closeCtc ?? '').trim() === '' || num(closeCtc) < 0;
-  const closeCtcEdited = !closeCtcInvalid && recordedCtc !== monthTotals.earnings;
+  const closeCtcEdited = !closeCtcInvalid && recordedCtc !== monthTotals.ctc;
 
   const closeRun = async () => {
     if (closeCtcInvalid) return;
     setCompleting(true);
     try {
       await api.put(`/hr/payroll-runs/${run.id}/complete`, { cost_to_company: num(closeCtc) });
-      toast.success(`${fmtMonth(month)} Pay Run closed — its payslips are now read-only`);
+      toast.success(`The ${fmtMonth(month)} Pay Run is closed. Its payslips are now read-only.`);
       setCompleteOpen(false);
       setTab('processed');
       refreshMonth();
@@ -324,6 +383,7 @@ export default function SalarySlips() {
     setEditingSlipId(null);
     setEarnings([]);
     setDeductions([]);
+    setLoanLines([]);
     try {
       const { data } = await api.get('/hr/salary-slips/draft', {
         params: { employee_id: employeeId, month },
@@ -331,6 +391,7 @@ export default function SalarySlips() {
       setDraft(data);
       setEarnings(toLines(data.earnings));
       setDeductions(toLines(data.deductions));
+      setLoanLines(toLoanLines(data.deductions));
     } catch (err) {
       const existingId = err?.response?.data?.existing_slip_id;
       if (existingId) {
@@ -357,15 +418,11 @@ export default function SalarySlips() {
     try {
       const { data } = await api.get(`/hr/salary-slips/${slipId}`);
       if (!data.is_editable) {
-        toast.error(`The ${fmtMonth(data.month)} Pay Run is closed, so this payslip can no longer be amended.`);
+        toast.error(`The ${fmtMonth(data.month)} Pay Run is closed. Its payslips can no longer be edited.`);
         setEditingSlipId(null);
         openIssuedSlip(slipId);
         return;
       }
-
-      const loanContext = new Map(
-        (data.loan_context || []).map(loan => [loan.id, loan.remaining_excluding_slip])
-      );
 
       // Shaped like a /draft response so the editor needs no edit-mode case.
       setDraft({
@@ -379,12 +436,15 @@ export default function SalarySlips() {
         },
         month: data.month,
         attendance: data.attendance,
+        advances: data.advances || [],
+        advance_amount: data.advance_amount,
         target_amount: data.target_amount,
         target_achieved: data.target_achieved,
         target_reason: 'Recalculated from live sales data when you save',
       });
-      setEarnings(toLines(data.earnings, loanContext));
-      setDeductions(toLines(data.deductions, loanContext));
+      setEarnings(toLines(data.earnings));
+      setDeductions(toLines(data.deductions));
+      setLoanLines(toLoanLines(data.deductions, data.loan_context || []));
     } catch (err) {
       toast.error(apiError(err, 'Could not open this payslip for amendment.'));
       setEditingSlipId(null);
@@ -413,63 +473,92 @@ export default function SalarySlips() {
     setter(prev => [...prev, { key: `l${++lineKeySeq}`, title: '', amount: '' }]);
   };
 
+  const updateLoanLine = (key, amount) => {
+    setLoanLines(prev => prev.map(line => (line.key === key ? { ...line, amount } : line)));
+  };
+
+  // The month's advance — fixed: recorded on the employee's profile, always
+  // deducted in full, never editable here.
+  const advanceAmount = money(draft?.advance_amount);
+
   // Zero pay: the one sanctioned way to "skip" someone. The payslip still
-  // exists — one zero earning line carrying the reason, no deductions (so no
-  // loan is repaid from a salary that was not paid) — and prints as such.
+  // exists — one zero earning line carrying the reason, no deductions and every
+  // loan repayment at 0 (nothing is repaid from a salary that was not paid) —
+  // and prints as such. Not possible once an advance has been paid against the
+  // month: that money has to be recovered from this payslip.
   const applyZeroPay = () => {
     const reason = zeroReason.trim();
-    if (!reason) return;
-    setEarnings([{ key: `l${++lineKeySeq}`, title: `Not paid this month — ${reason}`, amount: '0' }]);
+    if (!reason || advanceAmount > 0) return;
+    setEarnings([{ key: `l${++lineKeySeq}`, title: `Not paid this month: ${reason}`, amount: '0' }]);
     setDeductions([]);
+    setLoanLines(prev => prev.map(line => ({ ...line, amount: '0' })));
     setZeroOpen(false);
-    toast('Lines replaced with a zero-pay entry. Review, then save.', { icon: 'ℹ️' });
+    toast('The payslip is now set to zero pay. Review it, then save.', { icon: 'ℹ️' });
   };
 
   const totals = useMemo(() => {
     const e = earnings.reduce((s, l) => s + num(l.amount), 0);
-    const d = deductions.reduce((s, l) => s + num(l.amount), 0);
-    const loans = deductions.filter(l => l.loan_id).reduce((s, l) => s + num(l.amount), 0);
+    const other = deductions.reduce((s, l) => s + num(l.amount), 0);
+    const loans = loanLines.reduce((s, l) => s + num(l.amount), 0);
+    const netSalary = money(e - other - loans);
     return {
       earnings: money(e),
-      deductions: money(d),
+      deductions: money(other + loans),
       loans: money(loans),
-      other: money(d - loans),
-      net: money(e - d),
+      other: money(other),
+      netSalary,
+      advance: advanceAmount,
+      net: money(netSalary - advanceAmount),   // net payable
     };
-  }, [earnings, deductions]);
+  }, [earnings, deductions, loanLines, advanceAmount]);
+
+  // What the employee will still owe once this payslip's repayments land —
+  // the "Total Pending Loan" line the payslip prints.
+  const loanLeftAfter = useMemo(
+    () => money(loanLines.reduce((s, l) => s + Math.max(0, num(l.loan_remaining) - num(l.amount)), 0)),
+    [loanLines]
+  );
 
   // Every rule the server enforces, checked here first so the operator sees the
   // problem before submitting rather than after.
   const draftProblem = useMemo(() => {
     if (!draft) return null;
-    if (earnings.length === 0) return 'A payslip needs at least one earning line. For someone who is not being paid this month, use Zero pay.';
+    if (earnings.length === 0) return 'Add at least one earning. For an employee who is not being paid this month, mark the payslip as zero pay.';
     if ([...earnings, ...deductions].some(l => !l.title.trim() && num(l.amount) !== 0)) {
-      return 'Every line with an amount needs a title.';
+      return 'Every line with an amount needs a description.';
     }
-    if ([...earnings, ...deductions].some(l => num(l.amount) < 0)) {
+    if ([...earnings, ...deductions, ...loanLines].some(l => num(l.amount) < 0)) {
       return 'Amounts cannot be negative.';
     }
-    const overdrawn = deductions.find(l => (
-      l.loan_id && l.loan_remaining !== undefined && num(l.amount) - num(l.loan_remaining) > 0.005
-    ));
+    const overdrawn = loanLines.find(l => num(l.amount) - num(l.loan_remaining) > 0.005);
     if (overdrawn) {
-      return `"${overdrawn.title}" is more than the ${fmtMoney(overdrawn.loan_remaining)} still owed on that loan.`;
+      return `The repayment for ${overdrawn.loan_title} exceeds the outstanding balance of ${fmtMoney(overdrawn.loan_remaining)}.`;
+    }
+    if (totals.netSalary < 0) {
+      return 'Deductions exceed earnings. Reduce a deduction or spread a loan repayment across several months.';
     }
     if (totals.net < 0) {
-      return 'Deductions exceed earnings. Reduce a deduction — a loan can be repaid across several months.';
+      return `The advance salary of ${fmtMoney(totals.advance)} exceeds the net salary of ${fmtMoney(totals.netSalary)}. `
+        + 'Advance salary is always deducted in full, so reduce a deduction or loan repayment.';
     }
     return null;
-  }, [draft, earnings, deductions, totals]);
+  }, [draft, earnings, deductions, loanLines, totals]);
 
-  // A loan line zeroed out means "skip this month" — dropped rather than sent
-  // as a 0.00 row. The server applies the same rule.
+  // A loan repayment of 0 means "skip this month" — dropped rather than sent
+  // as a 0.00 row. The server applies the same rule. The advance is never
+  // sent: the server reads it itself.
   const linePayload = () => ({
     earnings: earnings
       .filter(l => l.title.trim() || num(l.amount) !== 0)
       .map(l => ({ title: l.title.trim(), amount: num(l.amount) })),
-    deductions: deductions
-      .filter(l => (l.loan_id ? num(l.amount) > 0 : (l.title.trim() || num(l.amount) !== 0)))
-      .map(l => ({ title: l.title.trim(), amount: num(l.amount), loan_id: l.loan_id })),
+    deductions: [
+      ...deductions
+        .filter(l => l.title.trim() || num(l.amount) !== 0)
+        .map(l => ({ title: l.title.trim(), amount: num(l.amount) })),
+      ...loanLines
+        .filter(l => num(l.amount) > 0)
+        .map(l => ({ title: l.title, amount: num(l.amount), loan_id: l.loan_id })),
+    ],
   });
 
   // The pending employee after the one being processed, in list order — what
@@ -488,7 +577,7 @@ export default function SalarySlips() {
     try {
       if (editingSlipId) {
         const { data } = await api.put(`/hr/salary-slips/${editingSlipId}`, linePayload());
-        toast.success(`${draft.employee.name}'s payslip updated — net ${fmtMoney(data.net_pay)}`);
+        toast.success(`Payslip updated for ${draft.employee.name}. Net payable: ${fmtMoney(data.net_pay)}.`);
         refreshMonth();
         setTab('processed');
         leaveDraft();
@@ -499,7 +588,7 @@ export default function SalarySlips() {
           month: draft.month,
           ...linePayload(),
         });
-        toast.success(`${draft.employee.name} processed — net ${fmtMoney(data.net_pay)}`);
+        toast.success(`Payslip saved for ${draft.employee.name}. Net payable: ${fmtMoney(data.net_pay)}.`);
         refreshMonth();
         if (next) {
           processEmployee(next.id);
@@ -574,15 +663,15 @@ export default function SalarySlips() {
       return [
         `Closed ${fmtStamp(run.completed_at)}${run.completed_by_name ? ` by ${run.completed_by_name}` : ''}`,
         plural(slips.length, 'payslip'),
-        `Net pay ${fmtMoney(monthTotals.net)}`,
-        `Cost to company ${fmtMoney(run.cost_to_company ?? monthTotals.earnings)}`,
+        `Net payable ${fmtMoney(monthTotals.net)}`,
+        `Cost to company ${fmtMoney(run.cost_to_company ?? monthTotals.ctc)}`,
       ].join(' · ');
     }
     return [
       pending.length === 0 && slips.length
-        ? `All ${roster.eligible} processed — ready to close`
+        ? `All ${roster.eligible} processed · Ready to close`
         : `${processedCount} of ${roster.eligible} processed`,
-      `Net pay ${fmtMoney(monthTotals.net)}`,
+      `Net payable ${fmtMoney(monthTotals.net)}`,
     ].join(' · ');
   };
 
@@ -601,81 +690,128 @@ export default function SalarySlips() {
       {lines.length === 0 && (
         <div className="hr-lines-empty">
           {side === 'earnings'
-            ? 'No earnings — this employee has no salary structure set up. Add a line, or use Zero pay.'
+            ? 'No salary structure is set up for this employee. Add an earning, or mark the payslip as zero pay.'
             : 'No deductions this month.'}
         </div>
       )}
 
-      {lines.map(line => {
-        const overdrawn = line.loan_id && line.loan_remaining !== undefined
-          && num(line.amount) - num(line.loan_remaining) > 0.005;
-        const left = num(line.loan_remaining) - num(line.amount);
-        return (
-          <div className={`hr-line is-simple${line.loan_id ? ' is-loan' : ''}`} key={line.key}>
-            <div className="hr-line-cell">
-              {/* A loan line's title is generated and bound to the loan it
-                  repays, so it is shown, not typed: renaming it would leave a
-                  label that no longer describes what the money settles. */}
-              {line.loan_id ? (
-                <div className="hr-line-static">
-                  <span className="pr-loan-tag">Loan</span>
-                  <span className="hr-line-static-text" title={line.title}>{line.title}</span>
-                </div>
-              ) : (
-                <>
-                  <label htmlFor={`t-${line.key}`} className="hr-sr-only">Description</label>
-                  <input
-                    id={`t-${line.key}`}
-                    className="form-control"
-                    placeholder={side === 'earnings' ? 'Travel allowance, bonus…' : 'Late arrivals, advance…'}
-                    value={line.title}
-                    maxLength={200}
-                    onChange={e => updateLine(side, line.key, { title: e.target.value })}
-                  />
-                </>
-              )}
-            </div>
-            <div className="hr-line-cell">
-              <label htmlFor={`a-${line.key}`} className="hr-sr-only">Amount</label>
-              <AmountInput
-                id={`a-${line.key}`}
-                value={line.amount}
-                invalid={overdrawn}
-                onChange={val => updateLine(side, line.key, { amount: val })}
-              />
-            </div>
-            <div className="hr-line-remove">
-              <button
-                type="button"
-                title={line.loan_id ? 'Skip this repayment this month' : `Remove ${line.title || 'this line'}`}
-                aria-label={line.loan_id ? 'Skip this repayment this month' : `Remove ${line.title || 'this line'}`}
-                onClick={() => removeLine(side, line.key)}
-              >
-                <span className="material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden="true">close</span>
-              </button>
-            </div>
-
-            {line.loan_id && (
-              <div
-                className={`hr-line-note ${overdrawn ? 'hr-error' : 'hr-help'}`}
-                role={overdrawn ? 'alert' : undefined}
-              >
-                {overdrawn && <span className="material-symbols-outlined" aria-hidden="true">error</span>}
-                <span>
-                  {overdrawn
-                    ? `Only ${fmtAmount(line.loan_remaining)} is still owed.`
-                    : `${fmtAmount(line.loan_remaining)} owed · ${fmtAmount(left)} left after this payslip`}
-                </span>
-              </div>
-            )}
+      {lines.map(line => (
+        <div className="hr-line is-simple" key={line.key}>
+          <div className="hr-line-cell">
+            <label htmlFor={`t-${line.key}`} className="hr-sr-only">Description</label>
+            <input
+              id={`t-${line.key}`}
+              className="form-control"
+              placeholder={side === 'earnings' ? 'Earning description' : 'Deduction description'}
+              value={line.title}
+              maxLength={200}
+              onChange={e => updateLine(side, line.key, { title: e.target.value })}
+            />
           </div>
-        );
-      })}
+          <div className="hr-line-cell">
+            <label htmlFor={`a-${line.key}`} className="hr-sr-only">Amount</label>
+            <AmountInput
+              id={`a-${line.key}`}
+              value={line.amount}
+              onChange={val => updateLine(side, line.key, { amount: val })}
+            />
+          </div>
+          <div className="hr-line-remove">
+            <button
+              type="button"
+              title={`Remove ${line.title || 'this line'}`}
+              aria-label={`Remove ${line.title || 'this line'}`}
+              onClick={() => removeLine(side, line.key)}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden="true">close</span>
+            </button>
+          </div>
+        </div>
+      ))}
 
       <div className="hr-lines-foot">
         <button className="btn btn-outline btn-sm" onClick={() => addLine(side)}>
           + Add {side === 'earnings' ? 'earning' : 'deduction'}
         </button>
+      </div>
+    </div>
+  );
+
+  // ── Loan repayments ──────────────────────────────────────────────────────
+  // Every loan still owed is listed with its own amount, so the operator
+  // decides per loan how much comes off this month (0 = skip). The payslip
+  // prints them as a single "Loan Deduction" row — the figure in the footer.
+  // A loan line's title is generated and bound to the loan it repays, so it is
+  // shown, not typed.
+  const renderLoans = () => (
+    <div className="hr-lines pr-subgroup">
+      <div className="hr-lines-head is-simple">
+        <span>Loan repayment</span>
+        <span style={{ textAlign: 'right' }}>Amount</span>
+        <span />
+      </div>
+
+      {loanLines.map(line => {
+        const owed = num(line.loan_remaining);
+        const amount = num(line.amount);
+        const overdrawn = amount - owed > 0.005;
+        const skipped = amount <= 0;
+        return (
+          <div className="hr-line is-simple is-loan" key={line.key}>
+            <div className="hr-line-cell">
+              <div className="hr-line-static">
+                <span className="pr-loan-tag">Loan</span>
+                <span className="hr-line-static-text" title={line.loan_title}>{line.loan_title}</span>
+              </div>
+            </div>
+            <div className="hr-line-cell">
+              <label htmlFor={`a-${line.key}`} className="hr-sr-only">Repayment on {line.loan_title}</label>
+              <AmountInput
+                id={`a-${line.key}`}
+                value={line.amount}
+                invalid={overdrawn}
+                onChange={val => updateLoanLine(line.key, val)}
+              />
+            </div>
+            <div className="hr-line-remove">
+              {/* The same close control as every other line, so the editor
+                  has one way to take a line off. A loan is not removed,
+                  only skipped for this month (it stays listed at 0, never
+                  forgotten), so once skipped the control becomes Undo. */}
+              <button
+                type="button"
+                title={skipped ? 'Restore the full repayment' : 'Skip this month'}
+                aria-label={skipped ? `Restore the full repayment of ${line.loan_title}` : `Skip ${line.loan_title} this month`}
+                onClick={() => updateLoanLine(line.key, skipped ? String(owed) : '0')}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden="true">
+                  {skipped ? 'undo' : 'close'}
+                </span>
+              </button>
+            </div>
+            <div
+              className={`hr-line-note ${overdrawn ? 'hr-error' : 'hr-help'}`}
+              role={overdrawn ? 'alert' : undefined}
+            >
+              {overdrawn && <span className="material-symbols-outlined" aria-hidden="true">error</span>}
+              <span>
+                {overdrawn
+                  ? `Exceeds the outstanding balance of ${fmtAmount(owed)}.`
+                  : skipped
+                    ? `Skipped this month · Outstanding ${fmtAmount(owed)}`
+                    : `Outstanding ${fmtAmount(owed)} · After this payslip ${fmtAmount(owed - amount)}`}
+              </span>
+            </div>
+          </div>
+        );
+      })}
+
+      <div className="pr-lines-total">
+        <div>
+          <div className="pr-lines-total-label">Loan Deduction</div>
+          <div className="hr-help">Total pending loan {fmtAmount(loanLeftAfter)}</div>
+        </div>
+        <span className="pr-lines-total-value">{fmtAmount(totals.loans)}</span>
       </div>
     </div>
   );
@@ -712,25 +848,30 @@ export default function SalarySlips() {
           </div>
         )}
         <div className="att-scroll">
-          <table className="att-table">
+          {/* Every money column has a width sized to its header, so a label
+              can never run into its neighbour; the employee column takes
+              whatever is left. Below 1180px the table scrolls. */}
+          <table className="att-table pr-wide">
             <colgroup>
-              <col style={{ width: '26%' }} />
-              <col style={{ width: '14%' }} />
               <col />
-              <col />
-              <col />
-              <col />
+              <col style={{ width: 136 }} />
               <col style={{ width: 160 }} />
+              <col style={{ width: 128 }} />
+              <col style={{ width: 148 }} />
+              <col style={{ width: 120 }} />
+              <col style={{ width: 160 }} />
+              <col style={{ width: 56 }} />
             </colgroup>
             <thead>
               <tr>
                 <SortableHeader column="name" label="Employee" {...pendingSort} />
                 <SortableHeader column="department_name" label="Department" {...pendingSort} />
                 <SortableHeader column="structure_earnings" label="Monthly salary" align="right" {...pendingSort} />
-                <th className="is-num">Fixed deductions</th>
+                <th className="is-num" title="Recurring deductions from the salary structure">Deductions</th>
                 <SortableHeader column="loan_outstanding" label="Loan balance" align="right" {...pendingSort} />
-                <th className="is-num" title="Salary less fixed deductions and the full loan balance, as the payslip pre-fills">Est. net pay</th>
-                <th className="is-center"><span className="hr-sr-only">Action</span></th>
+                <th className="is-num" title="Advance salary paid against this month. Deducted in full.">Advance</th>
+                <th className="is-num" title="Monthly salary less deductions, the full loan balance and the advance">Est. net payable</th>
+                <th className="is-center"><span className="hr-sr-only">Open</span></th>
               </tr>
             </thead>
             <tbody>
@@ -758,7 +899,7 @@ export default function SalarySlips() {
                     <td className="is-num">
                       {num(p.structure_earnings) > 0
                         ? fmtAmount(p.structure_earnings)
-                        : <span className="pr-warn" title="No salary structure — add lines on the payslip, or set it up on the employee's profile">Not set up</span>}
+                        : <span className="pr-warn" title="No salary structure is set up. Add earnings on the payslip or on the employee profile.">Not set up</span>}
                     </td>
                     <td className="is-num">
                       {num(p.structure_deductions) > 0 ? fmtAmount(p.structure_deductions) : <Dash />}
@@ -766,24 +907,23 @@ export default function SalarySlips() {
                     <td className="is-num">
                       {num(p.loan_outstanding) > 0 ? fmtAmount(p.loan_outstanding) : <Dash />}
                     </td>
+                    <td className="is-num">
+                      {num(p.advance_amount) > 0 ? fmtAmount(p.advance_amount) : <Dash />}
+                    </td>
                     <td className="is-num pr-net">
                       {num(p.structure_earnings) <= 0
                         ? <Dash />
                         : estNet(p) < 0
-                          ? <span className="pr-warn" title="Deductions and the full loan balance exceed the salary — reduce the loan repayment on the payslip">Review</span>
+                          ? <span className="pr-warn" title="Deductions, the full loan balance and the advance exceed the salary. Reduce a loan repayment on the payslip.">Review</span>
                           : fmtAmount(estNet(p))}
                     </td>
+                    {/* The whole row processes the employee (click or
+                        Enter); the chevron is its affordance, not a second
+                        control, so it is hidden from assistive tech. */}
                     <td className="is-center">
-                      {runOpen ? (
-                        <button
-                          type="button"
-                          className="btn btn-outline btn-sm"
-                          tabIndex={-1}
-                          onClick={e => { e.stopPropagation(); open(); }}
-                        >
-                          Process salary
-                        </button>
-                      ) : <Dash />}
+                      {runOpen && (
+                        <span className="material-symbols-outlined pr-row-chevron" aria-hidden="true">chevron_right</span>
+                      )}
                     </td>
                   </tr>
                 );
@@ -795,6 +935,7 @@ export default function SalarySlips() {
                 <td className="is-num">{fmtAmount(pendingTotals.earnings)}</td>
                 <td className="is-num">{fmtAmount(pendingTotals.deductions)}</td>
                 <td className="is-num">{fmtAmount(pendingTotals.loans)}</td>
+                <td className="is-num">{fmtAmount(pendingTotals.advance)}</td>
                 <td className="is-num">{fmtAmount(pendingTotals.net)}</td>
                 <td />
               </tr>
@@ -823,15 +964,16 @@ export default function SalarySlips() {
     return (
       <>
         <div className="att-scroll">
-          <table className="att-table">
+          <table className="att-table pr-wide">
             <colgroup>
               <col style={{ width: 56 }} />
-              <col style={{ width: '26%' }} />
-              <col style={{ width: '14%' }} />
               <col />
-              <col />
-              <col />
-              <col />
+              <col style={{ width: 136 }} />
+              <col style={{ width: 128 }} />
+              <col style={{ width: 128 }} />
+              <col style={{ width: 120 }} />
+              <col style={{ width: 120 }} />
+              <col style={{ width: 148 }} />
               <col style={{ width: 72 }} />
             </colgroup>
             <thead>
@@ -848,9 +990,10 @@ export default function SalarySlips() {
                 <SortableHeader column="employee_name" label="Employee" {...slipSort} />
                 <SortableHeader column="department_name" label="Department" {...slipSort} />
                 <th className="is-num">Gross</th>
-                <th className="is-num" title="Tax, fines and other deductions — excluding loan & advance recoveries">Deductions</th>
-                <th className="is-num" title="Loan & advance recoveries">Loans &amp; adv.</th>
-                <SortableHeader column="net_pay" label="Net pay" align="right" {...slipSort} />
+                <th className="is-num" title="Tax, leave and other deductions. Excludes loan repayments.">Deductions</th>
+                <th className="is-num" title="Loan repayments. Printed as one Loan Deduction line on the payslip.">Loans</th>
+                <th className="is-num" title="Advance salary paid earlier. Deducted from the net salary.">Advance</th>
+                <SortableHeader column="net_pay" label="Net payable" align="right" {...slipSort} />
                 <th><span className="hr-sr-only">Actions</span></th>
               </tr>
             </thead>
@@ -886,10 +1029,15 @@ export default function SalarySlips() {
                   <td className="is-num">{fmtAmount(slip.total_earnings)}</td>
                   <td className={`is-num${num(slip.other_deductions) ? '' : ' att-muted-num'}`}>{fmtAmount(slip.other_deductions)}</td>
                   <td className={`is-num${num(slip.loan_recoveries) ? '' : ' att-muted-num'}`}>{fmtAmount(slip.loan_recoveries)}</td>
+                  <td className={`is-num${num(slip.advance_amount) ? '' : ' att-muted-num'}`}>{fmtAmount(slip.advance_amount)}</td>
                   <td className="is-num pr-net">
-                    {num(slip.net_pay) === 0
+                    {/* Net payable 0 has two meanings: a zero-pay payslip
+                        (no earnings), or a salary fully paid in advance. */}
+                    {num(slip.total_earnings) === 0
                       ? <span title="Zero-pay payslip">{fmtAmount(0)} <span className="pr-zero">not paid</span></span>
-                      : fmtAmount(slip.net_pay)}
+                      : num(slip.net_pay) === 0 && num(slip.advance_amount) > 0
+                        ? <span title="The whole net salary was paid as an advance">{fmtAmount(0)} <span className="pr-zero">paid in advance</span></span>
+                        : fmtAmount(slip.net_pay)}
                   </td>
                   <td className="is-center att-kebab-cell" onClick={e => e.stopPropagation()}>
                     <KebabMenu
@@ -912,6 +1060,7 @@ export default function SalarySlips() {
                 <td className="is-num">{fmtAmount(monthTotals.earnings)}</td>
                 <td className="is-num">{fmtAmount(monthTotals.other)}</td>
                 <td className="is-num">{fmtAmount(monthTotals.loans)}</td>
+                <td className="is-num">{fmtAmount(monthTotals.advance)}</td>
                 <td className="is-num">{fmtAmount(monthTotals.net)}</td>
                 <td />
               </tr>
@@ -1086,7 +1235,7 @@ export default function SalarySlips() {
             {/* Context, above the work: what the month says about this person.
                 Both are read-only, so they sit before the payslip rather than
                 interrupting the run from earnings to Save. */}
-            {draft && !generating && (attendance || draft.employee.is_field_employee) && (
+            {draft && !generating && (!!attendance || !!draft.employee.is_field_employee) && (
               <div className="pr-context">
                 {attendance && (
                   <div className="pr-context-row">
@@ -1106,7 +1255,7 @@ export default function SalarySlips() {
                   </div>
                 )}
 
-                {draft.employee.is_field_employee && (() => {
+                {!!draft.employee.is_field_employee && (() => {
                   const achieved = draft.target_achieved;
                   const target = num(draft.target_amount);
                   if (achieved === null || achieved === undefined) {
@@ -1158,24 +1307,23 @@ export default function SalarySlips() {
                   <section>
                     <h3 className="pr-h3">Deductions</h3>
                     {renderLines('deductions', deductions)}
+                    {loanLines.length > 0 && renderLoans()}
                   </section>
                 </div>
 
                 {draftProblem && (
-                  <div className="hr-error" style={{ marginTop: 16 }} role="alert">
-                    <span className="material-symbols-outlined" aria-hidden="true">error</span>
-                    <span>{draftProblem}</span>
-                  </div>
+                  <Notice tone="danger" title="This payslip cannot be saved yet" style={{ marginTop: 16 }}>
+                    {draftProblem}
+                  </Notice>
                 )}
               </div>
             )}
           </div>
 
-          {/* Sales target — read-only: the figure is measured, never typed */}
           {draft && !generating && (
             /* Figures and the save action travel together, pinned to the
-               bottom of the viewport: on a long payslip the net pay and the
-               way out were both below the fold. */
+               bottom of the viewport: on a long payslip the net payable and
+               the way out were both below the fold. */
             <div className="pr-actionbar">
               {/* One figure carries the bar — the amount that will be paid —
                   with the components that produced it as its caption. The
@@ -1183,15 +1331,44 @@ export default function SalarySlips() {
                   which read as a calculator rather than a payslip. */}
               <div className="pr-actionbar-figs">
                 <div className="pr-netline">
-                  <span className="pr-netline-label">Net pay</span>
-                  <span className="pr-netline-value">
+                  <span className="pr-netline-label">Net payable</span>
+                  <span className={`pr-netline-value${totals.net < 0 ? ' is-negative' : ''}`}>
                     <span className="pr-netline-ccy">PKR</span>{fmtAmount(totals.net)}
                   </span>
                 </div>
                 <div className="pr-breakdown">
                   <span><span className="pr-breakdown-label">Gross</span>{fmtAmount(totals.earnings)}</span>
                   <span><span className="pr-breakdown-label">Deductions</span>{fmtAmount(totals.other)}</span>
-                  <span><span className="pr-breakdown-label">Loans &amp; advances</span>{fmtAmount(totals.loans)}</span>
+                  <span><span className="pr-breakdown-label">Loan deduction</span>{fmtAmount(totals.loans)}</span>
+                  <span><span className="pr-breakdown-label">Net salary</span>{fmtAmount(totals.netSalary)}</span>
+                  {totals.advance > 0 && (
+                    /* The advance is fixed (recorded on the profile, always
+                       deducted in full), so the payslip carries one figure;
+                       the entries behind it are one hover or click away
+                       rather than a section the operator must read past. */
+                    <span>
+                      <span className="pr-breakdown-label">Advance salary</span>
+                      {fmtAmount(totals.advance)}
+                      <InfoPopover
+                        label="Advance salary details"
+                        title={`Advance salary · ${fmtMonth(draft.month)}`}
+                      >
+                        <div className="hr-pop-list">
+                          {(draft.advances || []).map(advance => (
+                            <div className="hr-pop-row" key={advance.id}>
+                              <span className="hr-pop-date">{fmtDate(advance.date_given)}</span>
+                              <span className="hr-pop-note">{advance.note || 'Advance salary'}</span>
+                              <span className="hr-pop-amt">{fmtAmount(advance.amount)}</span>
+                            </div>
+                          ))}
+                          <div className="hr-pop-row is-total">
+                            <span className="hr-pop-note">Total</span>
+                            <span className="hr-pop-amt">{fmtAmount(totals.advance)}</span>
+                          </div>
+                        </div>
+                      </InfoPopover>
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="pr-actionbar-actions">
@@ -1256,7 +1433,7 @@ export default function SalarySlips() {
                 <div className="att-meta">
                   {openSlip
                     ? [
-                      `Net pay ${fmtMoney(openSlip.net_pay)}`,
+                      `Net payable ${fmtMoney(openSlip.net_pay)}`,
                       openSlip.is_editable ? null : 'Pay Run closed',
                     ].filter(Boolean).join(' · ')
                     : ' '}
@@ -1302,17 +1479,27 @@ export default function SalarySlips() {
         footer={
           <>
             <button className="btn btn-outline" onClick={() => setZeroOpen(false)}>Cancel</button>
-            <button className="btn btn-primary" onClick={applyZeroPay} disabled={!zeroReason.trim()}>
+            <button className="btn btn-primary" onClick={applyZeroPay} disabled={!zeroReason.trim() || advanceAmount > 0}>
               Apply
             </button>
           </>
         }
       >
         <form onSubmit={e => { e.preventDefault(); applyZeroPay(); }}>
+          {advanceAmount > 0 && (
+            /* Zero pay would leave the advance unrecovered and the net
+               payable negative, which the server refuses. Said up front
+               rather than after a failed save. */
+            <Notice tone="danger" title="Zero pay is not available" style={{ marginBottom: 16 }}>
+              {draft?.employee.name} received an advance salary of {fmtMoney(advanceAmount)} for
+              {' '}{fmtMonth(draft?.month || month)}. It must be recovered from this payslip, so the
+              payslip needs earnings of at least that amount.
+            </Notice>
+          )}
           <p className="hr-help" style={{ fontSize: 13, marginBottom: 16 }}>
-            {draft?.employee.name} will still get a payslip for {fmtMonth(month)}, with a net
-            pay of zero and the reason printed on it. Deductions and loan repayments are
-            removed — nothing is repaid from a salary that was not paid.
+            {draft?.employee.name} will still receive a payslip for {fmtMonth(month)} with a net
+            payable of zero and the reason printed on it. Deductions and loan repayments are
+            removed, because nothing is recovered from a salary that is not paid.
           </p>
           <label className="form-label" htmlFor="zero-reason">
             Reason<span className="hr-required" aria-hidden="true">*</span>
@@ -1320,7 +1507,7 @@ export default function SalarySlips() {
           <input
             id="zero-reason"
             className="form-control"
-            placeholder="Unpaid leave for the whole month"
+            placeholder="Enter the reason"
             value={zeroReason}
             maxLength={120}
             autoFocus
@@ -1363,9 +1550,11 @@ export default function SalarySlips() {
           <tbody>
             <tr><td>Employees processed</td><td>{slips.length} of {roster.eligible}</td></tr>
             <tr><td>Gross earnings</td><td>{fmtMoney(monthTotals.earnings)}</td></tr>
-            <tr><td>Deductions <span className="pr-ledger-note">tax, fines, other</span></td><td>− {fmtMoney(monthTotals.other)}</td></tr>
-            <tr><td>Loan &amp; advance recoveries</td><td>− {fmtMoney(monthTotals.loans)}</td></tr>
-            <tr className="is-net"><td>Net pay <span className="pr-ledger-note">to disburse</span></td><td>{fmtMoney(monthTotals.net)}</td></tr>
+            <tr><td>Deductions</td><td>− {fmtMoney(monthTotals.other)}</td></tr>
+            <tr><td>Loan repayments</td><td>− {fmtMoney(monthTotals.loans)}</td></tr>
+            <tr className="is-sub"><td>Net salary</td><td>{fmtMoney(monthTotals.netSalary)}</td></tr>
+            <tr><td>Advance salary</td><td>− {fmtMoney(monthTotals.advance)}</td></tr>
+            <tr className="is-net"><td>Net payable</td><td>{fmtMoney(monthTotals.net)}</td></tr>
           </tbody>
         </table>
 
@@ -1419,14 +1608,14 @@ export default function SalarySlips() {
               <span className="pr-field-error">Enter an amount of zero or more.</span>
             ) : closeCtcEdited ? (
               <>
-                Edited · calculated {fmtMoney(monthTotals.earnings)}
-                {' '}({recordedCtc > monthTotals.earnings ? '+' : '−'}{fmtAmount(Math.abs(recordedCtc - monthTotals.earnings))})
-                <button type="button" className="pr-reset" onClick={() => setCloseCtc(String(monthTotals.earnings))}>
+                Edited · Calculated {fmtMoney(monthTotals.ctc)}
+                {' '}({recordedCtc > monthTotals.ctc ? '+' : '−'}{fmtAmount(Math.abs(recordedCtc - monthTotals.ctc))})
+                <button type="button" className="pr-reset" onClick={() => setCloseCtc(String(monthTotals.ctc))}>
                   Reset
                 </button>
               </>
             ) : (
-              'Total gross earnings. Deductions do not reduce it.'
+              'Gross earnings less deductions. Loan repayments and advance salary do not reduce it.'
             )}
           </div>
         </div>

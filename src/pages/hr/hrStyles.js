@@ -790,7 +790,9 @@ export const HR_STYLES = `
     transition: var(--transition);
   }
   .hr-line:hover .hr-line-remove button { color: var(--gray-500); }
-  .hr-line-remove button:hover { background: var(--red-pale); color: var(--red); }
+  /* Neutral on hover: removing a draft line is routine and undoable, not a
+     destructive act, so it does not borrow the danger colours. */
+  .hr-line-remove button:hover { background: var(--gray-100); color: var(--gray-900); }
   .hr-line-remove button:focus-visible { outline: 2px solid var(--blue-light); outline-offset: -2px; }
   .hr-line-note {
     grid-column: 1 / -1;
@@ -1042,7 +1044,7 @@ export const HR_STYLES = `
     cursor: pointer;
     transition: var(--transition);
   }
-  .hr-payrow-x:hover { background: var(--red-pale); color: var(--red); }
+  .hr-payrow-x:hover { background: var(--gray-100); color: var(--gray-900); }
 
   /* == Sales target ==================================================== */
   /* A short figure stacked over the sentence that explains it. The bordered
@@ -1435,6 +1437,14 @@ export const HR_STYLES = `
     white-space: nowrap;
   }
   .att-table tbody tr:last-child td { border-bottom: none; }
+  /* A header that cannot fit is clipped with an ellipsis rather than painted
+     over its neighbour (the global th is nowrap and overflows by default).
+     Columns are sized so this never triggers; it is the safety net. */
+  .att-table thead th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .att-table .hr-sort-label { min-width: 0; }
+  /* Payroll tables carry up to nine columns of money: below this width they
+     scroll inside .att-scroll instead of squeezing figures into each other. */
+  .att-table.pr-wide { min-width: 1100px; }
   .att-table .is-num { text-align: right; font-variant-numeric: tabular-nums; }
   .att-table .is-center { text-align: center; }
   .att-table th.is-num { text-align: right; }
@@ -1709,6 +1719,15 @@ export const HR_STYLES = `
     font-weight: 700;
   }
   .pr-closed-tag .material-symbols-outlined { font-size: 16px; }
+  /* Clickable-row affordance: quiet at rest, clear on hover or focus. */
+  .pr-row-chevron {
+    font-size: 20px;
+    color: var(--gray-300);
+    vertical-align: middle;
+    transition: color 0.12s ease, transform 0.12s ease;
+  }
+  .att-row-click:hover .pr-row-chevron,
+  .att-row-click:focus-visible .pr-row-chevron { color: var(--blue); transform: translateX(2px); }
 
   /* The register's closing line: totals under their columns. */
   .att-table tfoot td {
@@ -1857,6 +1876,32 @@ export const HR_STYLES = `
   }
   /* Amounts read as money at rest and as a plain number while typed. */
   .pr-amount { text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* The groups that follow the ordinary deductions in the payslip editor:
+     loan repayments (one row per loan, printed as ONE line) and the month's
+     advance (read-only). Same bordered group as the lines above them, with a
+     closing total row that states what the payslip will print. */
+  .pr-subgroup { margin-top: 12px; }
+  .pr-lines-total {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 12px;
+    background: var(--gray-50);
+    border-top: 1px solid var(--gray-200);
+  }
+  .pr-lines-total-label { font-size: 13px; font-weight: 700; color: var(--gray-900); }
+  .pr-lines-total-value {
+    /* Right edge in line with the amount column above (40px action column). */
+    margin-right: 40px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--gray-900);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .pr-netline-value.is-negative { color: var(--red); }
 
   .pr-ctc-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
   .pr-ctc-head .pr-ctc-label { margin-bottom: 0; }
@@ -2010,6 +2055,8 @@ export const HR_STYLES = `
   .pr-close-summary td { height: 32px; padding: 0; border-bottom: 1px solid var(--gray-100); color: var(--gray-600); }
   .pr-close-summary td:last-child { text-align: right; font-weight: 600; color: var(--gray-900); font-variant-numeric: tabular-nums; }
   .pr-close-summary tr.is-net td { border-bottom: none; font-weight: 700; color: var(--gray-900); }
+  /* A subtotal inside the ledger (net salary, before the advance comes off). */
+  .pr-close-summary tr.is-sub td { font-weight: 600; color: var(--gray-900); border-bottom-color: var(--gray-200); }
 
   /* ── Multi-select checklist ────────────────────────────────────────── */
   .hr-checklist {
@@ -2087,6 +2134,176 @@ export const HR_STYLES = `
     text-transform: uppercase;
     letter-spacing: 0.6px;
   }
+
+  /* ── Notice (HrKit <Notice>) ───────────────────────────────────────── */
+  /* Title states the outcome; text gives figures and the way forward. One
+     tinted ground per tone; text colours are the AA-safe darks of each. */
+  .hr-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    border: 1px solid;
+    font-size: 13px;
+    line-height: 20px;
+  }
+  .hr-notice-icon { font-size: 18px; line-height: 20px; flex-shrink: 0; }
+  .hr-notice-body { min-width: 0; }
+  .hr-notice-title { font-weight: 700; }
+  .hr-notice-text { margin-top: 2px; }
+  .hr-notice.is-info    { background: var(--blue-ultra); border-color: var(--blue-pale); color: #1e3a8a; }
+  .hr-notice.is-info .hr-notice-icon { color: #1d4ed8; }
+  .hr-notice.is-warning { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+  .hr-notice.is-warning .hr-notice-icon { color: #b45309; }
+  .hr-notice.is-danger  { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+  .hr-notice.is-danger .hr-notice-icon { color: #b91c1c; }
+  .hr-notice.is-success { background: #f0fdf4; border-color: #bbf7d0; color: #14532d; }
+
+  /* ── Loans & Advances panel (employee profile) ─────────────────────── */
+  /* The two summary cards ARE the tabs: each states its figure and status,
+     and the selected one drives the list below. Recording happens in a
+     dialog, so the panel only ever holds summary + list and never grows a
+     form in the middle of the page. */
+  .hr-fin-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .hr-fin-card {
+    display: block;
+    width: 100%;
+    padding: 16px;
+    border: 1px solid var(--gray-200);
+    border-radius: 10px;
+    background: white;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.12s ease, background-color 0.12s ease, box-shadow 0.12s ease;
+  }
+  .hr-fin-card:hover { border-color: var(--gray-300); }
+  .hr-fin-card:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18); }
+  .hr-fin-card.is-active { border-color: var(--blue-light); background: var(--blue-ultra); box-shadow: inset 0 0 0 1px var(--blue-light); }
+  .hr-fin-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .hr-fin-card-label { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--gray-900); }
+  .hr-fin-card-label .material-symbols-outlined { font-size: 18px; color: var(--gray-500); }
+  .hr-fin-card.is-active .hr-fin-card-label .material-symbols-outlined { color: var(--blue); }
+  .hr-fin-card-count {
+    min-width: 22px;
+    height: 22px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: var(--gray-100);
+    color: var(--gray-600);
+    font-size: 11.5px;
+    font-weight: 700;
+    line-height: 22px;
+    text-align: center;
+  }
+  .hr-fin-card.is-active .hr-fin-card-count { background: white; color: var(--blue); }
+  .hr-fin-card-value {
+    margin-top: 12px;
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--gray-900);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.2px;
+  }
+  .hr-fin-card-note { margin-top: 4px; font-size: 12.5px; color: var(--gray-500); }
+  .hr-fin-listhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-height: 32px;
+    margin-bottom: 4px;
+  }
+  .hr-fin-listtitle { margin: 0; font-size: 13px; font-weight: 700; color: var(--gray-700); }
+  .hr-fin-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--gray-600);
+    cursor: pointer;
+    user-select: none;
+  }
+  .hr-fin-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--blue); cursor: pointer; }
+  .hr-fin-empty {
+    padding: 28px 16px;
+    border: 1px dashed var(--gray-200);
+    border-radius: 8px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--gray-500);
+  }
+  .hr-fin-empty .btn { margin-top: 12px; }
+  @media (max-width: 720px) { .hr-fin-cards { grid-template-columns: 1fr; } }
+
+  /* Record dialogs: one lead sentence, a key/value context block the
+     server decided, then the fields. */
+  .hr-modal-lead { margin: 0 0 16px; font-size: 13px; line-height: 20px; color: var(--gray-600); }
+  .hr-fin-context {
+    margin-bottom: 20px;
+    padding: 12px 16px;
+    border: 1px solid var(--gray-200);
+    border-radius: 8px;
+    background: var(--gray-50);
+  }
+  .hr-fin-context .hr-help { margin: 8px 0 0; }
+
+  /* ── Info popover (HrKit <InfoPopover>) ────────────────────────────── */
+  .hr-info-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    margin-left: 2px;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--gray-400);
+    cursor: pointer;
+    vertical-align: middle;
+    transition: color 0.12s ease, background-color 0.12s ease;
+  }
+  .hr-info-btn .material-symbols-outlined { font-size: 16px; }
+  /* Inside a baseline-aligned caption (the payslip footer), centre the icon
+     on the text instead of dropping it to the baseline. */
+  .pr-breakdown .hr-info-btn { align-self: center; margin-left: 0; }
+  .hr-info-btn:hover, .hr-info-btn.is-open { color: var(--blue); background: var(--blue-ultra); }
+  .hr-info-btn:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 1px; }
+  .hr-popover {
+    position: fixed;
+    z-index: 150;
+    padding: 12px 16px;
+    border: 1px solid var(--gray-200);
+    border-radius: 10px;
+    background: white;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.14), 0 2px 6px rgba(15, 23, 42, 0.06);
+    font-size: 13px;
+    color: var(--gray-700);
+  }
+  .hr-popover-title { margin-bottom: 8px; font-size: 13px; font-weight: 700; color: var(--gray-900); }
+  .hr-pop-list { display: flex; flex-direction: column; }
+  .hr-pop-row {
+    display: grid;
+    grid-template-columns: 88px 1fr auto;
+    align-items: baseline;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--gray-100);
+    font-variant-numeric: tabular-nums;
+  }
+  .hr-pop-row.is-total { grid-template-columns: 1fr auto; border-bottom: none; font-weight: 700; color: var(--gray-900); }
+  .hr-pop-date { color: var(--gray-500); }
+  .hr-pop-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hr-pop-amt { text-align: right; }
 
   /* ── Locked / informational strip ──────────────────────────────────── */
   .hr-locked {

@@ -5,10 +5,11 @@ import ConfirmModal from '../../components/common/ConfirmModal';
 import api from '../../utils/api';
 import { formatCurrency, formatDecimal } from '../../utils/formatters';
 import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
+import { BASE_UNIT, standardUnit, uomMisconfiguration } from '../../utils/uom';
 import toast from 'react-hot-toast';
 
 const emptyRM = { name: '', material_type: 'raw_material', uom_id: '', volume: '', volume_uom_id: '' };
-const emptyUOM = { name: '', symbol: '', base_type: 'weight', to_base_factor: 1 };
+const emptyUOM = { id: null, name: '', symbol: '', base_type: '', to_base_factor: '' };
 const emptyPurchase = () => ({ raw_material_id: '', supplier_id: '', date: todayPKT(), invoice_no: '', qty: '', amount: '' });
 
 export default function RawMaterials() {
@@ -109,16 +110,43 @@ export default function RawMaterials() {
     } catch (err) { toast.error('Error deleting'); } finally { setDeleting(false); }
   };
 
+  // Typing a standard symbol (ml, L, g, kg…) prefills its type and factor on a new UOM
+  const setUomSymbol = (symbol) => setUomForm(p => {
+    const std = !p.id && standardUnit(symbol);
+    return std ? { ...p, symbol, ...std } : { ...p, symbol };
+  });
+
   const saveUOM = async () => {
-    if (!uomForm.name || !uomForm.symbol || !uomForm.base_type) return toast.error('All fields required');
+    const symbol = uomForm.symbol.trim();
+    const payload = { ...uomForm, symbol, name: uomForm.name.trim() || symbol };
+    if (!symbol) return toast.error('Symbol required');
+    if (!(parseFloat(payload.to_base_factor) > 0)) return toast.error('Enter how many base units 1 ' + symbol + ' equals');
+    if (!payload.base_type) return toast.error('Select the base unit (g, ml or pcs)');
+    if (payload.id && !window.confirm(`Change "${payload.name}" to 1 ${symbol} = ${payload.to_base_factor} ${BASE_UNIT[payload.base_type]}? Open batches using this unit will be re-costed; completed yields keep their recorded costs.`)) return;
     setSaving(true);
     try {
-      await api.post('/raw-materials/uom', uomForm);
-      toast.success('UOM added');
+      if (payload.id) {
+        const res = await api.put(`/raw-materials/uom/${payload.id}`, payload);
+        toast.success(res.data.open_batches_repriced ? `UOM updated — ${res.data.open_batches_repriced} open batch(es) re-costed` : 'UOM updated');
+      } else {
+        await api.post('/raw-materials/uom', payload);
+        toast.success('UOM added');
+      }
       const r = await api.get('/raw-materials/uom');
       setUoms(r.data);
       setUomForm(emptyUOM);
     } catch (err) { toast.error(err.response?.data?.message || 'Error'); } finally { setSaving(false); }
+  };
+
+  const deleteUOM = async (u) => {
+    if (!window.confirm(`Delete UOM "${u.name}"?`)) return;
+    try {
+      await api.delete(`/raw-materials/uom/${u.id}`);
+      toast.success('UOM deleted');
+      if (uomForm.id === u.id) setUomForm(emptyUOM);
+      const r = await api.get('/raw-materials/uom');
+      setUoms(r.data);
+    } catch (err) { toast.error(err.response?.data?.message || 'Error deleting UOM'); }
   };
 
   const savePurchase = async () => {
@@ -293,34 +321,50 @@ export default function RawMaterials() {
       </Modal>
 
       {/* UOM Management Modal */}
-      <Modal isOpen={uomModal} onClose={() => setUomModal(false)} title="Units of Measurement" size="sm">
+      <Modal isOpen={uomModal} onClose={() => { setUomModal(false); setUomForm(emptyUOM); }} title="Units of Measurement" size="sm">
         <div style={{ marginBottom: 16 }}>
-          <div className="form-group"><label className="form-label">Name *</label>
-            <input className="form-control" placeholder="e.g. Milliliter (ml)" value={uomForm.name} onChange={e => setUomForm(p => ({ ...p, name: e.target.value }))} /></div>
           <div className="form-grid form-grid-2">
             <div className="form-group"><label className="form-label">Symbol *</label>
-              <input className="form-control" placeholder="ml" value={uomForm.symbol} onChange={e => setUomForm(p => ({ ...p, symbol: e.target.value }))} /></div>
-            <div className="form-group"><label className="form-label">Type *</label>
-              <select className="form-control" value={uomForm.base_type} onChange={e => setUomForm(p => ({ ...p, base_type: e.target.value }))}>
-                <option value="count">Count</option>
-                <option value="weight">Weight</option>
-                <option value="volume">Volume</option>
-              </select></div>
+              <input className="form-control" placeholder="e.g. L" value={uomForm.symbol} onChange={e => setUomSymbol(e.target.value)} /></div>
+            <div className="form-group"><label className="form-label">Name</label>
+              <input className="form-control" placeholder="e.g. Liter" value={uomForm.name} onChange={e => setUomForm(p => ({ ...p, name: e.target.value }))} /></div>
           </div>
-          <div className="form-group"><label className="form-label">Conversion to Base (gram/ml/pcs)</label>
-            <input className="form-control" type="number" step="0.00001" placeholder="e.g. 1000 for kg→g" value={uomForm.to_base_factor} onChange={e => setUomForm(p => ({ ...p, to_base_factor: e.target.value }))} /></div>
-          <button className="btn btn-primary w-full" onClick={saveUOM} disabled={saving} style={{ justifyContent: 'center' }}>{saving ? 'Adding...' : '+ Add UOM'}</button>
+          {/* Picking the base unit also sets the type: g → weight, ml → volume, pcs → count */}
+          <div className="form-group">
+            <label className="form-label">Conversion *</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+              <span style={{ whiteSpace: 'nowrap' }}>1 {uomForm.symbol.trim() || 'unit'} =</span>
+              <input className="form-control" type="number" min="0" step="any" placeholder="1000" value={uomForm.to_base_factor} onChange={e => setUomForm(p => ({ ...p, to_base_factor: e.target.value }))} />
+              <select className="form-control" style={{ width: 'auto' }} value={uomForm.base_type} onChange={e => setUomForm(p => ({ ...p, base_type: e.target.value }))}>
+                <option value="">unit…</option>
+                {Object.entries(BASE_UNIT).map(([type, base]) => <option key={type} value={type}>{base} ({type})</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            {uomForm.id && <button className="btn btn-outline" onClick={() => setUomForm(emptyUOM)} disabled={saving}>Cancel</button>}
+            <button className="btn btn-primary w-full" onClick={saveUOM} disabled={saving} style={{ justifyContent: 'center' }}>{saving ? 'Saving...' : uomForm.id ? 'Update UOM' : '+ Add UOM'}</button>
+          </div>
         </div>
         <div className="divider" />
         {uoms.map(u => {
           const factor = parseFloat(u.to_base_factor);
-          const factorDisplay = factor % 1 === 0 ? factor.toFixed(0) : factor.toFixed(2).replace(/\.?0+$/, '');
+          const warning = uomMisconfiguration(u);
           return (
-            <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--gray-100)', fontSize: 13 }}>
-              <div><strong>{u.name}</strong> <span className="badge badge-gray" style={{ fontSize: 10, marginLeft: 4 }}>{u.symbol}</span> <span className="text-muted text-sm">×{factorDisplay} → base</span></div>
-              <button className="btn btn-danger btn-sm" onClick={async () => { await api.delete(`/raw-materials/uom/${u.id}`); const r = await api.get('/raw-materials/uom'); setUoms(r.data); }}>
-                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span>
-              </button>
+            <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px solid var(--gray-100)', fontSize: 13 }}>
+              <div>
+                <strong>{u.name}</strong> <span className="badge badge-gray" style={{ fontSize: 10, marginLeft: 4 }}>{u.symbol}</span>{' '}
+                <span className="text-muted text-sm">{u.base_type} · 1 {u.symbol} = {factor} {BASE_UNIT[u.base_type]}</span>
+                {warning && <div style={{ fontSize: 11, color: 'var(--red)', fontWeight: 600 }}>Check this unit: {warning}</div>}
+              </div>
+              <div className="flex gap-2">
+                <button className="btn btn-outline btn-sm" title="Edit UOM" onClick={() => setUomForm({ id: u.id, name: u.name, symbol: u.symbol, base_type: u.base_type, to_base_factor: String(factor) })}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 16 }}>edit</span>
+                </button>
+                <button className="btn btn-danger btn-sm" title="Delete UOM" onClick={() => deleteUOM(u)}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span>
+                </button>
+              </div>
             </div>
           );
         })}

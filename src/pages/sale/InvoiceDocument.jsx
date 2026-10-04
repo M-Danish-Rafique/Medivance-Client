@@ -33,20 +33,22 @@ export function fmtPlainInt(n) {
 
 export const fmtDate = (d) => formatDatePKT(d);
 
+// "3:06 PM" — standard 12-hour time in PKT (was "03:06pm").
 export const fmtTime = (d) => {
   const dt = d instanceof Date ? d : new Date(d);
   if (Number.isNaN(dt.getTime())) return '';
-  return dt.toLocaleTimeString('en-GB', {
+  return dt.toLocaleTimeString('en-US', {
     timeZone: 'Asia/Karachi',
-    hour: '2-digit',
+    hour: 'numeric',
     minute: '2-digit',
     hour12: true,
-  }).replace(/\s/g, '');
+  });
 };
 
+// "01/10/2026 at 3:06 PM" — printed after "Printed on" in document footers.
 export const fmtPrintedAt = (d) => {
   if (!d) return null;
-  return `${fmtDate(d)}, ${fmtTime(d)}`;
+  return `${fmtDate(d)} at ${fmtTime(d)}`;
 };
 
 function WarrantySection({ company }) {
@@ -119,7 +121,7 @@ export default function InvoiceDocument({ saleData, type, customerBalance, compa
 
   const prevBalance = parseFloat(customerBalance || 0);
   const totalBalance = prevBalance + netAmount;
-  const geoLine = [city_name, area_name, territory_name].filter(Boolean).join(' , ');
+  const geoLine = [city_name, area_name, territory_name].filter(Boolean).join(', ');
   const contactParts = [company.phone && `Ph: ${company.phone}`, company.email && `Email: ${company.email}`].filter(Boolean);
   const printedAtLabel = fmtPrintedAt(printedAt);
 
@@ -134,7 +136,7 @@ export default function InvoiceDocument({ saleData, type, customerBalance, compa
               <div className="invoice-brand-text">
                 <div className="invoice-company-name">{company.name}</div>
                 {company.address && <div className="invoice-meta">{company.address}</div>}
-                {contactParts.length > 0 && <div className="invoice-meta">{contactParts.join(' , ')}</div>}
+                {contactParts.length > 0 && <div className="invoice-meta">{contactParts.join(', ')}</div>}
               </div>
             </div>
           </div>
@@ -268,7 +270,8 @@ export default function InvoiceDocument({ saleData, type, customerBalance, compa
       {/* Footer pinned to page bottom */}
       <div className="invoice-page-footer">
         <span className="footer-printed">
-          {printedAtLabel ? <>Printed At: <strong>{printedAtLabel}</strong></> : 'Printed At: —'}
+          {/* Nothing on screen previews (no print time yet) rather than a dash. */}
+          {printedAtLabel && <>Printed on <strong>{printedAtLabel}</strong></>}
         </span>
         <span className="footer-powered">Powered by {company.name} Distribution System</span>
       </div>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
+import Modal from '../../components/common/Modal';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { formatCNIC, handleCNICInput, handlePhoneInput, formatPhone } from '../../utils/formatters';
@@ -8,7 +9,7 @@ import { todayPKT, addMonthsPKT } from '../../utils/dateUtils';
 import { useAuth } from '../../context/AuthContext';
 import {
   HrStyles, Panel, Tabs, TabPanel, FieldGrid, Field, FormField, Pill, BusyButton,
-  StatusBadge, KebabMenu, EmptyState, FieldGridSkeleton, SearchSelect,
+  StatusBadge, KebabMenu, EmptyState, FieldGridSkeleton, SearchSelect, Notice,
   fmtMoney, fmtAmount, fmtDate, fmtMonth, num, money, initials,
   apiError, apiFieldError, blockWheelChange, ibanError, accountNumberError,
 } from './HrKit';
@@ -25,7 +26,10 @@ import {
 // user guessing which one owns their change.
 //
 // Recording a loan stays a separate action, because issuing a loan is an event
-// with its own date and amount, not an attribute of the employee.
+// with its own date and amount, not an attribute of the employee. Recording an
+// ADVANCE SALARY is the same kind of event, but it is not a loan: it is part
+// of one month's salary paid early, and that month's payslip deducts all of it
+// (see server utils/salaryAdvances.js for the rules this screen mirrors).
 //
 // Information hierarchy follows how an HR person thinks about a person, split
 // across three tabs rather than six stacked accordions:
@@ -51,8 +55,8 @@ const SALARY_SIDES = [
     deduction: false,
     label: 'Earnings',
     totalLabel: 'Gross earnings',
-    placeholder: 'Basic salary, allowance\u2026',
-    empty: 'No earnings yet \u2014 use Add.',
+    placeholder: 'Earning description',
+    empty: 'No earnings added. Select Add to create one.',
     none: 'No recurring earnings.',
   },
   {
@@ -60,8 +64,8 @@ const SALARY_SIDES = [
     deduction: true,
     label: 'Deductions',
     totalLabel: 'Total deductions',
-    placeholder: 'Income tax, fund\u2026',
-    empty: 'No deductions yet \u2014 use Add.',
+    placeholder: 'Deduction description',
+    empty: 'No deductions added. Select Add to create one.',
     none: 'No recurring deductions.',
   },
 ];
@@ -122,6 +126,8 @@ function NetPayBanner({ value }) {
   );
 }
 
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
 const toComponentRows = (rows) => (rows || []).map(c => ({
   key: `c${c.id}`, type: c.type, title: c.title, amount: String(num(c.amount)),
 }));
@@ -155,6 +161,25 @@ export default function HrEmployeeDetail() {
   const [loanTouched, setLoanTouched] = useState({});
   const [loanErrors, setLoanErrors] = useState({});
   const [savingLoan, setSavingLoan] = useState(false);
+
+  // Advance salary — also an event. `advanceContext` comes fresh from the
+  // server each time the form opens: which pay period the advance lands in,
+  // the salary structure it is judged against, and the payslip it would
+  // update. The server re-checks all of it on save.
+  const [advanceFormOpen, setAdvanceFormOpen] = useState(false);
+  const [advanceContext, setAdvanceContext] = useState(null);
+  const [advanceContextError, setAdvanceContextError] = useState(null);
+  const [advanceForm, setAdvanceForm] = useState({ amount: '', date_given: '', note: '' });
+  const [advanceTouched, setAdvanceTouched] = useState({});
+  const [advanceErrors, setAdvanceErrors] = useState({});
+  const [savingAdvance, setSavingAdvance] = useState(false);
+  const [advanceToRemove, setAdvanceToRemove] = useState(null);
+  const [removingAdvance, setRemovingAdvance] = useState(false);
+
+  // Loans & Advances panel: which list is showing, and whether settled items
+  // (repaid loans, advances on a closed Pay Run) are included.
+  const [finTab, setFinTab] = useState('loans');
+  const [showSettled, setShowSettled] = useState(false);
 
   // ── Load ─────────────────────────────────────────────────────────────────
   const applyRecord = useCallback((record) => {
@@ -396,17 +421,21 @@ export default function HrEmployeeDetail() {
   const removeComponent = (key) => setComponents(prev => prev.filter(c => c.key !== key));
 
   // ── Loans ────────────────────────────────────────────────────────────────
+  // One form at a time in the Loans & Advances panel, and the list below it
+  // switches to the matching tab so the new entry appears where it was made.
   const openLoanForm = () => {
     setLoanForm({ title: '', principal_amount: '', date_issued: todayPKT() });
     setLoanTouched({});
     setLoanErrors({});
+    setAdvanceFormOpen(false);
+    setFinTab('loans');
     setLoanFormOpen(true);
   };
 
   const loanValidation = {
-    title: !loanForm.title.trim() ? 'Give the loan a reference' : null,
+    title: !loanForm.title.trim() ? 'Enter a reference' : null,
     principal_amount: num(loanForm.principal_amount) <= 0 ? 'Enter an amount greater than zero' : null,
-    date_issued: !loanForm.date_issued ? 'Pick the date the money was issued' : null,
+    date_issued: !loanForm.date_issued ? 'Select the date the loan was issued' : null,
   };
   const loanBlocked = Object.values(loanValidation).some(Boolean);
   const loanErrorFor = (key) => loanErrors[key] || (loanTouched[key] ? loanValidation[key] : null);
@@ -422,13 +451,13 @@ export default function HrEmployeeDetail() {
         principal_amount: num(loanForm.principal_amount),
         date_issued: loanForm.date_issued,
       });
-      toast.success('Loan recorded');
+      toast.success('Loan recorded.');
       setLoanFormOpen(false);
       load();
     } catch (err) {
       const mapped = apiFieldError(err);
       if (mapped) setLoanErrors(mapped);
-      else toast.error(apiError(err, 'Could not record this loan.'));
+      else toast.error(apiError(err, 'The loan could not be recorded. Try again.'));
     } finally {
       setSavingLoan(false);
     }
@@ -438,10 +467,131 @@ export default function HrEmployeeDetail() {
     const loans = employee?.loans || [];
     return {
       count: loans.length,
-      outstanding: money(loans.reduce((s, l) => s + num(l.remaining_balance), 0)),
+      outstanding: money(loans.reduce((s, l) => s + Math.max(0, num(l.remaining_balance)), 0)),
       openCount: loans.filter(l => num(l.remaining_balance) > 0).length,
     };
   }, [employee]);
+
+  // ── Advance salary ───────────────────────────────────────────────────────
+  const openAdvanceForm = () => {
+    setAdvanceForm({ amount: '', date_given: todayPKT(), note: '' });
+    setAdvanceTouched({});
+    setAdvanceErrors({});
+    setAdvanceContext(null);
+    setAdvanceContextError(null);
+    setLoanFormOpen(false);
+    setFinTab('advances');
+    setAdvanceFormOpen(true);
+    api.get(`/hr/employees/${id}/advances/context`)
+      .then(r => setAdvanceContext(r.data))
+      .catch(err => setAdvanceContextError(apiError(err, 'Close this form and try again.')));
+  };
+
+  // What saving would do, in the terms the operator decides by. Mirrors the
+  // server: a payslip already processed for the month is updated and must keep
+  // a net payable of zero or more; with no payslip yet, advances above the
+  // structure's net only warn, above its gross they are refused.
+  const advancePreview = useMemo(() => {
+    if (!advanceContext) return null;
+    const amount = money(advanceForm.amount);
+    const total = money(num(advanceContext.month_total) + amount);
+    const slip = advanceContext.slip;
+    if (slip) {
+      const after = money(num(slip.net_salary) - total);
+      return { total, slip, after, blocked: after < 0, warn: false };
+    }
+    const { gross, net } = advanceContext.structure;
+    if (num(gross) <= 0) return { total, blocked: true, noStructure: true };
+    if (total - num(gross) > 0.005) return { total, blocked: true, overGross: true };
+    return { total, blocked: false, warn: total - num(net) > 0.005 };
+  }, [advanceContext, advanceForm.amount]);
+
+  const advanceValidation = {
+    amount: num(advanceForm.amount) <= 0 ? 'Enter an amount greater than zero' : null,
+    date_given: !advanceForm.date_given
+      ? 'Select the date the advance was given'
+      : advanceForm.date_given > todayPKT() ? 'The date cannot be in the future' : null,
+  };
+  const advanceErrorFor = (key) => advanceErrors[key] || (advanceTouched[key] ? advanceValidation[key] : null);
+  const advanceBlocked = Object.values(advanceValidation).some(Boolean)
+    || !advanceContext || !!advanceContext.blocked || !!advancePreview?.blocked;
+
+  const saveAdvance = async () => {
+    setAdvanceTouched({ amount: true, date_given: true });
+    if (advanceBlocked) return;
+    setSavingAdvance(true);
+    setAdvanceErrors({});
+    try {
+      const { data } = await api.post(`/hr/employees/${id}/advances`, {
+        amount: num(advanceForm.amount),
+        date_given: advanceForm.date_given,
+        note: advanceForm.note.trim() || null,
+      });
+      toast.success(data.slip_updated
+        ? `Advance salary recorded. The ${fmtMonth(data.month)} payslip was updated. Net payable: ${fmtMoney(data.slip_updated.after.net_pay)}.`
+        : `Advance salary recorded. It will be deducted from the ${fmtMonth(data.month)} payslip.`);
+      setAdvanceFormOpen(false);
+      load();
+    } catch (err) {
+      const mapped = apiFieldError(err);
+      if (mapped) setAdvanceErrors(mapped);
+      else toast.error(apiError(err, 'The advance salary could not be recorded. Try again.'));
+      // The pay period or the payslip may have moved under the form (a run
+      // closed, a payslip saved); refresh what the form is judged against.
+      api.get(`/hr/employees/${id}/advances/context`)
+        .then(r => setAdvanceContext(r.data))
+        .catch(() => {});
+    } finally {
+      setSavingAdvance(false);
+    }
+  };
+
+  const removeAdvance = async () => {
+    if (!advanceToRemove) return;
+    setRemovingAdvance(true);
+    try {
+      const { data } = await api.delete(`/hr/employees/${id}/advances/${advanceToRemove.id}`);
+      toast.success(data.slip_updated
+        ? `Advance salary removed. The ${fmtMonth(data.month)} payslip was updated. Net payable: ${fmtMoney(data.slip_updated.after.net_pay)}.`
+        : 'Advance salary removed.');
+      setAdvanceToRemove(null);
+      load();
+    } catch (err) {
+      toast.error(apiError(err, 'The advance salary could not be removed. Try again.'));
+      setAdvanceToRemove(null);
+      load();
+    } finally {
+      setRemovingAdvance(false);
+    }
+  };
+
+  // Advances not yet part of a closed Pay Run — the ones still to come off a
+  // payslip (or already on one that can still change).
+  const advanceTotals = useMemo(() => {
+    const advances = employee?.advances || [];
+    const open = advances.filter(a => !a.locked);
+    return {
+      count: advances.length,
+      openCount: open.length,
+      open: money(open.reduce((s, a) => s + num(a.amount), 0)),
+      // Pay periods the open advances will come off, oldest first.
+      openMonths: [...new Set(open.map(a => a.month))].sort(),
+    };
+  }, [employee]);
+
+  // Open by default: loans with a balance, advances not yet on a closed Pay
+  // Run. Settled entries only accumulate, so they are opt-in history.
+  const visibleLoans = useMemo(
+    () => (employee?.loans || []).filter(l => showSettled || num(l.remaining_balance) > 0),
+    [employee, showSettled]
+  );
+  const visibleAdvances = useMemo(
+    () => (employee?.advances || []).filter(a => showSettled || !a.locked),
+    [employee, showSettled]
+  );
+  const finSettledCount = finTab === 'loans'
+    ? loanTotals.count - loanTotals.openCount
+    : advanceTotals.count - advanceTotals.openCount;
 
   // ── Loading / error ──────────────────────────────────────────────────────
   if (loading) {
@@ -527,10 +677,19 @@ export default function HrEmployeeDetail() {
   const canPayroll = can('perm_hr_payroll');
   const headerActions = [
     {
-      label: 'Record a loan or advance',
+      label: 'Record loan',
       icon: 'account_balance_wallet',
       onClick: () => { setTab('pay'); openLoanForm(); },
     },
+    // An advance is part of a salary still to be paid, so it is offered only
+    // to someone still on the payroll.
+    ...(!isInactive
+      ? [{
+        label: 'Record advance salary',
+        icon: 'payments',
+        onClick: () => { setTab('pay'); openAdvanceForm(); },
+      }]
+      : []),
     ...(canPayroll
       ? [{ label: 'Open Payroll', icon: 'receipt_long', onClick: () => navigate('/hr/salary-slips') }]
       : []),
@@ -686,7 +845,7 @@ export default function HrEmployeeDetail() {
               <div className="hr-form-grid">
                 <FormField label="Full name" htmlFor="f-name" required error={errorFor('name')} col={4}>
                   <input id="f-name" className={`form-control${errorFor('name') ? ' hr-invalid' : ''}`}
-                    placeholder="Full name as printed on CNIC"
+                    placeholder="As printed on the CNIC"
                     value={form.name} maxLength={200}
                     onChange={e => setField('name', e.target.value)} onBlur={() => markTouched('name')} />
                 </FormField>
@@ -745,7 +904,7 @@ export default function HrEmployeeDetail() {
 
                 <FormField label="Residential address" htmlFor="f-address" col={12}>
                   <textarea id="f-address" className="form-control" rows={2} value={form.address}
-                    placeholder="House, street, area" onChange={e => setField('address', e.target.value)} />
+                    placeholder="Enter the residential address" onChange={e => setField('address', e.target.value)} />
                 </FormField>
               </div>
             ) : (
@@ -818,7 +977,7 @@ export default function HrEmployeeDetail() {
                     options={lookups.masters}
                     value={form.master_employee_id}
                     onChange={(val) => setField('master_employee_id', val)}
-                    placeholder="Not linked — search to link"
+                    placeholder="Search to link a record"
                     emptyText="No Master Data employee matches"
                     invalid={!!errorFor('master_employee_id')}
                     getLabel={(m) => `${m.name} — ${m.role}`}
@@ -856,7 +1015,7 @@ export default function HrEmployeeDetail() {
                       error={errorFor('reason_for_leaving')} col={12}>
                       <textarea id="f-reason" rows={3}
                         className={`form-control${errorFor('reason_for_leaving') ? ' hr-invalid' : ''}`}
-                        placeholder="Resignation, end of contract, relocation…"
+                        placeholder="Enter the reason for leaving"
                         value={form.reason_for_leaving}
                         onChange={e => setField('reason_for_leaving', e.target.value)}
                         onBlur={() => markTouched('reason_for_leaving')} />
@@ -1091,114 +1250,209 @@ export default function HrEmployeeDetail() {
             )}
           </Panel>
 
+          {/* ── Loans & Advances ─────────────────────────────────────────
+              One panel for everything the employee owes or has drawn early.
+              The two summary cards double as the tabs; the list below shows
+              the selected kind, OPEN items only unless "Show settled" is on.
+              Recording happens in a dialog, so the panel never grows a form
+              in the middle of the page. */}
           <Panel
             icon="account_balance_wallet"
-            title="Loans & advances"
-            status={
-              loanTotals.count === 0
-                ? 'None on record'
-                : `${fmtMoney(loanTotals.outstanding)} outstanding`
-            }
+            title="Loans & Advances"
             actions={
-              !loanFormOpen && loanTotals.count > 0
-                ? <button className="btn btn-outline btn-sm" onClick={openLoanForm}>+ Record loan</button>
-                : null
+              <KebabMenu
+                label="Record a loan or advance salary"
+                trigger={{ label: 'Record', icon: 'add' }}
+                items={[
+                  { label: 'Loan', icon: 'account_balance_wallet', onClick: openLoanForm },
+                  ...(!isInactive
+                    ? [{ label: 'Advance salary', icon: 'payments', onClick: openAdvanceForm }]
+                    : []),
+                ]}
+              />
             }
           >
-            {loanFormOpen && (
-              <div className="product-row" style={{ display: 'block', marginBottom: 18 }}>
-                <div className="hr-form-grid">
-                  <FormField label="Reference" htmlFor="l-title" required error={loanErrorFor('title')} col={5}>
-                    <input id="l-title" className={`form-control${loanErrorFor('title') ? ' hr-invalid' : ''}`}
-                      placeholder="Salary advance, hardship loan…" value={loanForm.title} maxLength={200}
-                      onChange={e => setLoanForm(p => ({ ...p, title: e.target.value }))}
-                      onBlur={() => setLoanTouched(p => ({ ...p, title: true }))} />
-                  </FormField>
+            <div className="hr-fin-cards" role="tablist" aria-label="Loans or advance salary">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={finTab === 'loans'}
+                className={`hr-fin-card${finTab === 'loans' ? ' is-active' : ''}`}
+                onClick={() => setFinTab('loans')}
+              >
+                <span className="hr-fin-card-head">
+                  <span className="hr-fin-card-label">
+                    <span className="material-symbols-outlined" aria-hidden="true">account_balance_wallet</span>
+                    Loans
+                  </span>
+                  <span className="hr-fin-card-count" title="Open loans">{loanTotals.openCount}</span>
+                </span>
+                <span className="hr-fin-card-value" style={{ display: 'block' }}>{fmtMoney(loanTotals.outstanding)}</span>
+                <span className="hr-fin-card-note" style={{ display: 'block' }}>
+                  {loanTotals.openCount === 0 ? 'No outstanding balance' : 'Outstanding balance'}
+                </span>
+              </button>
 
-                  <FormField label="Principal amount (PKR)" htmlFor="l-amount" required
-                    error={loanErrorFor('principal_amount')} col={4}>
-                    <input id="l-amount" type="number" min="0" step="0.01" placeholder="0.00"
-                      className={`form-control no-spinner${loanErrorFor('principal_amount') ? ' hr-invalid' : ''}`}
-                      style={{ textAlign: 'right' }}
-                      value={loanForm.principal_amount} onWheel={blockWheelChange}
-                      onChange={e => setLoanForm(p => ({ ...p, principal_amount: e.target.value }))}
-                      onBlur={() => setLoanTouched(p => ({ ...p, principal_amount: true }))} />
-                  </FormField>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={finTab === 'advances'}
+                className={`hr-fin-card${finTab === 'advances' ? ' is-active' : ''}`}
+                onClick={() => setFinTab('advances')}
+              >
+                <span className="hr-fin-card-head">
+                  <span className="hr-fin-card-label">
+                    <span className="material-symbols-outlined" aria-hidden="true">payments</span>
+                    Advance salary
+                  </span>
+                  <span className="hr-fin-card-count" title="Advances to be deducted">{advanceTotals.openCount}</span>
+                </span>
+                <span className="hr-fin-card-value" style={{ display: 'block' }}>{fmtMoney(advanceTotals.open)}</span>
+                <span className="hr-fin-card-note" style={{ display: 'block' }}>
+                  {advanceTotals.openMonths.length === 0
+                    ? 'Nothing to be deducted'
+                    : `To be deducted from the ${advanceTotals.openMonths.map(fmtMonth).join(' and ')} payslip${advanceTotals.openMonths.length === 1 ? '' : 's'}`}
+                </span>
+              </button>
+            </div>
 
-                  <FormField label="Date issued" htmlFor="l-date" required error={loanErrorFor('date_issued')} col={3}>
-                    <input id="l-date" type="date"
-                      className={`form-control${loanErrorFor('date_issued') ? ' hr-invalid' : ''}`}
-                      value={loanForm.date_issued} max={todayPKT()}
-                      onChange={e => setLoanForm(p => ({ ...p, date_issued: e.target.value }))}
-                      onBlur={() => setLoanTouched(p => ({ ...p, date_issued: true }))} />
-                  </FormField>
+            <div className="hr-fin-listhead">
+              <h3 className="hr-fin-listtitle">
+                {finTab === 'loans'
+                  ? (showSettled ? 'All loans' : 'Open loans')
+                  : (showSettled ? 'All advance salary' : 'Advance salary to be deducted')}
+              </h3>
+              {finSettledCount > 0 && (
+                <label className="hr-fin-toggle">
+                  <input type="checkbox" checked={showSettled} onChange={e => setShowSettled(e.target.checked)} />
+                  Show settled ({finSettledCount})
+                </label>
+              )}
+            </div>
+
+            {finTab === 'loans' ? (
+              visibleLoans.length === 0 ? (
+                <div className="hr-fin-empty">
+                  <div>
+                    {loanTotals.count === 0
+                      ? 'No loans have been recorded for this employee.'
+                      : 'No outstanding loans. Select Show settled to view repaid loans.'}
+                  </div>
+                  {loanTotals.count === 0 && (
+                    <button className="btn btn-outline btn-sm" onClick={openLoanForm}>Record loan</button>
+                  )}
                 </div>
-
-                <div style={{ display: 'flex', gap: 8, marginTop: 6, justifyContent: 'flex-end' }}>
-                  <button className="btn btn-outline btn-sm" onClick={() => setLoanFormOpen(false)} disabled={savingLoan}>
-                    Cancel
-                  </button>
-                  <BusyButton busy={savingLoan} busyLabel="Recording…" className="btn btn-primary btn-sm" onClick={saveLoan}>
-                    Record loan
-                  </BusyButton>
+              ) : (
+                <div className="table-wrap">
+                  <table className="hr-table is-dense">
+                    <colgroup>
+                      <col style={{ width: '34%' }} />
+                      <col style={{ width: '16%' }} />
+                      <col style={{ width: '16%' }} />
+                      <col style={{ width: '16%' }} />
+                      <col style={{ width: '18%' }} />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th>Reference</th>
+                        <th>Issued</th>
+                        <th className="hr-th-num">Principal</th>
+                        <th className="hr-th-num">Repaid</th>
+                        <th className="hr-th-num">Outstanding</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleLoans.map(loan => {
+                        const remaining = num(loan.remaining_balance);
+                        const cleared = remaining <= 0;
+                        return (
+                          <tr key={loan.id}>
+                            <td>
+                              <span className="hr-cell-strong">{loan.title}</span>
+                              {cleared && <span className="badge badge-green" style={{ marginLeft: 8 }}>Repaid</span>}
+                            </td>
+                            <td>{fmtDate(loan.date_issued)}</td>
+                            <td className="hr-num">{fmtAmount(loan.principal_amount)}</td>
+                            <td className="hr-num">{fmtAmount(loan.repaid_amount)}</td>
+                            <td className="hr-num hr-cell-total">{fmtAmount(remaining)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-              </div>
-            )}
-
-            {employee.loans.length === 0 ? (
-              !loanFormOpen && (
-                <EmptyState
-                  icon="account_balance_wallet"
-                  title="No loans or advances"
-                  desc="A recorded loan is offered as a deduction on future payslips until its balance is cleared."
-                  action={<button className="btn btn-primary btn-sm" onClick={openLoanForm}>Record a loan</button>}
-                  small
-                />
               )
             ) : (
-              <div className="table-wrap">
-                <table className="hr-table is-dense">
-                  <colgroup>
-                    <col style={{ width: '34%' }} />
-                    <col style={{ width: '16%' }} />
-                    <col style={{ width: '16%' }} />
-                    <col style={{ width: '16%' }} />
-                    <col style={{ width: '18%' }} />
-                  </colgroup>
-                  <thead>
-                    <tr>
-                      <th>Reference</th>
-                      <th>Issued</th>
-                      <th className="hr-th-num">Principal</th>
-                      <th className="hr-th-num">Repaid</th>
-                      <th className="hr-th-num">Outstanding</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {employee.loans.map(loan => {
-                      const remaining = num(loan.remaining_balance);
-                      const cleared = remaining <= 0;
-                      return (
-                        <tr key={loan.id}>
+              visibleAdvances.length === 0 ? (
+                <div className="hr-fin-empty">
+                  <div>
+                    {advanceTotals.count === 0
+                      ? 'No advance salary has been recorded for this employee.'
+                      : 'No advance salary is waiting to be deducted. Select Show settled to view deducted advances.'}
+                  </div>
+                  {advanceTotals.count === 0 && !isInactive && (
+                    <button className="btn btn-outline btn-sm" onClick={openAdvanceForm}>Record advance salary</button>
+                  )}
+                </div>
+              ) : (
+                <div className="table-wrap">
+                  <table className="hr-table is-dense">
+                    <colgroup>
+                      <col style={{ width: '18%' }} />
+                      <col style={{ width: '15%' }} />
+                      <col />
+                      <col style={{ width: '15%' }} />
+                      <col style={{ width: '16%' }} />
+                      <col style={{ width: 48 }} />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th>Pay period</th>
+                        <th>Given on</th>
+                        <th>Note</th>
+                        <th className="hr-th-num">Amount</th>
+                        <th>Status</th>
+                        <th><span className="hr-sr-only">Actions</span></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleAdvances.map(advance => (
+                        <tr key={advance.id}>
+                          <td className="hr-cell-strong">{fmtMonth(advance.month)}</td>
+                          <td>{fmtDate(advance.date_given)}</td>
+                          <td className="hr-cell-muted">{advance.note || '—'}</td>
+                          <td className="hr-num hr-cell-total">{fmtAmount(advance.amount)}</td>
                           <td>
-                            <span className="hr-cell-strong">{loan.title}</span>
-                            {cleared && <span className="badge badge-green" style={{ marginLeft: 8 }}>Cleared</span>}
+                            {advance.locked ? (
+                              <span className="badge badge-gray" title="Deducted on a closed Pay Run">Deducted</span>
+                            ) : advance.slip_id ? (
+                              <span className="badge badge-blue" title="Included in a processed payslip. The Pay Run is still open.">On payslip</span>
+                            ) : (
+                              <span className="badge badge-amber" title="Deducted when this month’s payslip is processed">To be deducted</span>
+                            )}
                           </td>
-                          <td>{fmtDate(loan.date_issued)}</td>
-                          <td className="hr-num">{fmtAmount(loan.principal_amount)}</td>
-                          <td className="hr-num">{fmtAmount(loan.repaid_amount)}</td>
-                          <td
-                            className="hr-num hr-cell-total"
-                            style={cleared ? { color: 'var(--green)' } : undefined}
-                          >
-                            {fmtAmount(remaining)}
+                          <td style={{ textAlign: 'right' }}>
+                            {/* Removable only until its month's Pay Run
+                                closes; after that it is part of a final
+                                payslip. */}
+                            {!advance.locked && (
+                              <button
+                                type="button"
+                                className="pr-icon-btn"
+                                title="Remove advance salary"
+                                aria-label={`Remove the ${fmtMonth(advance.month)} advance salary of ${fmtAmount(advance.amount)}`}
+                                onClick={() => setAdvanceToRemove(advance)}
+                              >
+                                <span className="material-symbols-outlined" aria-hidden="true">delete</span>
+                              </button>
+                            )}
                           </td>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
             )}
           </Panel>
         </TabPanel>
@@ -1216,14 +1470,14 @@ export default function HrEmployeeDetail() {
               <div className="hr-form-grid">
                 <FormField label="Bank name" htmlFor="f-bank" col={6}>
                   <input id="f-bank" className="form-control"
-                    placeholder="Meezan Bank, HBL, Bank Alfalah…"
+                    placeholder="Enter the bank name"
                     value={form.bank_name} maxLength={200}
                     onChange={e => setField('bank_name', e.target.value)} />
                 </FormField>
 
                 <FormField label="Account title" htmlFor="f-acct-title" col={6}>
                   <input id="f-acct-title" className="form-control"
-                    placeholder="Account holder name as per bank records"
+                    placeholder="As per bank records"
                     value={form.account_title} maxLength={200}
                     onChange={e => setField('account_title', e.target.value)} />
                 </FormField>
@@ -1283,12 +1537,13 @@ export default function HrEmployeeDetail() {
               <div className="table-wrap">
                 <table className="hr-table is-dense">
                   <colgroup>
-                    <col style={{ width: '24%' }} />
-                    <col style={{ width: '16%' }} />
-                    <col style={{ width: '15%' }} />
-                    <col style={{ width: '15%' }} />
-                    <col style={{ width: '16%' }} />
+                    <col style={{ width: '20%' }} />
                     <col style={{ width: '14%' }} />
+                    <col style={{ width: '14%' }} />
+                    <col style={{ width: '14%' }} />
+                    <col style={{ width: '12%' }} />
+                    <col style={{ width: '14%' }} />
+                    <col style={{ width: '12%' }} />
                   </colgroup>
                   <thead>
                     <tr>
@@ -1296,7 +1551,8 @@ export default function HrEmployeeDetail() {
                       <th>Issued</th>
                       <th className="hr-th-num">Gross</th>
                       <th className="hr-th-num">Deductions</th>
-                      <th className="hr-th-num">Net pay</th>
+                      <th className="hr-th-num">Advance</th>
+                      <th className="hr-th-num">Net payable</th>
                       <th><span className="hr-sr-only">Actions</span></th>
                     </tr>
                   </thead>
@@ -1321,6 +1577,9 @@ export default function HrEmployeeDetail() {
                                 ? `(${fmtAmount(slip.total_deductions)})`
                                 : fmtAmount(slip.total_deductions))
                               : '—'}
+                          </td>
+                          <td className={`hr-num${num(slip.advance_amount) > 0 ? ' hr-amt-deduction' : ''}`}>
+                            {num(slip.advance_amount) > 0 ? `(${fmtAmount(slip.advance_amount)})` : fmtAmount(0)}
                           </td>
                           <td className="hr-num hr-cell-total">{fmtAmount(slip.net_pay)}</td>
                           <td style={{ textAlign: 'right' }}>
@@ -1356,6 +1615,217 @@ export default function HrEmployeeDetail() {
         </TabPanel>
         )}
       </div>
+
+      {/* ── Record loan ──────────────────────────────────────────────── */}
+      <Modal
+        isOpen={loanFormOpen}
+        onClose={() => { if (!savingLoan) setLoanFormOpen(false); }}
+        title="Record loan"
+        size="md"
+        footer={
+          <>
+            <button className="btn btn-outline" onClick={() => setLoanFormOpen(false)} disabled={savingLoan}>
+              Cancel
+            </button>
+            <BusyButton busy={savingLoan} busyLabel="Recording…" icon="check" onClick={saveLoan}>
+              Record loan
+            </BusyButton>
+          </>
+        }
+      >
+        <form onSubmit={e => { e.preventDefault(); saveLoan(); }}>
+          <p className="hr-modal-lead">
+            The loan is listed on each payslip until its balance is repaid. The amount recovered
+            each month is set when the payslip is processed.
+          </p>
+          <div className="hr-form-grid is-modal">
+            <FormField label="Reference" htmlFor="l-title" required error={loanErrorFor('title')} col={12}>
+              <input id="l-title" className={`form-control${loanErrorFor('title') ? ' hr-invalid' : ''}`}
+                placeholder="Enter a reference" value={loanForm.title} maxLength={200} autoFocus
+                onChange={e => setLoanForm(p => ({ ...p, title: e.target.value }))}
+                onBlur={() => setLoanTouched(p => ({ ...p, title: true }))} />
+            </FormField>
+
+            <FormField label="Principal amount (PKR)" htmlFor="l-amount" required
+              error={loanErrorFor('principal_amount')} col={6}>
+              <input id="l-amount" type="number" min="0" step="0.01" placeholder="0.00"
+                className={`form-control no-spinner${loanErrorFor('principal_amount') ? ' hr-invalid' : ''}`}
+                style={{ textAlign: 'right' }}
+                value={loanForm.principal_amount} onWheel={blockWheelChange}
+                onChange={e => setLoanForm(p => ({ ...p, principal_amount: e.target.value }))}
+                onBlur={() => setLoanTouched(p => ({ ...p, principal_amount: true }))} />
+            </FormField>
+
+            <FormField label="Date issued" htmlFor="l-date" required error={loanErrorFor('date_issued')} col={6}>
+              <input id="l-date" type="date"
+                className={`form-control${loanErrorFor('date_issued') ? ' hr-invalid' : ''}`}
+                value={loanForm.date_issued} max={todayPKT()}
+                onChange={e => setLoanForm(p => ({ ...p, date_issued: e.target.value }))}
+                onBlur={() => setLoanTouched(p => ({ ...p, date_issued: true }))} />
+            </FormField>
+          </div>
+          <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
+        </form>
+      </Modal>
+
+      {/* ── Record advance salary ────────────────────────────────────── */}
+      <Modal
+        isOpen={advanceFormOpen}
+        onClose={() => { if (!savingAdvance) setAdvanceFormOpen(false); }}
+        title="Record advance salary"
+        size="md"
+        footer={
+          <>
+            <button className="btn btn-outline" onClick={() => setAdvanceFormOpen(false)} disabled={savingAdvance}>
+              {advanceContext && !advanceContext.blocked ? 'Cancel' : 'Close'}
+            </button>
+            {advanceContext && !advanceContext.blocked && (
+              <BusyButton busy={savingAdvance} busyLabel="Recording…" icon="check"
+                onClick={saveAdvance} disabled={!!advancePreview?.blocked}>
+                Record advance salary
+              </BusyButton>
+            )}
+          </>
+        }
+      >
+        <form onSubmit={e => { e.preventDefault(); saveAdvance(); }}>
+          <p className="hr-modal-lead">
+            Advance salary is deducted in full from the payslip for the pay period shown below.
+          </p>
+
+          {!advanceContext && !advanceContextError && (
+            <div className="hr-fin-context" aria-hidden="true"><FieldGridSkeleton fields={3} cols={3} /></div>
+          )}
+
+          {advanceContextError && (
+            <Notice tone="danger" title="The pay period could not be determined">
+              {advanceContextError}
+            </Notice>
+          )}
+
+          {advanceContext && advanceContext.blocked && (
+            <Notice tone="danger" title="Advance salary is not available">
+              {advanceContext.blocked}
+            </Notice>
+          )}
+
+          {advanceContext && !advanceContext.blocked && (
+            <>
+              {/* Decided by the server, so stated as facts rather than asked. */}
+              <div className="hr-fin-context">
+                <FieldGrid cols={3}>
+                  <Field label="Pay period" value={fmtMonth(advanceContext.month)} />
+                  <Field label="Already recorded" value={fmtMoney(advanceContext.month_total)} />
+                  {advanceContext.slip
+                    ? <Field label="Net salary on payslip" value={fmtMoney(advanceContext.slip.net_salary)} />
+                    : <Field label="Monthly net salary" value={fmtMoney(advanceContext.structure.net)} />}
+                </FieldGrid>
+                {advanceContext.rolled_forward && (
+                  <p className="hr-help">
+                    The {fmtMonth(advanceContext.closed_month)} Pay Run is closed, so this advance
+                    applies to {fmtMonth(advanceContext.month)}.
+                  </p>
+                )}
+              </div>
+
+              <div className="hr-form-grid is-modal">
+                <FormField label="Amount (PKR)" htmlFor="adv-amount" required
+                  error={advanceErrorFor('amount')} col={6}>
+                  <input id="adv-amount" type="number" min="0" step="0.01" placeholder="0.00"
+                    className={`form-control no-spinner${advanceErrorFor('amount') ? ' hr-invalid' : ''}`}
+                    style={{ textAlign: 'right' }}
+                    value={advanceForm.amount} onWheel={blockWheelChange} autoFocus
+                    onChange={e => setAdvanceForm(p => ({ ...p, amount: e.target.value }))}
+                    onBlur={() => setAdvanceTouched(p => ({ ...p, amount: true }))} />
+                </FormField>
+
+                <FormField label="Date given" htmlFor="adv-date" required
+                  error={advanceErrorFor('date_given')} col={6}>
+                  <input id="adv-date" type="date"
+                    className={`form-control${advanceErrorFor('date_given') ? ' hr-invalid' : ''}`}
+                    value={advanceForm.date_given} max={todayPKT()}
+                    onChange={e => setAdvanceForm(p => ({ ...p, date_given: e.target.value }))}
+                    onBlur={() => setAdvanceTouched(p => ({ ...p, date_given: true }))} />
+                </FormField>
+
+                <FormField label="Note" htmlFor="adv-note" error={advanceErrors.note} col={12}>
+                  <input id="adv-note" className="form-control" maxLength={200}
+                    placeholder="Optional"
+                    value={advanceForm.note}
+                    onChange={e => setAdvanceForm(p => ({ ...p, note: e.target.value }))} />
+                </FormField>
+              </div>
+
+              {/* The consequence of saving, stated before Save: one notice
+                  at a time, the most serious first. */}
+              {num(advanceForm.amount) > 0 && advancePreview && (
+                advancePreview.slip ? (
+                  advancePreview.blocked ? (
+                    <Notice tone="danger" title="Net payable would be negative" style={{ marginTop: 16 }}>
+                      Total advances of {fmtMoney(advancePreview.total)} exceed the net salary of
+                      {' '}{fmtMoney(advancePreview.slip.net_salary)} on the processed payslip. Reduce a
+                      deduction on the payslip or record a smaller amount.
+                    </Notice>
+                  ) : (
+                    <Notice tone="info" title={`The ${fmtMonth(advanceContext.month)} payslip will be updated`} style={{ marginTop: 16 }}>
+                      This payslip is already processed. Its net payable will change
+                      from {fmtMoney(advancePreview.slip.net_pay)} to {fmtMoney(advancePreview.after)}.
+                    </Notice>
+                  )
+                ) : advancePreview.noStructure ? (
+                  <Notice tone="danger" title="No salary structure" style={{ marginTop: 16 }}>
+                    Set up this employee’s earnings under Compensation before recording advance salary.
+                  </Notice>
+                ) : advancePreview.overGross ? (
+                  <Notice tone="danger" title="Advance exceeds gross salary" style={{ marginTop: 16 }}>
+                    Total advances for {fmtMonth(advanceContext.month)} would be {fmtMoney(advancePreview.total)},
+                    which exceeds the gross monthly salary of {fmtMoney(advanceContext.structure.gross)}.
+                    Reduce the amount or record the balance as a loan.
+                  </Notice>
+                ) : advancePreview.warn ? (
+                  <Notice tone="warning" title="Advance exceeds net salary" style={{ marginTop: 16 }}>
+                    Total advances for {fmtMonth(advanceContext.month)} would be {fmtMoney(advancePreview.total)},
+                    which exceeds the monthly net salary of {fmtMoney(advanceContext.structure.net)}. You can
+                    still save. Deductions on the payslip may need to be reduced to keep the net payable at
+                    zero or above.
+                  </Notice>
+                ) : null
+              )}
+            </>
+          )}
+          <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
+        </form>
+      </Modal>
+
+      {/* ── Remove an advance ──────────────────────────────────────────── */}
+      <Modal
+        isOpen={!!advanceToRemove}
+        onClose={() => { if (!removingAdvance) setAdvanceToRemove(null); }}
+        title="Remove advance salary?"
+        size="sm"
+        footer={
+          <>
+            <button className="btn btn-outline" onClick={() => setAdvanceToRemove(null)} disabled={removingAdvance}>
+              Cancel
+            </button>
+            <BusyButton busy={removingAdvance} busyLabel="Removing…" icon="delete" className="btn btn-danger" onClick={removeAdvance}>
+              Remove
+            </BusyButton>
+          </>
+        }
+      >
+        {advanceToRemove && (
+          <p style={{ fontSize: 13, color: 'var(--gray-600)', margin: 0 }}>
+            The advance salary of {fmtMoney(advanceToRemove.amount)} given
+            on {fmtDate(advanceToRemove.date_given)} will no longer be deducted from
+            the {fmtMonth(advanceToRemove.month)} payslip.
+            {advanceToRemove.slip_id
+              ? ' That payslip is already processed, so its net payable will increase by the same amount.'
+              : ''}
+            {' '}Remove an advance only if it was recorded in error.
+          </p>
+        )}
+      </Modal>
     </Layout>
   );
 }

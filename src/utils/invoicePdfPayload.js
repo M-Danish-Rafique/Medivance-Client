@@ -4,7 +4,7 @@ import { formatDatePKT, formatMonthYearPKT } from './dateUtils';
 function fmtTimeLabel(d) {
   const dt = d instanceof Date ? d : new Date(d);
   if (Number.isNaN(dt.getTime())) return '';
-  return dt.toLocaleTimeString('en-GB', { timeZone: 'Asia/Karachi', hour: '2-digit', minute: '2-digit', hour12: true }).replace(/\s/g, '');
+  return dt.toLocaleTimeString('en-US', { timeZone: 'Asia/Karachi', hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
 // Everything the backend needs to DRAW the invoice — no calculation left
@@ -31,7 +31,7 @@ export function buildInvoicePdfPayload({ saleData, type, customerBalance, compan
     customer_name,
     customer_address: customer_address || null,
     customer_id: customer_id ?? null,
-    geo_line: [city_name, area_name, territory_name].filter(Boolean).join(' , ') || null,
+    geo_line: [city_name, area_name, territory_name].filter(Boolean).join(', ') || null,
     license_no: license_no || null,
     salesman_name: salesman_name || 'Office',
     delivery_by_name: delivery_by_name || null,
@@ -64,6 +64,6 @@ export function buildInvoicePdfPayload({ saleData, type, customerBalance, compan
       email: company.email || null,
       logo_url: company.logo_url || null,
     },
-    printed_at_label: printedAt ? `${formatDatePKT(printedAt)}, ${fmtTimeLabel(printedAt)}` : null,
+    printed_at_label: printedAt ? `${formatDatePKT(printedAt)} at ${fmtTimeLabel(printedAt)}` : null,
   };
 }

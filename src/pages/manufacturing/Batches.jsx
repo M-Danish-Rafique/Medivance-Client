@@ -73,8 +73,9 @@ export default function Batches() {
   const totalCost = rmCost + parseFloat(batchForm.misc_expense || 0);
 
   const volUOM = uoms.find(u => u.id === parseInt(batchForm.volume_uom_id));
-  const totalVolumeBase = parseFloat(batchForm.total_volume || 0) * parseFloat(volUOM?.to_base_factor || 1);
-  const costPerBase = totalVolumeBase > 0 ? totalCost / totalVolumeBase : 0;
+  const totalVolume = parseFloat(batchForm.total_volume || 0);
+  const costPerBatchUnit = totalVolume > 0 ? totalCost / totalVolume : 0;
+  const costPerBatchUnitOf = (b) => parseFloat(b.total_volume) > 0 ? parseFloat(b.total_cost) / parseFloat(b.total_volume) : 0;
 
   const handleSave = async () => {
     if (!batchForm.batch_date || !batchForm.expiry_date || !batchForm.total_volume || !batchForm.volume_uom_id) {
@@ -129,7 +130,7 @@ export default function Batches() {
             ? <div className="empty-state"><div className="empty-state-icon"><span className="material-symbols-outlined" style={{ fontSize: 28 }}>factory</span></div><div className="empty-state-title">No batches yet</div></div>
             : <table>
                 <thead>
-                  <tr><th>Batch Code</th><th>Category</th><th>Batch Date</th><th>Expiry Date</th><th>Volume</th><th>RM Cost</th><th>Total Cost</th><th>Cost/Base</th><th>Status</th><th style={{ textAlign: 'right' }}>Actions</th></tr>
+                  <tr><th>Batch Code</th><th>Category</th><th>Batch Date</th><th>Expiry Date</th><th>Volume</th><th>RM Cost</th><th>Total Cost</th><th>Cost/Unit</th><th>Status</th><th style={{ textAlign: 'right' }}>Actions</th></tr>
                 </thead>
                 <tbody>
                   {batches.map(b => (
@@ -141,7 +142,7 @@ export default function Batches() {
                       <td>{formatDecimal(b.total_volume)} {b.vol_uom_symbol}</td>
                       <td className="mono">{fmtPKR(b.raw_material_cost)}</td>
                       <td style={{ fontWeight: 700 }}>{fmtPKR(b.total_cost)}</td>
-                      <td className="mono" style={{ fontSize: 13 }}>{fmtPKR(b.cost_per_base_unit)}{b.vol_uom_symbol ? `/${b.vol_uom_symbol}` : '/base'}</td>
+                      <td className="mono" style={{ fontSize: 13 }}>{fmtPKR(costPerBatchUnitOf(b))}{b.vol_uom_symbol ? `/${b.vol_uom_symbol}` : ''}</td>
                       <td>{b.status === 'yielded' ? <span className="badge badge-green">Yielded</span> : <span className="badge badge-amber">Open</span>}</td>
                       <td style={{ textAlign: 'right' }}>
                         <div className="flex gap-2" style={{ justifyContent: 'flex-end' }}>
@@ -164,7 +165,7 @@ export default function Batches() {
               <span>RM Cost: <strong style={{ color: 'var(--blue)' }}>{fmtPKR(rmCost)}</strong></span>
               <span>Misc: <strong>{fmtPKR(batchForm.misc_expense)}</strong></span>
               <span>Total: <strong style={{ color: 'var(--green)', fontSize: 15 }}>{fmtPKR(totalCost)}</strong></span>
-              {totalVolumeBase > 0 && <span>Cost/base unit: <strong style={{ color: 'var(--navy)' }}>{fmtPKR(costPerBase)}</strong></span>}
+              {totalVolume > 0 && volUOM && <span>Cost per {volUOM.symbol}: <strong style={{ color: 'var(--navy)' }}>{fmtPKR(costPerBatchUnit)}</strong></span>}
             </div>
             <div className="flex gap-2">
               <button className="btn btn-outline" onClick={() => setModal(false)}>Cancel</button>
@@ -271,7 +272,7 @@ export default function Batches() {
                 { label: 'RM Cost', val: fmtPKR(viewData.raw_material_cost) },
                 { label: 'Misc Expense', val: fmtPKR(viewData.misc_expense) },
                 { label: 'Total Cost', val: fmtPKR(viewData.total_cost), bold: true },
-                { label: 'Cost / Base Unit', val: fmtPKR(viewData.cost_per_base_unit) },
+                { label: `Cost / ${viewData.vol_uom_symbol || 'Unit'}`, val: fmtPKR(costPerBatchUnitOf(viewData)) },
                 { label: 'Status', val: viewData.status },
               ].map((item, i) => (
                 <div key={i} style={{ padding: '10px 12px', background: 'var(--gray-50)', borderRadius: 8 }}>
