@@ -166,6 +166,10 @@ export const HR_STYLES = `
     text-transform: uppercase;
     white-space: nowrap;
   }
+  /* Leading icon, sized to the 10.5px caps and centred on them. The gap
+     only opens when an icon is present. */
+  .hr-tag { gap: 3px; }
+  .hr-tag-icon { font-size: 12px; line-height: 1; }
   .hr-tag-open   { background: #d1fae5; color: #065f46; }
   .hr-tag-closed { background: var(--gray-100); color: var(--gray-500); }
 

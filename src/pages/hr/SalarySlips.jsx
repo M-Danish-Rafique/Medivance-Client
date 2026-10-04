@@ -653,6 +653,7 @@ export default function SalarySlips() {
       label: fmtMonth(m),
       badge: r ? (r.status === 'Open' ? 'Open' : 'Closed') : undefined,
       badgeTone: r && r.status === 'Open' ? 'open' : 'closed',
+      badgeIcon: r && r.status !== 'Open' ? 'lock' : undefined,
     };
   }), [runs]);
 

@@ -778,7 +778,20 @@ export function FormField({ label, htmlFor, required, help, error, children, col
 // comes out cramped and unaligned. This lays the label and a status badge out
 // properly. Keyboard: Enter/Space/ArrowDown opens, arrows move, Escape closes.
 //
-// Options: [{ value, label, badge?, badgeTone? }]
+// Options: [{ value, label, badge?, badgeTone?, badgeIcon? }]
+// badgeIcon is a Material Symbols name drawn before the badge text (the Pay
+// Run month picker puts the "lock" of Close Pay Run on a Closed month).
+function SelectBadge({ option }) {
+  return (
+    <span className={`hr-tag hr-tag-${option.badgeTone || 'closed'}`}>
+      {option.badgeIcon && (
+        <span className="hr-tag-icon material-symbols-outlined" aria-hidden="true">{option.badgeIcon}</span>
+      )}
+      {option.badge}
+    </span>
+  );
+}
+
 export function Select({ id, value, onChange, options, ariaLabel, minWidth }) {
   const [open, setOpen] = useState(false);
   const wrapRef    = useRef(null);
@@ -831,9 +844,7 @@ export function Select({ id, value, onChange, options, ariaLabel, minWidth }) {
         onKeyDown={(e) => { if (e.key === 'ArrowDown' && !open) { e.preventDefault(); setOpen(true); } }}
       >
         <span className="hr-select-value">{selected ? selected.label : 'Select…'}</span>
-        {selected?.badge && (
-          <span className={`hr-tag hr-tag-${selected.badgeTone || 'closed'}`}>{selected.badge}</span>
-        )}
+        {selected?.badge && <SelectBadge option={selected} />}
         <span className="hr-select-caret material-symbols-outlined" aria-hidden="true">expand_more</span>
       </button>
 
@@ -850,9 +861,7 @@ export function Select({ id, value, onChange, options, ariaLabel, minWidth }) {
               onClick={() => { onChange(option.value); close(false); }}
             >
               <span className="hr-select-option-label">{option.label}</span>
-              {option.badge && (
-                <span className={`hr-tag hr-tag-${option.badgeTone || 'closed'}`}>{option.badge}</span>
-              )}
+              {option.badge && <SelectBadge option={option} />}
             </button>
           ))}
         </div>
