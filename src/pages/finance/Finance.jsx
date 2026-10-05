@@ -8,6 +8,8 @@ import { formatCurrency } from '../../utils/formatters';
 import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
 import Pagination from '../../components/common/Pagination';
 import usePagination from '../../hooks/usePagination';
+// "2026-10" -> "October 2026", exactly as Payroll names the Pay Run.
+import { fmtMonth } from '../hr/HrKit';
 
 const today = () => todayPKT();
 const emptyForm = () => ({ date: today(), category: 'Expense', description: '', expense_type_id: '', supplier_id: '', customer_id: '', amount: '', payment_type: '' });
@@ -73,7 +75,10 @@ export default function Finance() {
     try {
       await api.delete(`/finance/${selected.id}`);
       toast.success('Transaction deleted'); setDeleteModal(false); load();
-    } catch (err) { toast.error('Error'); } finally { setDeleting(false); }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'The transaction could not be deleted. Try again.');
+      if (err.response?.status === 409) { setDeleteModal(false); load(); }
+    } finally { setDeleting(false); }
   };
 
   const saveExpType = async () => {
@@ -93,7 +98,7 @@ export default function Finance() {
       const r = await api.get('/finance/expense-types');
       setExpenseTypes(r.data);
       toast.success('Deleted');
-    } catch { toast.error('Error deleting'); }
+    } catch (err) { toast.error(err.response?.data?.message || 'The expense type could not be deleted. Try again.'); }
   };
 
   const fmt = formatCurrency;
@@ -127,13 +132,35 @@ export default function Finance() {
                 {pagedData.map(t => (
                   <tr key={t.id}>
                     <td>{formatDatePKT(t.date)}</td>
-                    <td><span className={`badge ${catColor[t.category] || 'badge-gray'}`} style={{ fontSize: 11 }}>{t.category}</span></td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <span className={`badge ${catColor[t.category] || 'badge-gray'}`} style={{ fontSize: 11 }}>{t.category}</span>
+                      {!!t.payroll_run_id && (
+                        /* Outlined, with the closed Pay Run's lock, so it reads
+                           as the entry's source, not as another category. */
+                        <span className="badge" title={`Posted when the ${fmtMonth(t.payroll_month)} Pay Run was closed.`}
+                          style={{ fontSize: 11, marginLeft: 6, gap: 3, padding: '2px 8px', background: 'white', border: '1px solid var(--gray-200)', color: 'var(--gray-600)' }}>
+                          <span className="material-symbols-outlined" style={{ fontSize: 12 }} aria-hidden="true">lock</span>Payroll
+                        </span>
+                      )}
+                    </td>
                     <td style={{ maxWidth: 200, color: 'var(--gray-600)', fontSize: 12 }}>{t.description || '—'}</td>
                     <td style={{ fontWeight: 600 }}>{t.supplier_name || t.customer_name || (t.expense_type_name ? <span className="badge badge-gray">{t.expense_type_name}</span> : '—')}</td>
-                    <td style={{ fontWeight: 700 }}>{fmt(t.amount)}</td>
+                    <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{fmt(t.amount)}</td>
                     <td>{t.payment_type ? <span className="badge badge-blue" style={{ fontSize: 11 }}>{t.payment_type}</span> : '—'}</td>
                     <td style={{ textAlign: 'right' }}>
-                      <button className="btn btn-danger btn-sm" onClick={() => { setSelected(t); setDeleteModal(true); }}><span className="material-symbols-outlined" style={{ fontSize: 16, verticalAlign: 'middle' }}>delete</span></button>
+                      {t.payroll_run_id ? (
+                        /* A Pay Run's Salary Expense: the server refuses the
+                           delete (409). aria-disabled rather than disabled,
+                           so the button still shows its tooltip on hover. */
+                        <button className="btn btn-danger btn-sm" aria-disabled="true" style={{ opacity: 0.4, cursor: 'not-allowed' }}
+                          title={`Created when the ${fmtMonth(t.payroll_month)} Pay Run was closed. Pay runs can't be reopened; record corrections as a separate entry.`}
+                          aria-label={`Delete unavailable. Created when the ${fmtMonth(t.payroll_month)} Pay Run was closed.`}
+                          onClick={e => e.preventDefault()}>
+                          <span className="material-symbols-outlined" style={{ fontSize: 16, verticalAlign: 'middle' }}>delete</span>
+                        </button>
+                      ) : (
+                        <button className="btn btn-danger btn-sm" onClick={() => { setSelected(t); setDeleteModal(true); }}><span className="material-symbols-outlined" style={{ fontSize: 16, verticalAlign: 'middle' }}>delete</span></button>
+                      )}
                     </td>
                   </tr>
                 ))}

@@ -39,9 +39,10 @@ import {
 // repaid per loan in the editor, but print as ONE "Loan Deduction" row.
 // Cost to Company is ONE figure per month, recorded on the Pay Run when it is
 // closed: the close dialog pre-fills the calculated figure and the operator may
-// edit it. Calculated = gross earnings less deductions, EXCLUDING loan
-// repayments (they settle money already lent) and never reduced by advance
-// salary (the same salary, paid earlier). Product decision 2026-10-01.
+// edit it. Calculated = the sum of every payslip's net salary (gross less
+// deductions and loan repayments); advance salary never reduces it (the same
+// salary, paid earlier). Product decision 2026-10-05. Closing posts the
+// recorded figure to Finance as one Salary Expense (none when it is 0).
 //
 // Payslips are never deletable. The server enforces all of this; the UI only
 // stops offering what would be refused.
@@ -67,6 +68,10 @@ const PENDING_COMPARATORS = {
 };
 
 const currentMonthPKT = () => todayPKT().slice(0, 7);
+
+// The largest Cost to Company Finance can hold (finance.amount DECIMAL(12,2));
+// mirrors MAX_COST_TO_COMPANY in routes/payrollRuns.js.
+const MAX_COST_TO_COMPANY = 9999999999.99;
 
 /** Last 15 months, newest first — payroll is rarely run further back. */
 function recentMonths(count = 15) {
@@ -298,11 +303,11 @@ export default function SalarySlips() {
       netSalary: money(earnings - other - loans),
       advance:   sum('advance_amount'),
       net:       sum('net_pay'),   // net payable — what is still to disburse
-      // Cost to Company (product decision 2026-10-01): gross earnings less
-      // deductions, EXCLUDING loan repayments (they return money lent earlier)
-      // and never reduced by advance salary (the same salary, paid early).
+      // Cost to Company (product decision 2026-10-05): the month's net
+      // salary, i.e. gross less deductions and loan repayments. Advance
+      // salary never reduces it (the same salary, paid early).
       // Mirrors calculatedCtc in routes/payrollRuns.js.
-      ctc:       money(earnings - other),
+      ctc:       money(earnings - other - loans),
     };
   }, [slips]);
 
@@ -351,14 +356,19 @@ export default function SalarySlips() {
   // The month's Cost to Company as it will be recorded.
   const recordedCtc = money(num(closeCtc));
   const closeCtcInvalid = String(closeCtc ?? '').trim() === '' || num(closeCtc) < 0;
-  const closeCtcEdited = !closeCtcInvalid && recordedCtc !== monthTotals.ctc;
+  // finance.amount is DECIMAL(12,2); the server refuses anything larger.
+  const closeCtcTooLarge = !closeCtcInvalid && recordedCtc > MAX_COST_TO_COMPANY;
+  const closeCtcBlocked = closeCtcInvalid || closeCtcTooLarge;
+  const closeCtcEdited = !closeCtcBlocked && recordedCtc !== monthTotals.ctc;
 
   const closeRun = async () => {
-    if (closeCtcInvalid) return;
+    if (closeCtcBlocked) return;
     setCompleting(true);
     try {
-      await api.put(`/hr/payroll-runs/${run.id}/complete`, { cost_to_company: num(closeCtc) });
-      toast.success(`The ${fmtMonth(month)} Pay Run is closed. Its payslips are now read-only.`);
+      const { data } = await api.put(`/hr/payroll-runs/${run.id}/complete`, { cost_to_company: num(closeCtc) });
+      toast.success(data?.finance_id
+        ? `The ${fmtMonth(month)} Pay Run is closed. Salary Expense of ${fmtMoney(data.cost_to_company)} recorded in Finance.`
+        : `The ${fmtMonth(month)} Pay Run is closed. Its payslips are now read-only.`);
       setCompleteOpen(false);
       setTab('processed');
       refreshMonth();
@@ -1524,13 +1534,15 @@ export default function SalarySlips() {
             <button className="btn btn-outline" onClick={() => setCompleteOpen(false)} disabled={completing}>
               Cancel
             </button>
-            <BusyButton busy={completing} busyLabel="Closing…" icon="lock" onClick={closeRun} disabled={closeCtcInvalid}>
+            <BusyButton busy={completing} busyLabel="Closing…" icon="lock" onClick={closeRun} disabled={closeCtcBlocked}>
               Close Pay Run
             </BusyButton>
           </>
         }
       >
-        {/* One consequence per line: what cannot be undone, then what it does. */}
+        {/* One consequence per line: what cannot be undone, then what it does.
+            The Finance entry is as permanent as the payslips (it cannot be
+            deleted), so it is stated here, before the commit. */}
         <div className="pr-alert">
           <span className="pr-alert-icon" aria-hidden="true">
             <span className="material-symbols-outlined">warning</span>
@@ -1540,6 +1552,13 @@ export default function SalarySlips() {
             <div className="pr-alert-text">
               All {plural(slips.length, 'payslip')} become permanently read-only.
             </div>
+            {!closeCtcBlocked && (
+              <div className="pr-alert-text">
+                {recordedCtc > 0
+                  ? `A Salary Expense of ${fmtMoney(recordedCtc)} is recorded in Finance, dated ${fmtDate(todayPKT())}.`
+                  : 'The cost to company is zero. No Salary Expense is recorded in Finance.'}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1560,14 +1579,31 @@ export default function SalarySlips() {
             field share one 40px slot, so the dialog never changes shape. */}
         <div className="pr-close-ctc">
           <div className="pr-ctc-head">
-            <label className="pr-ctc-label" htmlFor={ctcEditing ? 'close-ctc' : undefined}>
-              Cost to company
-            </label>
+            {/* The rule behind the figure is one hover or click away, so the
+                note below can carry only what changes (edited, invalid). */}
+            <div className="pr-ctc-title">
+              <label className="pr-ctc-label" htmlFor={ctcEditing ? 'close-ctc' : undefined}>
+                Cost to company
+              </label>
+              <InfoPopover label="About cost to company" title="Cost to company" width={300}>
+                <p className="hr-pop-text">
+                  The total net salary of the payslips in this Pay Run: gross earnings less
+                  deductions and loan repayments.
+                </p>
+                <p className="hr-pop-text">
+                  Advance salary does not reduce it. An advance is part of the same salary, paid earlier.
+                </p>
+                <p className="hr-pop-text">
+                  Closing the Pay Run records this amount in Finance as a Salary Expense. Editing
+                  it does not change any payslip.
+                </p>
+              </InfoPopover>
+            </div>
             <button
               type="button"
               className={`pr-icon-btn${ctcEditing ? ' is-active' : ''}`}
               onClick={() => setCtcEditing(v => !v)}
-              disabled={ctcEditing && closeCtcInvalid}
+              disabled={ctcEditing && closeCtcBlocked}
               aria-pressed={ctcEditing}
               aria-label={ctcEditing ? 'Done editing cost to company' : 'Edit cost to company'}
               title={ctcEditing ? 'Done' : 'Edit'}
@@ -1577,7 +1613,7 @@ export default function SalarySlips() {
           </div>
 
           {ctcEditing ? (
-            <div className={`pr-field${closeCtcInvalid ? ' is-invalid' : ''}`}>
+            <div className={`pr-field${closeCtcBlocked ? ' is-invalid' : ''}`}>
               <span className="pr-field-prefix" aria-hidden="true">PKR</span>
               <input
                 id="close-ctc"
@@ -1588,11 +1624,11 @@ export default function SalarySlips() {
                 className="no-spinner"
                 value={closeCtc ?? ''}
                 autoFocus
-                aria-invalid={closeCtcInvalid}
+                aria-invalid={closeCtcBlocked}
                 aria-describedby="close-ctc-note"
                 onWheel={blockWheelChange}
                 onFocus={e => e.target.select()}
-                onKeyDown={e => { if (e.key === 'Enter' && !closeCtcInvalid) { e.preventDefault(); setCtcEditing(false); } }}
+                onKeyDown={e => { if (e.key === 'Enter' && !closeCtcBlocked) { e.preventDefault(); setCtcEditing(false); } }}
                 onChange={e => setCloseCtc(e.target.value)}
               />
             </div>
@@ -1603,6 +1639,8 @@ export default function SalarySlips() {
           <div className="pr-ctc-note" id="close-ctc-note">
             {closeCtcInvalid ? (
               <span className="pr-field-error">Enter an amount of zero or more.</span>
+            ) : closeCtcTooLarge ? (
+              <span className="pr-field-error">Enter an amount no greater than {fmtMoney(MAX_COST_TO_COMPANY)}.</span>
             ) : closeCtcEdited ? (
               <>
                 Edited · Calculated {fmtMoney(monthTotals.ctc)}
@@ -1612,7 +1650,7 @@ export default function SalarySlips() {
                 </button>
               </>
             ) : (
-              'Gross earnings less deductions. Loan repayments and advance salary do not reduce it.'
+              `Net salary of ${slips.length === 1 ? 'the payslip' : `all ${plural(slips.length, 'payslip')}`}.`
             )}
           </div>
         </div>

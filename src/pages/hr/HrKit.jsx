@@ -574,6 +574,8 @@ export function InfoPopover({ label, title, children, width = 320 }) {
   const triggerRef = useRef(null);
   const popRef = useRef(null);
   const closeTimer = useRef(null);
+  // Escape hands focus back to the trigger; that focus must not reopen it.
+  const refocusing = useRef(false);
   const popId = useId();
 
   const place = useCallback(() => {
@@ -612,16 +614,21 @@ export function InfoPopover({ label, title, children, width = 320 }) {
       if (triggerRef.current?.contains(e.target) || popRef.current?.contains(e.target)) return;
       setOpen(false); setPinned(false);
     };
+    // Capture phase, and the event stops here: inside a Modal, Escape closes
+    // the popover only, not the dialog (Modal listens on document, bubbling).
     const onKeyDown = (e) => {
       if (e.key !== 'Escape') return;
+      e.stopPropagation();
       setOpen(false); setPinned(false);
+      refocusing.current = true;
       triggerRef.current?.focus();
+      refocusing.current = false;
     };
     document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keydown', onKeyDown, true);
     return () => {
       document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keydown', onKeyDown, true);
     };
   }, [open]);
 
@@ -646,7 +653,7 @@ export function InfoPopover({ label, title, children, width = 320 }) {
         aria-controls={open ? popId : undefined}
         onMouseEnter={show}
         onMouseLeave={hide}
-        onFocus={show}
+        onFocus={() => { if (!refocusing.current) show(); }}
         onBlur={hide}
         onClick={() => {
           if (pinned) { setPinned(false); setOpen(false); } else { setPinned(true); setOpen(true); }

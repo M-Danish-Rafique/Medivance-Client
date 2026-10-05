@@ -1896,6 +1896,7 @@ export const HR_STYLES = `
 
   .pr-ctc-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
   .pr-ctc-head .pr-ctc-label { margin-bottom: 0; }
+  .pr-ctc-title { display: inline-flex; align-items: center; gap: 2px; }
   /* A framed 32px icon action: the same control the app uses in a table row,
      so an editable figure looks like the rest of the product. */
   .pr-icon-btn {
@@ -2269,9 +2270,13 @@ export const HR_STYLES = `
   .pr-breakdown .hr-info-btn { align-self: center; margin-left: 0; }
   .hr-info-btn:hover, .hr-info-btn.is-open { color: var(--blue); background: var(--blue-ultra); }
   .hr-info-btn:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 1px; }
+  /* Above the modal backdrop (200): a popover can sit inside a dialog (the
+     close dialog's Cost to company). Unlike KebabMenu it only exists while
+     its trigger is hovered or pinned, so it can never float over a dialog
+     opened from behind it. */
   .hr-popover {
     position: fixed;
-    z-index: 150;
+    z-index: 250;
     padding: 12px 16px;
     border: 1px solid var(--gray-200);
     border-radius: 10px;
@@ -2295,6 +2300,8 @@ export const HR_STYLES = `
   .hr-pop-date { color: var(--gray-500); }
   .hr-pop-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hr-pop-amt { text-align: right; }
+  .hr-pop-text { margin: 0 0 8px; line-height: 19px; }
+  .hr-pop-text:last-child { margin-bottom: 0; }
 
   /* ── Locked / informational strip ──────────────────────────────────── */
   .hr-locked {
