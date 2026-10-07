@@ -253,7 +253,8 @@ export default function Employees() {
       <div className="card">
         <div className="card-header">
           <div className="card-title">Employees</div>
-          <div className="flex items-center gap-3">
+          {/* Wraps below ~1100px instead of pushing Add Employee off the card. */}
+          <div className="flex items-center gap-3" style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             <Segmented
               ariaLabel="Filter by status"
               value={statusFilter}
@@ -275,7 +276,9 @@ export default function Employees() {
           </div>
         </div>
 
-        <div className="table-wrap">
+        {/* No inner scroll box: the list scrolls with the page, so it uses all the
+            height there is, and the header sticks under the topbar. */}
+        <div>
           {loading ? (
             <div className="loading-center"><div className="spinner" /></div>
           ) : filtered.length === 0 ? (
@@ -285,8 +288,8 @@ export default function Employees() {
               <div className="empty-state-desc">{emptyState.desc}</div>
             </div>
           ) : (
-            <div className="hr-table-scroll">
-              <table className="hr-table">
+            <div className="hr-page-scroll">
+              <table className="hr-table hr-page-table">
                 <thead>
                   <tr>
                     <SortableHeader column="employee_code" label="Employee ID" sortConfig={effectiveSort} onSort={handleSort} style={{ width: '14%' }} />

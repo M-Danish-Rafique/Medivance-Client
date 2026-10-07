@@ -175,6 +175,19 @@ export const HR_STYLES = `
 
   /* ── Tables ────────────────────────────────────────────────────────── */
   .hr-table-scroll { overflow: auto; max-height: 68vh; }
+  /* A list that scrolls with the page instead of inside a fixed-height box
+     (Master Data Employees): it uses all the height there is, and the header
+     sticks under the sticky topbar. No overflow on the wrapper, because any
+     overflow makes it the sticky container. Below 1100px the table may be
+     wider than the card, so the wrapper scrolls sideways there and the header
+     simply scrolls with the page. */
+  /* Two classes: must outrank .hr-table thead th { top: 0 }, declared below. */
+  .hr-table.hr-page-table thead th { top: var(--header-h); }
+  @media (max-width: 1100px) {
+    .hr-page-scroll { overflow-x: auto; }
+    /* The wrapper is now the sticky container, so no topbar offset. */
+    .hr-table.hr-page-table thead th { top: 0; }
+  }
   .hr-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
   .hr-table thead th {
     position: sticky;
