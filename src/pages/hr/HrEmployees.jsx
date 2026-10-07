@@ -12,6 +12,7 @@ import {
   HrStyles, SortableHeader, useSort, sortRows, byText, Segmented, KebabMenu,
   TableSkeleton, EmptyState, BusyButton, StatusBadge, FormField,
   SearchSelect, apiError, apiFieldError, initials,
+  MasterSyncCheck, masterSyncOffered,
 } from './HrKit';
 
 // ─── HR employee roster ────────────────────────────────────────────────────
@@ -66,6 +67,7 @@ export default function HrEmployees() {
   const [exitTouched, setExitTouched] = useState({});
   const [exitErrors, setExitErrors]   = useState({});
   const [statusBusy, setStatusBusy]   = useState(false);
+  const [syncMaster, setSyncMaster]   = useState(true);
 
   const { sortConfig, handleSort } = useSort('name');
 
@@ -247,6 +249,7 @@ export default function HrEmployees() {
     setExitForm({ date_of_leaving: todayPKT(), reason_for_leaving: '' });
     setExitTouched({});
     setExitErrors({});
+    setSyncMaster(true);
   };
 
   const today = todayPKT();
@@ -268,6 +271,20 @@ export default function HrEmployees() {
       : null,
   };
   const deactivating = statusTarget?.status === 'Active';
+  const nextStatus = deactivating ? 'Inactive' : 'Active';
+
+  // The linked Master Data record, from the roster row (GET /hr/employees
+  // joins it), so the dialog can offer to change it too.
+  const statusMaster = statusTarget?.master_employee_id
+    ? {
+      id:     statusTarget.master_employee_id,
+      name:   statusTarget.master_employee_name,
+      code:   statusTarget.master_employee_code,
+      role:   statusTarget.master_employee_role,
+      status: statusTarget.master_employee_status,
+    }
+    : null;
+  const offerMasterSync = masterSyncOffered(statusMaster, nextStatus);
   const exitBlocked = deactivating && Object.values(exitValidation).some(Boolean);
   const exitErrorFor = (key) => exitErrors[key] || (exitTouched[key] ? exitValidation[key] : null);
 
@@ -284,19 +301,22 @@ export default function HrEmployees() {
       const { data: full } = await api.get(`/hr/employees/${statusTarget.id}`);
       const payload = {
         ...full,
-        status: deactivating ? 'Inactive' : 'Active',
+        status: nextStatus,
         date_of_leaving:    deactivating ? exitForm.date_of_leaving : null,
         reason_for_leaving: deactivating ? exitForm.reason_for_leaving.trim() : null,
+        // Both records change in one server transaction, or neither does.
+        sync_master: offerMasterSync && syncMaster,
       };
       // employee_id is read-only server-side and rejected if present and
       // different — it is dropped rather than echoed back.
       delete payload.employee_id;
 
-      await api.put(`/hr/employees/${statusTarget.id}`, payload);
+      const { data: saved } = await api.put(`/hr/employees/${statusTarget.id}`, payload);
+      const verb = deactivating ? 'deactivated' : 'reactivated';
       toast.success(
-        deactivating
-          ? `${statusTarget.name} deactivated`
-          : `${statusTarget.name} is active again`
+        saved.master_synced
+          ? <span>{statusTarget.name} {verb}. Master Data record <span style={{ whiteSpace: 'nowrap' }}>{saved.master_synced.employee_code}</span> {verb} as well.</span>
+          : `${statusTarget.name} ${verb}.`
       );
       setStatusTarget(null);
       load();
@@ -733,9 +753,8 @@ export default function HrEmployees() {
               <div className="alert alert-warning" style={{ marginBottom: 0 }}>
                 <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden="true">info</span>
                 <span>
-                  Their record, attendance history and issued payslips are all
-                  retained — they simply stop appearing in the active roster and
-                  in payroll.
+                  Their record, attendance history and issued payslips are kept.
+                  They no longer appear in the active roster or in payroll.
                 </span>
               </div>
             </div>
@@ -782,15 +801,38 @@ export default function HrEmployees() {
                 onBlur={() => setExitTouched(p => ({ ...p, reason_for_leaving: true }))}
               />
             </FormField>
+
+            {offerMasterSync && (
+              <div className="hr-col-12">
+                <MasterSyncCheck
+                  id="exit-sync-master"
+                  master={statusMaster}
+                  nextStatus={nextStatus}
+                  checked={syncMaster}
+                  onChange={setSyncMaster}
+                />
+              </div>
+            )}
           </div>
         ) : (
-          <div className="alert alert-info" style={{ marginBottom: 0 }}>
-            <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden="true">person_check</span>
-            <span>
-              {statusTarget?.name} will return to the active roster and their
-              recorded leaving date and reason will be cleared.
-            </span>
-          </div>
+          <>
+            <div className="alert alert-info" style={{ marginBottom: offerMasterSync ? 16 : 0 }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden="true">person_check</span>
+              <span>
+                {statusTarget?.name} will return to the active roster. The
+                recorded leaving date and reason will be cleared.
+              </span>
+            </div>
+            {offerMasterSync && (
+              <MasterSyncCheck
+                id="reactivate-sync-master"
+                master={statusMaster}
+                nextStatus={nextStatus}
+                checked={syncMaster}
+                onChange={setSyncMaster}
+              />
+            )}
+          </>
         )}
       </Modal>
     </Layout>

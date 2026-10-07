@@ -49,6 +49,14 @@ export const fmtAmount = (value) => decimals2(value);
 
 export const fmtDate = (value) => (value ? formatDatePKT(value) : '—');
 
+/** "2026-10-06" (or "2026-10-06 14:05:00", a PKT datetime from the server)
+ *  -> "6 Oct 2026". Pure string math, so no browser timezone is involved;
+ *  '' when there is no date. */
+export const fmtDay = (value) => {
+  const [y, m, d] = String(value || '').slice(0, 10).split('-').map(Number);
+  return y && m && d ? `${d} ${MONTH_NAMES[m - 1].slice(0, 3)} ${y}` : '';
+};
+
 /** "2026-09" -> "September 2026". Pure string math, no Date parsing. */
 export const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -217,6 +225,7 @@ export function Segmented({ value, onChange, options, ariaLabel }) {
 // containers as well as the window) and on resize.
 const KEBAB_ITEM_H = 35;   // one .hr-kebab-item, including its padding
 const KEBAB_PAD_H   = 12;  // the menu's own padding + borders
+const KEBAB_SEP_H   = 9;   // one .hr-kebab-sep, including its margins
 const KEBAB_GAP     = 4;   // between trigger and menu
 const KEBAB_MARGIN  = 8;   // smallest gap the menu keeps from a viewport edge
 const KEBAB_MIN_H   = 96;  // below this, scrolling the menu beats shrinking it
@@ -268,6 +277,11 @@ function useAnchoredMenu(open, triggerRef, menuRef, itemCount) {
 // `trigger` turns the icon-only kebab into a labelled menu button (for
 // example "Record" with a chevron) while keeping the same portal, focus and
 // keyboard behaviour: { label, icon?, className? }.
+// An item may be `{ divider: true }`: a rule between groups (e.g. before a
+// destructive action). It is not focusable and arrow keys skip it.
+// An item with `disabled: true` stays in the menu and stays focusable, so its
+// `title` (the reason it is unavailable) can still be discovered; it is
+// marked aria-disabled and a click does nothing.
 export function KebabMenu({ items, label = 'Row actions', trigger }) {
   const [open, setOpen] = useState(false);
   const wrapRef    = useRef(null);
@@ -276,7 +290,12 @@ export function KebabMenu({ items, label = 'Row actions', trigger }) {
   const itemRefs   = useRef([]);
 
   const menuId = useId();
-  const menuStyle = useAnchoredMenu(open, triggerRef, menuRef, items.length);
+  // Height estimate in item units until the menu is measured.
+  const dividerCount = items.filter(item => item.divider).length;
+  const menuStyle = useAnchoredMenu(
+    open, triggerRef, menuRef,
+    items.length - dividerCount + dividerCount * (KEBAB_SEP_H / KEBAB_ITEM_H)
+  );
 
   const close = useCallback((refocus) => {
     setOpen(false);
@@ -299,11 +318,12 @@ export function KebabMenu({ items, label = 'Row actions', trigger }) {
     if (!open) { focusedRef.current = false; return; }
     // The portal mounts a render after `open` flips, so this runs again when
     // `menuStyle` lands; the ref keeps it to one focus per open.
-    if (focusedRef.current || !itemRefs.current[0]) return;
+    const first = itemRefs.current.find(Boolean);
+    if (focusedRef.current || !first) return;
     // preventScroll matters: without it, focusing the first item scrolls the
     // nearest scrollable ancestor to reveal a menu that is already fully
     // visible, which is exactly the jump this component used to have.
-    itemRefs.current[0].focus({ preventScroll: true });
+    first.focus({ preventScroll: true });
     focusedRef.current = true;
   }, [open, menuStyle]);
 
@@ -364,19 +384,27 @@ export function KebabMenu({ items, label = 'Row actions', trigger }) {
           onClick={(e) => e.stopPropagation()}
           onKeyDown={onMenuKeyDown}
         >
-          {items.map((item, i) => (
+          {items.map((item, i) => (item.divider ? (
+            <div key={`divider-${i}`} className="hr-kebab-sep" role="separator" ref={() => { itemRefs.current[i] = null; }} />
+          ) : (
             <button
               key={item.label}
               ref={el => { itemRefs.current[i] = el; }}
               type="button"
               role="menuitem"
               className={`hr-kebab-item${item.danger ? ' is-danger' : ''}`}
-              onClick={() => { close(false); item.onClick(); }}
+              aria-disabled={item.disabled ? 'true' : undefined}
+              title={item.title}
+              onClick={() => {
+                if (item.disabled) return;
+                close(false);
+                item.onClick();
+              }}
             >
               {item.icon && <span className="material-symbols-outlined" aria-hidden="true">{item.icon}</span>}
               {item.label}
             </button>
-          ))}
+          )))}
         </div>,
         document.body
       )}
@@ -688,7 +716,7 @@ export function InfoPopover({ label, title, children, width = 320 }) {
 // sentence at normal weight — the title carries the emphasis, so no amount
 // competes with it. Tones: info (neutral consequence), warning (allowed but
 // worth a second look), danger (blocks the action).
-const NOTICE_ICONS = { info: 'info', warning: 'warning', danger: 'block', success: 'check_circle' };
+const NOTICE_ICONS = { info: 'info', neutral: 'info', warning: 'warning', danger: 'block', success: 'check_circle' };
 
 export function Notice({ tone = 'info', title, children, icon, style }) {
   return (
@@ -885,6 +913,39 @@ export function StatusBadge({ status }) {
       <span className="hr-status-dot" aria-hidden="true" />
       {active ? 'Active' : 'Inactive'}
     </span>
+  );
+}
+
+// ── Master Data status sync ────────────────────────────────────────────────
+// Offered when an HR status change would leave the linked Master Data record
+// (the Salesman / Supplier used by Sale and Recovery) on the other status.
+// One-way and opt-in: the server applies both changes in one transaction when
+// the request carries `sync_master: true`. The code and role are always shown
+// because one person can have two Master Data records (a Salesman and a
+// Supplier) and only the linked one changes.
+//
+// `master` = { id, name, code, role, status } of the linked record, or null.
+export function masterSyncOffered(master, nextStatus) {
+  return !!(master && master.id && master.status && master.status !== nextStatus);
+}
+
+export function MasterSyncCheck({ id, master, nextStatus, checked, onChange }) {
+  const deactivating = nextStatus === 'Inactive';
+  const who = <>{master.name} (<span style={{ whiteSpace: 'nowrap' }}>{master.code}</span> · {master.role})</>;
+  return (
+    <label className="hr-checkbanner" htmlFor={id}>
+      <input id={id} type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} />
+      <span>
+        <span className="hr-checkbanner-title">
+          {deactivating ? 'Also deactivate ' : 'Also reactivate '}{who} in Master Data
+        </span>
+        <span className="hr-checkbanner-note">
+          {deactivating
+            ? 'They will no longer appear in sales and recovery lists.'
+            : 'They will appear again in sales and recovery lists.'}
+        </span>
+      </span>
+    </label>
   );
 }
 

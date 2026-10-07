@@ -7,11 +7,13 @@ import toast from 'react-hot-toast';
 import { formatCNIC, handleCNICInput, handlePhoneInput, formatPhone } from '../../utils/formatters';
 import { todayPKT, addMonthsPKT } from '../../utils/dateUtils';
 import { useAuth } from '../../context/AuthContext';
+import { withSavedEmployee } from '../../utils/employeeOptions';
 import {
   HrStyles, Panel, Tabs, TabPanel, FieldGrid, Field, FormField, Pill, BusyButton,
   StatusBadge, KebabMenu, EmptyState, FieldGridSkeleton, SearchSelect, Notice,
   fmtMoney, fmtAmount, fmtDate, fmtMonth, num, money, initials,
   apiError, apiFieldError, blockWheelChange, ibanError, accountNumberError,
+  MasterSyncCheck, masterSyncOffered, fmtDay,
 } from './HrKit';
 
 // ─── Employee profile ──────────────────────────────────────────────────────
@@ -148,6 +150,9 @@ export default function HrEmployeeDetail() {
   const [touched, setTouched] = useState({});
   const [serverErrors, setServerErrors] = useState({});
   const [saving, setSaving]   = useState(false);
+  // "Also deactivate / reactivate … in Master Data", offered when this edit
+  // changes the HR status. Ticked by default.
+  const [syncMaster, setSyncMaster] = useState(true);
 
   const [lookups, setLookups] = useState({ departments: [], designations: [], cities: [], managers: [], masters: [] });
 
@@ -217,6 +222,39 @@ export default function HrEmployeeDetail() {
       });
     });
   }, [id]);
+
+  // ── Master Data link ─────────────────────────────────────────────────────
+  // The link picker offers active Master Data records only (GET /employees),
+  // plus the record already linked, labelled "(inactive)" once it has been
+  // deactivated, so the field never looks empty. The server refuses a NEW
+  // link to an inactive record.
+  const masterOptions = useMemo(() => withSavedEmployee(lookups.masters, {
+    id:            employee?.master_employee_id,
+    name:          employee?.master_employee_name,
+    status:        employee?.master_employee_status,
+    role:          employee?.master_employee_role,
+    employee_code: employee?.master_employee_code,
+  }), [lookups.masters, employee]);
+
+  // The record this save would leave linked, for the status sync offer.
+  const formMaster = useMemo(() => {
+    if (!form || !form.master_employee_id) return null;
+    if (employee && String(form.master_employee_id) === String(employee.master_employee_id)) {
+      return {
+        id: employee.master_employee_id, name: employee.master_employee_name,
+        code: employee.master_employee_code, role: employee.master_employee_role,
+        status: employee.master_employee_status,
+      };
+    }
+    const picked = lookups.masters.find(m => String(m.id) === String(form.master_employee_id));
+    return picked
+      ? { id: picked.id, name: picked.name, code: picked.employee_code, role: picked.role, status: picked.status }
+      : null;
+  }, [form, employee, lookups.masters]);
+
+  const offerMasterSync = !!(editing && form && employee
+    && form.status !== employee.status
+    && masterSyncOffered(formMaster, form.status));
 
   // ── Validation (mirrors routes/hrEmployees.js) ───────────────────────────
   const today = todayPKT();
@@ -311,18 +349,19 @@ export default function HrEmployeeDetail() {
   };
   const markTouched = (key) => setTouched(prev => ({ ...prev, [key]: true }));
 
-  const startEdit = () => {
+  const startEdit = useCallback(() => {
     applyRecord(employee);
     setTouched({});
     setServerErrors({});
+    setSyncMaster(true);
     setEditing(true);
-  };
+  }, [applyRecord, employee]);
 
   // Deactivating or reactivating is offered as a named action rather than
   // leaving the operator to find the status dropdown, but it still runs
   // through the ordinary edit + Save, because going Inactive also requires a
   // leaving date and a reason and those are validated together.
-  const beginStatusChange = (nextStatus) => {
+  const beginStatusChange = useCallback((nextStatus) => {
     startEdit();
     setForm(prev => ({
       ...prev,
@@ -334,7 +373,7 @@ export default function HrEmployeeDetail() {
         : prev.date_of_leaving,
     }));
     setTab('general');
-  };
+  }, [startEdit]);
 
   const cancelEdit = () => {
     applyRecord(employee);
@@ -371,8 +410,10 @@ export default function HrEmployeeDetail() {
     try {
       // employee_id is never sent: it is system-generated and the server
       // rejects any attempt to change it.
-      await api.put(`/hr/employees/${id}`, {
+      const { data: saved } = await api.put(`/hr/employees/${id}`, {
         ...form,
+        // Both records change in one server transaction, or neither does.
+        sync_master: offerMasterSync && syncMaster,
         city_id:              form.city_id || null,
         reporting_manager_id: form.reporting_manager_id || null,
         master_employee_id:   form.master_employee_id || null,
@@ -393,7 +434,10 @@ export default function HrEmployeeDetail() {
         await api.put(`/hr/employees/${id}/sales-target`, { target_amount: num(targetInput) });
       }
 
-      toast.success('Profile saved');
+      const synced = saved.master_synced;
+      toast.success(synced
+        ? <span>Profile saved. Master Data record <span style={{ whiteSpace: 'nowrap' }}>{synced.employee_code}</span> {synced.status === 'Inactive' ? 'deactivated' : 'reactivated'} as well.</span>
+        : 'Profile saved.');
       setEditing(false);
       if (location.state?.edit) navigate(location.pathname, { replace: true });
       load();
@@ -762,15 +806,30 @@ export default function HrEmployeeDetail() {
                     ID:{' '}
                     <span className="hr-meta-id">{employee.employee_id}</span>
                   </span>
-                  {employee.master_employee_name && (
+                  {/* The linked Master Data record, by its code: the record
+                      sales and recoveries use. Its status is a plain muted
+                      word, never the picker label "Name (inactive)". */}
+                  {employee.master_employee_id && employee.master_employee_code && (
                     <>
                       <span className="hr-profile-meta-sep" aria-hidden="true">·</span>
-                      <span title="Linked Master Data record">
-                        Master record:{' '}
-                        <span style={{ color: 'var(--gray-600)' }}>
-                          {employee.master_employee_name} — {employee.master_employee_role}
-                        </span>
+                      <span title="The record used on invoices and recoveries">
+                        Sales record:{' '}
+                        <span className="hr-meta-id">{employee.master_employee_code}</span>
                       </span>
+                      <span className="hr-profile-meta-sep" aria-hidden="true">·</span>
+                      <span style={{ color: 'var(--gray-600)' }}>{employee.master_employee_role}</span>
+                      {employee.master_employee_status === 'Inactive' && (
+                        <>
+                          <span className="hr-profile-meta-sep" aria-hidden="true">·</span>
+                          <span
+                            title={fmtDay(employee.master_employee_deactivated_at)
+                              ? `Deactivated in Master Data on ${fmtDay(employee.master_employee_deactivated_at)}`
+                              : 'Deactivated in Master Data'}
+                          >
+                            Inactive
+                          </span>
+                        </>
+                      )}
                     </>
                   )}
                 </div>
@@ -974,7 +1033,7 @@ export default function HrEmployeeDetail() {
                 <FormField label="Master Data record" htmlFor="f-master" col={4} error={errorFor('master_employee_id')}>
                   <SearchSelect
                     id="f-master"
-                    options={lookups.masters}
+                    options={masterOptions}
                     value={form.master_employee_id}
                     onChange={(val) => setField('master_employee_id', val)}
                     placeholder="Search to link a record"
@@ -1021,6 +1080,18 @@ export default function HrEmployeeDetail() {
                         onBlur={() => markTouched('reason_for_leaving')} />
                     </FormField>
                   </>
+                )}
+
+                {offerMasterSync && (
+                  <div className="hr-col-12">
+                    <MasterSyncCheck
+                      id="f-sync-master"
+                      master={formMaster}
+                      nextStatus={form.status}
+                      checked={syncMaster}
+                      onChange={setSyncMaster}
+                    />
+                  </div>
                 )}
               </div>
             ) : (

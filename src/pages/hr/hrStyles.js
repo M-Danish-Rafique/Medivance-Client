@@ -306,6 +306,13 @@ export const HR_STYLES = `
   .hr-kebab-item.is-danger { color: var(--red); }
   .hr-kebab-item.is-danger:hover, .hr-kebab-item.is-danger:focus-visible { background: var(--red-pale); }
   .hr-kebab-item .material-symbols-outlined { font-size: 17px; }
+  .hr-kebab-sep { height: 1px; margin: 4px 6px; background: var(--gray-200); }
+  /* Unavailable, with its reason in the tooltip. Muted whatever its tone, and
+     no hover fill, so it never reads as clickable. */
+  .hr-kebab-item[aria-disabled="true"],
+  .hr-kebab-item.is-danger[aria-disabled="true"] { color: var(--gray-400); cursor: not-allowed; }
+  .hr-kebab-item[aria-disabled="true"]:hover { background: transparent; }
+  .hr-kebab-item[aria-disabled="true"]:focus-visible { background: var(--gray-50); }
 
   /* == Profile header ================================================= */
   /* Three lines beside the avatar, in the order an HR person asks for them:
@@ -388,9 +395,7 @@ export const HR_STYLES = `
     line-height: 1.5;
   }
   .hr-profile-meta .hr-meta-id {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11.5px;
-    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
     color: var(--gray-600);
   }
   .hr-profile-meta-sep { color: var(--gray-300); }
@@ -2141,9 +2146,10 @@ export const HR_STYLES = `
     line-height: 20px;
   }
   .hr-notice-icon { font-size: 18px; line-height: 20px; flex-shrink: 0; }
-  .hr-notice-body { min-width: 0; }
+  /* pretty: no single word stranded on a notice's last line. */
+  .hr-notice-body { min-width: 0; text-wrap: pretty; }
   .hr-notice-title { font-weight: 700; }
-  .hr-notice-text { margin-top: 2px; }
+  .hr-notice-title + .hr-notice-text { margin-top: 2px; }
   .hr-notice.is-info    { background: var(--blue-ultra); border-color: var(--blue-pale); color: #1e3a8a; }
   .hr-notice.is-info .hr-notice-icon { color: #1d4ed8; }
   .hr-notice.is-warning { background: #fffbeb; border-color: #fde68a; color: #92400e; }
@@ -2151,6 +2157,9 @@ export const HR_STYLES = `
   .hr-notice.is-danger  { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
   .hr-notice.is-danger .hr-notice-icon { color: #b91c1c; }
   .hr-notice.is-success { background: #f0fdf4; border-color: #bbf7d0; color: #14532d; }
+  /* A fact worth knowing before confirming, not a warning. */
+  .hr-notice.is-neutral { background: var(--gray-50); border-color: var(--gray-200); color: var(--gray-700); }
+  .hr-notice.is-neutral .hr-notice-icon { color: var(--gray-500); }
 
   /* ── Loans & Advances panel (employee profile) ─────────────────────── */
   /* The two summary cards ARE the tabs: each states its figure and status,

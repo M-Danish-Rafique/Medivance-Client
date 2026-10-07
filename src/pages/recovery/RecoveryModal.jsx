@@ -4,6 +4,7 @@ import { formatCurrency } from '../../utils/formatters';
 import { formatDatePKT } from '../../utils/dateUtils';
 import { blockWheelChange } from './recoveryUtils';
 import ReturnTable from './ReturnTable';
+import SavedInactiveNote from '../../components/common/SavedInactiveNote';
 
 export default function RecoveryModal({
   isOpen,
@@ -123,6 +124,7 @@ export default function RecoveryModal({
                   <option key={emp.id} value={emp.id}>{emp.name}</option>
                 ))}
               </select>
+              <SavedInactiveNote people={employees} value={recHeader.salesman_id} />
             </div>
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">Notes</label>

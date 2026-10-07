@@ -3,6 +3,8 @@ import Layout from '../../components/layout/Layout';
 import Modal from '../../components/common/Modal';
 import ConfirmModal from '../../components/common/ConfirmModal';
 import api from '../../utils/api';
+import { withSavedEmployee } from '../../utils/employeeOptions';
+import SavedInactiveNote from '../../components/common/SavedInactiveNote';
 import toast from 'react-hot-toast';
 import { formatCurrency, handlePhoneInput } from '../../utils/formatters';
 import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
@@ -346,6 +348,7 @@ function SaleFormBody({
             <option value="">— Select Salesman —</option>
             {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
           </select>
+          <SavedInactiveNote people={employees} value={header.salesman_id} />
         </div>
         <div className="form-group" style={{ margin: 0 }}>
           <label className="form-label">Delivery By</label>
@@ -353,6 +356,7 @@ function SaleFormBody({
             <option value="">— Select Supplier —</option>
             {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
+          <SavedInactiveNote people={suppliers} value={header.delivery_by} />
         </div>
         <div className="form-group" style={{ margin: 0 }}>
           <label className="form-label">Date *</label>
@@ -1032,6 +1036,20 @@ export default function Sale() {
     } catch { toast.error('Error loading sale'); }
   };
 
+  // New invoices offer active people only. When editing, the salesman and
+  // Delivery By already saved on the invoice stay selectable even if they
+  // have been deactivated since ("Name (inactive)").
+  const formSalesmen = useMemo(() => (
+    modal === 'edit' && selected
+      ? withSavedEmployee(employees, { id: selected.salesman_id, name: selected.salesman_name, status: selected.salesman_status })
+      : employees
+  ), [modal, selected, employees]);
+  const formSuppliers = useMemo(() => (
+    modal === 'edit' && selected
+      ? withSavedEmployee(suppliers, { id: selected.delivery_by, name: selected.delivery_by_name, status: selected.delivery_by_status })
+      : suppliers
+  ), [modal, selected, suppliers]);
+
   const openView = async (sale) => {
     try {
       const r = await api.get(`/sales/${sale.id}`);
@@ -1482,7 +1500,7 @@ export default function Sale() {
         }>
         <SaleFormBody
           header={header} setHeader={setHeader}
-          customers={customers} employees={employees} suppliers={suppliers}
+          customers={customers} employees={formSalesmen} suppliers={formSuppliers}
           setNewCustModal={setNewCustModal}
           items={items} activeRowIdx={activeRowIdx} setActiveRowIdx={setActiveRowIdx}
           updateItem={updateItem} selectProduct={selectProduct} removeItem={removeItem} addItem={addItem}

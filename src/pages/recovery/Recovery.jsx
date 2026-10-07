@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import api from '../../utils/api';
@@ -7,6 +7,7 @@ import { formatCurrency } from '../../utils/formatters';
 import usePagination from '../../hooks/usePagination';
 import { formatDatePKT, todayPKT, addMonthsPKT } from '../../utils/dateUtils';
 import { useAuth } from '../../context/AuthContext';
+import { withSavedEmployee } from '../../utils/employeeOptions';
 import {
   isPastExpiryMonth,
   getExpiryStatus,
@@ -358,6 +359,15 @@ export default function Recovery() {
   const totalDiscount = recoveryLines.reduce((s, l) => s + parseFloat(l.discount_given || 0), 0);
   const currentReturnAmt = returnLines.reduce((s, l) => s + parseFloat(l.return_amount || 0), 0);
   const totalReturnAmt = currentReturnAmt;
+  // The Supplier picker lists active suppliers. The invoice's own Delivery By
+  // stays selectable (and pre-selected) even if deactivated since, because a
+  // recovery is still credited to the original supplier.
+  const modalSuppliers = useMemo(() => (
+    saleDetail
+      ? withSavedEmployee(suppliers, { id: saleDetail.delivery_by, name: saleDetail.delivery_by_name, status: saleDetail.delivery_by_status })
+      : suppliers
+  ), [saleDetail, suppliers]);
+
   const invoiceTotal = saleDetail ? parseFloat(saleDetail.total_amount) : 0;
   // Figures already banked from a PRIOR (partial) recovery installment on this same invoice, if any.
   const priorDiscount = saleDetail ? parseFloat(saleDetail.total_discount || 0) : 0;
@@ -552,7 +562,7 @@ export default function Recovery() {
         onClose={() => setModal(false)}
         selectedSale={selectedSale}
         saleDetail={saleDetail}
-        employees={suppliers}
+        employees={modalSuppliers}
         recHeader={recHeader}
         setRecHeader={setRecHeader}
         amountRecovered={amountRecovered}
