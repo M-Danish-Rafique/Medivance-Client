@@ -9,6 +9,7 @@ import usePagination from '../../hooks/usePagination';
 import { useAuth } from '../../context/AuthContext';
 import { formatDatePKT, todayPKT, addMonthsPKT } from '../../utils/dateUtils';
 
+import DateInput from '../../components/common/DateInput';
 // Column visibility defaults for the Stock Ledger table. Keys must match the
 // `field` used by the sort/header/body render code below. Toggled via the
 // kebab menu in the table header — persisted to localStorage so a user's
@@ -1262,9 +1263,8 @@ export default function Inventory() {
                 onChange={(e) => updateInvItem(idx, "batch_no", e.target.value)}
               />
 
-              <input
+              <DateInput
                 className="form-control"
-                type="date"
                 style={{
                   ...inputSm,
                   width: "100%",
@@ -1559,9 +1559,8 @@ export default function Inventory() {
 
                   <div className="form-group">
                     <label className="form-label">Expiry Date</label>
-                    <input
+                    <DateInput
                       className="form-control"
-                      type="date"
                       style={fieldErrors.exp_date ? errorBorder : undefined}
                       value={editItem.exp_date}
                       onChange={(e) =>

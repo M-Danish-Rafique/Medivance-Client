@@ -6,6 +6,7 @@ import { blockWheelChange } from './recoveryUtils';
 import ReturnTable from './ReturnTable';
 import SavedInactiveNote from '../../components/common/SavedInactiveNote';
 
+import DateInput from '../../components/common/DateInput';
 export default function RecoveryModal({
   isOpen,
   onClose,
@@ -109,7 +110,7 @@ export default function RecoveryModal({
           <div className="form-grid form-grid-3" style={{ marginBottom: 16 }}>
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">Recovery Date *</label>
-              <input className="form-control" type="date" value={recHeader.date}
+              <DateInput className="form-control" value={recHeader.date}
                 onChange={e => setRecHeader(p => ({ ...p, date: e.target.value }))} />
             </div>
             <div className="form-group" style={{ margin: 0 }}>

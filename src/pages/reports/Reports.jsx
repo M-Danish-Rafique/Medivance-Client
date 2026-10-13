@@ -6,6 +6,7 @@ import { formatCurrency } from '../../utils/formatters';
 import CustomerAutocomplete from '../../components/common/CustomerAutocomplete';
 import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
 
+import DateInput from '../../components/common/DateInput';
 const fmt = formatCurrency;
 
 // Entities available for the layered Sale Summary report, in the order
@@ -918,11 +919,11 @@ export default function Reports() {
                 </div>
                 <div className="form-group" style={{ margin: 0 }}>
                   <label className="form-label">From Date</label>
-                  <input className="form-control" type="date" value={ledgerFrom} onChange={e => setLedgerFrom(e.target.value)} />
+                  <DateInput className="form-control" value={ledgerFrom} onChange={e => setLedgerFrom(e.target.value)} />
                 </div>
                 <div className="form-group" style={{ margin: 0 }}>
                   <label className="form-label">To Date</label>
-                  <input className="form-control" type="date" value={ledgerTo} onChange={e => setLedgerTo(e.target.value)} />
+                  <DateInput className="form-control" value={ledgerTo} onChange={e => setLedgerTo(e.target.value)} />
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button className="btn btn-primary" onClick={fetchLedger} disabled={ledgerLoading || !ledgerEntityId}>
@@ -998,11 +999,11 @@ export default function Reports() {
                   <>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">From Date</label>
-                      <input className="form-control" type="date" value={salesFrom} onChange={e => setSalesFrom(e.target.value)} />
+                      <DateInput className="form-control" value={salesFrom} onChange={e => setSalesFrom(e.target.value)} />
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">To Date</label>
-                      <input className="form-control" type="date" value={salesTo} onChange={e => setSalesTo(e.target.value)} />
+                      <DateInput className="form-control" value={salesTo} onChange={e => setSalesTo(e.target.value)} />
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">Salesman</label>
@@ -1088,11 +1089,11 @@ export default function Reports() {
                   <>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">From Date</label>
-                      <input className="form-control" type="date" value={recFrom} onChange={e => setRecFrom(e.target.value)} />
+                      <DateInput className="form-control" value={recFrom} onChange={e => setRecFrom(e.target.value)} />
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">To Date</label>
-                      <input className="form-control" type="date" value={recTo} onChange={e => setRecTo(e.target.value)} />
+                      <DateInput className="form-control" value={recTo} onChange={e => setRecTo(e.target.value)} />
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">Supplier</label>
@@ -1174,12 +1175,12 @@ export default function Reports() {
               <div className="form-grid form-grid-4" style={{ marginBottom: 20 }}>
                 <div className="form-group" style={{ margin: 0 }}>
                   <label className="form-label">From Date</label>
-                  <input className="form-control" type="date" value={summaryFrom}
+                  <DateInput className="form-control" value={summaryFrom}
                     onChange={e => { setSummaryFrom(e.target.value); setSummaryData(null); }} />
                 </div>
                 <div className="form-group" style={{ margin: 0 }}>
                   <label className="form-label">To Date</label>
-                  <input className="form-control" type="date" value={summaryTo}
+                  <DateInput className="form-control" value={summaryTo}
                     onChange={e => { setSummaryTo(e.target.value); setSummaryData(null); }} />
                 </div>
               </div>
@@ -1483,12 +1484,12 @@ export default function Reports() {
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">From Date *</label>
-                      <input className="form-control" type="date" value={stockFrom} required
+                      <DateInput className="form-control" value={stockFrom} required
                         onChange={e => { setStockFrom(e.target.value); setStockRows(null); }} />
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">To Date *</label>
-                      <input className="form-control" type="date" value={stockTo} required
+                      <DateInput className="form-control" value={stockTo} required
                         onChange={e => { setStockTo(e.target.value); setStockRows(null); }} />
                     </div>
                   </>
@@ -1814,12 +1815,12 @@ export default function Reports() {
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">From Date</label>
-                      <input className="form-control" type="date" value={batchFrom}
+                      <DateInput className="form-control" value={batchFrom}
                         onChange={e => { setBatchFrom(e.target.value); setBatchData(null); }} />
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">To Date</label>
-                      <input className="form-control" type="date" value={batchTo}
+                      <DateInput className="form-control" value={batchTo}
                         onChange={e => { setBatchTo(e.target.value); setBatchData(null); }} />
                     </div>
                   </>
@@ -1932,12 +1933,12 @@ export default function Reports() {
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">From Date *</label>
-                      <input className="form-control" type="date" value={profitFrom} required
+                      <DateInput className="form-control" value={profitFrom} required
                         onChange={e => { setProfitFrom(e.target.value); setProfitRows(null); }} />
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
                       <label className="form-label">To Date *</label>
-                      <input className="form-control" type="date" value={profitTo} required
+                      <DateInput className="form-control" value={profitTo} required
                         onChange={e => { setProfitTo(e.target.value); setProfitRows(null); }} />
                     </div>
                   </>

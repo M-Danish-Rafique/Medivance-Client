@@ -278,86 +278,84 @@ export default function Employees() {
 
         {/* No inner scroll box: the list scrolls with the page, so it uses all the
             height there is, and the header sticks under the topbar. */}
-        <div>
-          {loading ? (
-            <div className="loading-center"><div className="spinner" /></div>
-          ) : filtered.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-state-icon"><span className="material-symbols-outlined" style={{ fontSize: 28 }}>{emptyState.icon}</span></div>
-              <div className="empty-state-title">{emptyState.title}</div>
-              <div className="empty-state-desc">{emptyState.desc}</div>
-            </div>
-          ) : (
-            <div className="hr-page-scroll">
-              <table className="hr-table hr-page-table">
-                <thead>
-                  <tr>
-                    <SortableHeader column="employee_code" label="Employee ID" sortConfig={effectiveSort} onSort={handleSort} style={{ width: '14%' }} />
-                    <SortableHeader column="name" label="Name" sortConfig={effectiveSort} onSort={handleSort} style={{ width: showStatus ? '15%' : '26%' }} />
-                    <th style={{ width: '18%' }}>CNIC</th>
-                    <th style={{ width: '16%' }}>Phone</th>
-                    <SortableHeader column="role" label="Role" sortConfig={effectiveSort} onSort={handleSort} style={{ width: '14%' }} />
-                    {showStatus && (
-                      <SortableHeader column="status" label="Status" sortConfig={effectiveSort} onSort={handleSort} style={{ width: '11%' }} />
-                    )}
-                    <th style={{ textAlign: 'right' }}>
-                      <span className="hr-sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map(e => {
-                    const code = e.employee_code || `#${e.id}`;
-                    const inactive = e.status === 'Inactive';
-                    return (
-                      <tr key={e.id}>
-                        <td style={{ ...tabular, color: MUTED }}>{code}</td>
-                        <td
-                          className="hr-cell-strong"
-                          style={{ whiteSpace: 'nowrap', ...(showStatus && inactive ? { color: MUTED } : null) }}
-                        >
-                          {e.name}
-                        </td>
-                        <td style={tabular}>{e.cnic || EMPTY_CELL}</td>
-                        <td style={tabular}>{e.phone ? formatPhone(e.phone) : EMPTY_CELL}</td>
+        {loading ? (
+          <div className="loading-center"><div className="spinner" /></div>
+        ) : filtered.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-state-icon"><span className="material-symbols-outlined" style={{ fontSize: 28 }}>{emptyState.icon}</span></div>
+            <div className="empty-state-title">{emptyState.title}</div>
+            <div className="empty-state-desc">{emptyState.desc}</div>
+          </div>
+        ) : (
+          <div className="hr-page-scroll">
+            <table className="hr-table hr-page-table">
+              <thead>
+                <tr>
+                  <SortableHeader column="employee_code" label="Employee ID" sortConfig={effectiveSort} onSort={handleSort} style={{ width: '14%' }} />
+                  <SortableHeader column="name" label="Name" sortConfig={effectiveSort} onSort={handleSort} style={{ width: showStatus ? '15%' : '26%' }} />
+                  <th style={{ width: '18%' }}>CNIC</th>
+                  <th style={{ width: '16%' }}>Phone</th>
+                  <SortableHeader column="role" label="Role" sortConfig={effectiveSort} onSort={handleSort} style={{ width: '14%' }} />
+                  {showStatus && (
+                    <SortableHeader column="status" label="Status" sortConfig={effectiveSort} onSort={handleSort} style={{ width: '11%' }} />
+                  )}
+                  <th style={{ textAlign: 'right' }}>
+                    <span className="hr-sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(e => {
+                  const code = e.employee_code || `#${e.id}`;
+                  const inactive = e.status === 'Inactive';
+                  return (
+                    <tr key={e.id}>
+                      <td style={{ ...tabular, color: MUTED }}>{code}</td>
+                      <td
+                        className="hr-cell-strong"
+                        style={{ whiteSpace: 'nowrap', ...(showStatus && inactive ? { color: MUTED } : null) }}
+                      >
+                        {e.name}
+                      </td>
+                      <td style={tabular}>{e.cnic || EMPTY_CELL}</td>
+                      <td style={tabular}>{e.phone ? formatPhone(e.phone) : EMPTY_CELL}</td>
+                      <td>
+                        <span className={`badge ${e.role === 'Salesman' ? 'badge-blue' : 'badge-teal'}`}>{e.role}</span>
+                      </td>
+                      {showStatus && (
                         <td>
-                          <span className={`badge ${e.role === 'Salesman' ? 'badge-blue' : 'badge-teal'}`}>{e.role}</span>
+                          {inactive
+                            ? <span title={inactiveTitle(e)}><StatusBadge status={e.status} /></span>
+                            : <StatusBadge status={e.status} />}
                         </td>
-                        {showStatus && (
-                          <td>
-                            {inactive
-                              ? <span title={inactiveTitle(e)}><StatusBadge status={e.status} /></span>
-                              : <StatusBadge status={e.status} />}
-                          </td>
-                        )}
-                        <td style={{ textAlign: 'right' }}>
-                          <KebabMenu
-                            label={`Actions for ${e.name} (${code})`}
-                            items={[
-                              { label: 'Edit details', icon: 'edit', onClick: () => openEdit(e) },
-                              inactive
-                                ? { label: 'Reactivate', icon: 'person_check', onClick: () => openStatusDialog(e) }
-                                : { label: 'Deactivate', icon: 'person_off', onClick: () => openStatusDialog(e) },
-                              { divider: true },
-                              {
-                                label: 'Delete',
-                                icon: 'delete',
-                                danger: true,
-                                disabled: !!e.in_use,
-                                title: e.in_use ? 'Used on sales or recoveries. Deactivate instead.' : undefined,
-                                onClick: () => { setSelected(e); setDeleteModal(true); },
-                              },
-                            ]}
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+                      )}
+                      <td style={{ textAlign: 'right' }}>
+                        <KebabMenu
+                          label={`Actions for ${e.name} (${code})`}
+                          items={[
+                            { label: 'Edit details', icon: 'edit', onClick: () => openEdit(e) },
+                            inactive
+                              ? { label: 'Reactivate', icon: 'person_check', onClick: () => openStatusDialog(e) }
+                              : { label: 'Deactivate', icon: 'person_off', onClick: () => openStatusDialog(e) },
+                            { divider: true },
+                            {
+                              label: 'Delete',
+                              icon: 'delete',
+                              danger: true,
+                              disabled: !!e.in_use,
+                              title: e.in_use ? 'Used on sales or recoveries. Deactivate instead.' : undefined,
+                              onClick: () => { setSelected(e); setDeleteModal(true); },
+                            },
+                          ]}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <Modal isOpen={modal} onClose={() => setModal(false)}

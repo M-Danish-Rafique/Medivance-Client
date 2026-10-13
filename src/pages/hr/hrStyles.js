@@ -153,6 +153,45 @@ export const HR_STYLES = `
   .hr-select-option:focus-visible { background: var(--gray-100); outline: none; }
   .hr-select-option.is-selected { color: var(--navy); font-weight: 700; }
   .hr-select-option-label { flex: 1; }
+  /* Muted trailing detail on an option: stock on hand, a unit. */
+  .hr-select-option-hint {
+    margin-left: auto;
+    padding-left: 16px;
+    color: var(--gray-500);
+    font-size: 12px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  .hr-select-option:disabled { color: var(--gray-400); cursor: not-allowed; background: transparent; }
+  .hr-select-option:disabled .hr-select-option-hint { color: var(--gray-400); }
+  .hr-select-empty { padding: 10px 11px; font-size: 12.5px; color: var(--gray-500); }
+  .hr-select-placeholder { color: var(--gray-400); font-weight: 400; }
+
+  /* Form variant: full width, .form-control height (8px + 1.5px border,
+     13.5px at 1.4 line height = 37.9px), error and disabled states. */
+  .hr-select.is-block { display: block; width: 100%; }
+  .hr-select-trigger.is-block { display: flex; width: 100%; min-width: 0; padding: 8px 10px 8px 12px; gap: 8px; }
+  .hr-select-trigger.is-block .hr-select-value { overflow: hidden; text-overflow: ellipsis; }
+  .hr-select-trigger.is-invalid { border-color: var(--red); }
+  .hr-select-trigger:disabled { background: var(--gray-50); color: var(--gray-500); cursor: not-allowed; }
+  .hr-select-trigger:disabled .hr-select-caret { opacity: 0.5; }
+
+  /* Portal lists (Select and SearchSelect inside dialogs) sit above the
+     modal layer (200). Position and size come from useAnchoredDropdown. */
+  .hr-select-menu.is-portal { position: fixed; z-index: 260; }
+  .hr-search-menu.is-portal {
+    position: fixed;
+    z-index: 260;
+    overflow-y: auto;
+    padding: 5px;
+    background: white;
+    border: 1px solid var(--gray-200);
+    border-radius: 10px;
+    box-shadow: var(--shadow-lg);
+    animation: hrPageIn 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .hr-search-menu .hr-kebab-item[aria-disabled="true"] { color: var(--gray-400); cursor: not-allowed; }
+  .hr-search-menu .hr-kebab-item[aria-disabled="true"]:hover { background: transparent; }
 
   /* Status capsule used inside the select and beside section titles. */
   .hr-tag {
@@ -1430,15 +1469,7 @@ export const HR_STYLES = `
   .att-save-status.is-saved { color: var(--gray-500); }
 
   .att-scroll { overflow: auto; max-height: 64vh; }
-  /* A table that ends its card must end on the card's curve. .card does not
-     clip, so a filled last row (the totals footer, or a hovered row) painted
-     square corners over the card's rounded ones and its border. The scroll
-     box already clips (overflow: auto), so rounding it clips the table to
-     the curve — inset by the card's 1px border so the two radii are concentric. */
-  .card > .att-scroll:last-child {
-    border-bottom-left-radius: calc(var(--radius-lg) - 1px);
-    border-bottom-right-radius: calc(var(--radius-lg) - 1px);
-  }
+  /* Ending a card on its curve: global.css (.card > .att-scroll:last-child). */
   .att-table { width: 100%; min-width: 720px; border-collapse: collapse; table-layout: fixed; font-size: 13px; }
   .att-table thead th {
     position: sticky;

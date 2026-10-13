@@ -24,7 +24,7 @@ const navItems = [
   { path: '/manufacturing/products',      icon: 'category',   label: 'Mfg. Products',    perm: 'perm_mfg_products' },
   { path: '/manufacturing/raw-materials', icon: 'science',    label: 'Raw Materials',     perm: 'perm_mfg_raw_materials' },
   { path: '/manufacturing/batches',       icon: 'warehouse',  label: 'Batches',           perm: 'perm_mfg_batches' },
-  { path: '/manufacturing/yields',        icon: 'inventory_2',label: 'Yield (End Product)',perm: 'perm_mfg_yields' },
+  { path: '/manufacturing/yields',        icon: 'inventory_2',label: 'Yield',             perm: 'perm_mfg_yields' },
   { section: 'Workforce' },
   { path: '/hr/employees',     icon: 'badge',            label: 'Employees (HR)',    perm: 'perm_hr_employees' },
   { path: '/hr/attendance',    icon: 'event_available',  label: 'Attendance',        perm: 'perm_hr_attendance' },

@@ -1,438 +1,180 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
-import Modal from '../../components/common/Modal';
+import DateInput from '../../components/common/DateInput';
 import api from '../../utils/api';
-import { formatCurrency, formatDecimal } from '../../utils/formatters';
-import { formatDatePKT } from '../../utils/dateUtils';
 import toast from 'react-hot-toast';
-import { toBase, fromBase } from '../../utils/uom';
+import { todayPKT } from '../../utils/dateUtils';
+import { HrStyles, Segmented, TableSkeleton, useSort, sortRows, fmtAmount, fmtDate, num } from '../hr/HrKit';
+import { MfgStyles, Picker, NameWithTag, Rate, SortHead, fmtQty } from './mfgKit';
+import { byQtyLabel } from './batchKit';
 
-const emptyComputed = {
-  _product: null, _pack_volume_base: 0, _tax_rate: 0, _uom_error: null,
-  _batch_cost_per_unit: 0, _pkg_cost_per_unit: 0, _total_unit_cost: 0, _unit_cost_with_tax: 0,
-  _volume_base: 0, _profit_pct: null, _sale_rate: 0,
+// ─── Yield: production output record ───────────────────────────────────────
+// Read-only (brief section 3): one row per item a batch sent to inventory,
+// packs and by-products alike. Sending happens on the Batches page.
+// Filters: date range (this month by default), product, type, batch code.
+// Every column sorts (newest sent first by default); the total row stays last.
+
+const tabular = { fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
+const monthStart = () => `${todayPKT().slice(0, 8)}01`;
+const byQtyAmount = (r) => (r.is_by_product && r.uom_symbol ? num(r.qty) * (num(r.volume) || 1) : num(r.qty));
+const YIELD_SORT = {
+  sent: { value: r => r.sent_at },
+  batch_code: { value: r => r.batch_code, text: true },
+  item: { value: r => `${r.product_name} ${r.pack_size || ''}`, text: true },
+  type: { value: r => (r.is_by_product ? 'By-product' : 'Pack'), text: true },
+  batch_no: { value: r => r.batch_no, text: true },
+  expiry: { value: r => r.exp_date },
+  qty: { value: byQtyAmount },
+  cost: { value: r => num(r.cost_per_unit) },
+  value: { value: r => num(r.value) },
 };
-
-const emptyYieldItem = {
-  product_id: '', units_manufactured: '', pack_volume: '', pack_volume_uom_id: '',
-  packaging_material_ids: [],
-  ...emptyComputed,
-};
-
-const fmtPKR = formatCurrency;
-const fmtPKR2 = formatCurrency;
+const yieldOrder = (a, b) => String(b.sent_at || '').localeCompare(String(a.sent_at || '')) || b.id - a.id;
 
 export default function Yields() {
-  const [yields, setYields] = useState([]);
-  const [batches, setBatches] = useState([]);
+  const [from, setFrom] = useState(monthStart);
+  const [to, setTo] = useState(todayPKT);
+  const [productId, setProductId] = useState('');
+  const [type, setType] = useState('all');
+  const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
+  const [rows, setRows] = useState(null);
   const [products, setProducts] = useState([]);
-  const [packagingMaterials, setPackagingMaterials] = useState([]);
-  const [uoms, setUoms] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [rangeError, setRangeError] = useState(null);
+  const sort = useSort('sent', 'desc');
 
-  const [modal, setModal] = useState(false);
-  const [viewModal, setViewModal] = useState(false);
-  const [selected, setSelected] = useState(null);
-  const [viewData, setViewData] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [profitAlerts, setProfitAlerts] = useState([]);
-  const [alertModal, setAlertModal] = useState(false);
+  useEffect(() => {
+    Promise.all([api.get('/manufacturing/products'), api.get('/manufacturing/by-products')])
+      .then(([p, b]) => setProducts([...p.data, ...b.data]))
+      .catch(() => {});
+  }, []);
 
-  const [selectedBatchId, setSelectedBatchId] = useState('');
-  const [selectedBatch, setSelectedBatch] = useState(null);
-  const [yieldItems, setYieldItems] = useState([{ ...emptyYieldItem }]);
-  const [pkgMenuIndex, setPkgMenuIndex] = useState(null);
-  const [pkgTempSelection, setPkgTempSelection] = useState([]);
+  // Search waits for a pause in typing.
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
-  const load = () => {
-    setLoading(true);
-    Promise.all([
-      api.get('/manufacturing/yields'),
-      api.get('/manufacturing/batches'),
-      api.get('/products'),
-      api.get('/raw-materials?type=packaging_material'),
-      api.get('/raw-materials/uom'),
-    ]).then(([y, b, p, pkg, uom]) => {
-      setYields(y.data);
-      setBatches(b.data.filter(b => b.status === 'open'));
-      setProducts(p.data.filter(p => p.is_manufactured));
-      setPackagingMaterials(pkg.data);
-      setUoms(uom.data);
-      setLoading(false);
-    }).catch(() => setLoading(false));
-  };
-  useEffect(load, []);
+  useEffect(() => {
+    if (!from || !to) return undefined;
+    if (from > to) { setRangeError('The start date must be on or before the end date.'); return undefined; }
+    setRangeError(null);
+    let live = true;
+    setRows(null);
+    api.get('/manufacturing/yields', {
+      params: { from, to, product_id: productId || undefined, type: type === 'all' ? undefined : type, q: query || undefined },
+    }).then(r => { if (live) setRows(r.data.rows); })
+      .catch(err => { if (live) { setRows([]); toast.error(err?.response?.data?.message || 'The production record could not be loaded.'); } });
+    return () => { live = false; };
+  }, [from, to, productId, type, query]);
 
-  /* ─── When batch is selected, load its full detail ─── */
-  const handleBatchSelect = async (batchId) => {
-    setSelectedBatchId(batchId);
-    setYieldItems([{ ...emptyYieldItem }]);
-    if (!batchId) { setSelectedBatch(null); return; }
-    try {
-      const r = await api.get(`/manufacturing/batches/${batchId}`);
-      setSelectedBatch(r.data);
-    } catch { toast.error('Error loading batch'); }
-  };
-
-  const uomById = (id) => uoms.find(u => u.id === parseInt(id));
-
-  /* ─── Compute per-item costs live (mirrors POST /manufacturing/yields) ─── */
-  const computeItem = (item, batch) => {
-    const blank = { ...item, ...emptyComputed };
-    if (!batch || !item.product_id || !item.pack_volume || !item.pack_volume_uom_id) return blank;
-    const batchUom = uomById(batch.volume_uom_id);
-    const packUom = uomById(item.pack_volume_uom_id);
-    if (!batchUom || !packUom) return blank;
-    if (packUom.base_type !== batchUom.base_type) {
-      return { ...blank, _product: products.find(p => p.id === parseInt(item.product_id)), _uom_error: `${packUom.symbol} is a ${packUom.base_type} unit but this batch is measured in ${batchUom.symbol} (${batchUom.base_type})` };
-    }
-    // Both sides in base units (g / ml): 100 ml → 100, 27 L → 27,000
-    const packVolumeBase = toBase(item.pack_volume, packUom);
-    const batchVolumeBase = toBase(batch.total_volume, batchUom);
-    const costPerBaseUnit = batchVolumeBase > 0 ? parseFloat(batch.total_cost || 0) / batchVolumeBase : 0;
-
-    const batchCostPerUnit = costPerBaseUnit * packVolumeBase;
-
-    let pkgCostPerUnit = 0;
-    if (Array.isArray(item.packaging_material_ids) && item.packaging_material_ids.length > 0) {
-      pkgCostPerUnit = item.packaging_material_ids.reduce((sum, id) => {
-        const pkgMat = packagingMaterials.find(p => p.id === parseInt(id));
-        return sum + parseFloat(pkgMat?.cost_per_unit || 0);
-      }, 0);
-    }
-
-    const totalUnitCost = batchCostPerUnit + pkgCostPerUnit;
-    const prod = products.find(p => p.id === parseInt(item.product_id));
-    const taxRate = prod?.tax_applicable ? parseFloat(prod.sale_tax_pct || 0) : 0;
-    const unitCostWithTax = totalUnitCost * (1 + taxRate / 100);
-    const saleRate = parseFloat(prod?.sale_rate || 0);
-    const profitPct = saleRate > 0 ? ((saleRate - unitCostWithTax) / saleRate * 100) : null;
-    const volumeBase = packVolumeBase * (Number(item.units_manufactured) || 0);
-
-    return { ...item, _pack_volume_base: packVolumeBase, _batch_cost_per_unit: batchCostPerUnit, _pkg_cost_per_unit: pkgCostPerUnit, _total_unit_cost: totalUnitCost, _unit_cost_with_tax: unitCostWithTax, _sale_rate: saleRate, _profit_pct: profitPct, _volume_base: volumeBase, _product: prod, _tax_rate: taxRate };
-  };
-
-  const updateItem = (idx, field, value) => {
-    setYieldItems(prev => {
-      const updated = [...prev];
-      let item = { ...updated[idx], [field]: value };
-      // Auto-fill pack volume and UOM from product definition when product is selected
-      if (field === 'product_id' && value) {
-        const prod = products.find(p => p.id === parseInt(value));
-        if (prod) {
-          if (prod.volume) item.pack_volume = prod.volume;
-          if (prod.volume_uom_id) item.pack_volume_uom_id = String(prod.volume_uom_id);
-        }
-      }
-      updated[idx] = computeItem(item, selectedBatch);
-      return updated;
+  // Footer: quantity per unit ("126 units · 60 kg") and total value. A
+  // by-product's quantity is in its unit (an unconverted "25 kg Bag" row counts
+  // packs and adds qty × 25 kg).
+  const totals = useMemo(() => {
+    const perUnit = new Map();
+    let value = 0;
+    (rows || []).forEach(r => {
+      const unit = r.is_by_product ? (r.uom_symbol || 'packs') : 'units';
+      const amount = byQtyAmount(r);
+      perUnit.set(unit, (perUnit.get(unit) || 0) + amount);
+      value += num(r.value);
     });
-  };
+    return { qty: [...perUnit.entries()].map(([u, q]) => fmtQty(q, u)).join(' · '), value };
+  }, [rows]);
+  const shown = useMemo(() => (rows ? sortRows(rows, sort.sortConfig, YIELD_SORT, yieldOrder) : rows), [rows, sort.sortConfig]);
 
-  /* ─── Total volume check ─── */
-  const totalPackagedBase = useMemo(() =>
-    yieldItems.reduce((s, i) => s + (parseFloat(i._volume_base) || 0), 0),
-    [yieldItems]
-  );
-
-  const volUom = selectedBatch ? uomById(selectedBatch.volume_uom_id) : null;
-  const batchVolumeBase = selectedBatch && volUom ? toBase(selectedBatch.total_volume, volUom) : 0;
-  // Shown to the user in the batch's own unit (e.g. L), never in raw base units
-  const inBatchUom = (base) => `${formatDecimal(fromBase(base, volUom), 4)} ${volUom?.symbol || ''}`;
-
-  const volumeDiff = Math.abs(totalPackagedBase - batchVolumeBase);
-  const volumeOk = batchVolumeBase > 0 && volumeDiff <= batchVolumeBase * 0.01 + 1;
-
-  /* ─── Save ─── */
-  const handleSave = async () => {
-    if (!selectedBatchId) return toast.error('Select a batch');
-    const validItems = yieldItems.filter(i => i.product_id && i.units_manufactured && i.pack_volume && i.pack_volume_uom_id);
-    if (!validItems.length) return toast.error('Add at least one yield item');
-    const uomError = validItems.find(i => i._uom_error);
-    if (uomError) return toast.error(`Product "${uomError._product?.name || uomError.product_id}": ${uomError._uom_error}`);
-    if (validItems.some(i => !Number.isInteger(Number(i.units_manufactured)) || Number(i.units_manufactured) <= 0)) {
-      return toast.error('Units must be a whole number greater than 0');
-    }
-    if (!volumeOk) return toast.error(`Volume mismatch: batch has ${inBatchUom(batchVolumeBase)}, yield packs ${inBatchUom(totalPackagedBase)}`);
-
-    // Check if any sale rate < cost
-    for (const item of validItems) {
-      if (item._sale_rate > 0 && item._unit_cost_with_tax > item._sale_rate) {
-        return toast.error(`Product "${item._product?.name}": purchase cost (${fmtPKR2(item._unit_cost_with_tax)}) exceeds sale rate (${fmtPKR2(item._sale_rate)}). Adjust sale rate first.`);
-      }
-    }
-
-    setSaving(true);
-    try {
-      const res = await api.post('/manufacturing/yields', { batch_id: selectedBatchId, items: validItems });
-      if (res.data.profit_alerts?.length) {
-        setProfitAlerts(res.data.profit_alerts);
-        setAlertModal(true);
-      } else {
-        toast.success(`Yield ${res.data.yield_code} created! Products added to inventory.`);
-      }
-      setModal(false);
-      setSelectedBatchId(''); setSelectedBatch(null); setYieldItems([{ ...emptyYieldItem }]);
-      load();
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Error creating yield');
-    } finally { setSaving(false); }
-  };
-
-  const openView = async (y) => {
-    try {
-      const r = await api.get(`/manufacturing/yields/${y.id}`);
-      setViewData(r.data); setViewModal(true);
-    } catch { toast.error('Error loading yield'); }
-  };
+  const productOptions = [
+    { value: '', label: 'All products' },
+    ...products.map(p => ({ value: p.id, label: `${p.name} · ${p.pack_size}`, hint: p.is_by_product ? 'By-product' : undefined })),
+  ];
 
   return (
-    <Layout title="Manufacturing — Yield (End Products)">
-      {/* Profit alert modal */}
-      {alertModal && (
-        <div className="modal-backdrop">
-          <div className="modal modal-sm">
-            <div className="modal-header">
-              <div className="modal-title"><span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: 'middle', marginRight: 8 }}>warning</span>Low Profit Warning</div>
-            </div>
-            <div className="modal-body">
-              <div className="alert alert-warning" style={{ marginBottom: 12 }}>
-                The following products have profit margin below 15%. Consider adjusting their sale rate.
-              </div>
-              {profitAlerts.map((a, i) => (
-                <div key={i} style={{ padding: '8px 12px', background: 'var(--gray-50)', borderRadius: 8, marginBottom: 6, fontSize: 13 }}>
-                  <div style={{ fontWeight: 700 }}>Product ID: {a.product_id}</div>
-                  <div>Cost: {fmtPKR2(a.cost)} | Sale Rate: {fmtPKR2(a.sale_rate)} | Profit: <strong style={{ color: 'var(--red)' }}>{formatDecimal(a.profit_pct, 1)}%</strong></div>
-                </div>
-              ))}
-              <p style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 10 }}>Yield has been saved. Update sale rates from the Products module.</p>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-primary" onClick={() => { setAlertModal(false); setProfitAlerts([]); toast.success('Yield created! Products added to inventory.'); }}>Understood</button>
-            </div>
-          </div>
-        </div>
-      )}
-
+    <Layout title="Yield">
+      <HrStyles />
+      <MfgStyles />
       <div className="card">
         <div className="card-header">
-          <div>
-            <div className="card-title">Yield — End Products</div>
-            <div className="text-sm text-muted mt-1">{yields.length} yield records</div>
-          </div>
-          <button className="btn btn-primary" onClick={() => { setSelectedBatchId(''); setSelectedBatch(null); setYieldItems([{ ...emptyYieldItem }]); setModal(true); }}>+ Add Yield</button>
+          <div className="card-title">Production output</div>
         </div>
-        <div className="table-wrap">
-          {loading ? <div className="loading-center"><div className="spinner" /></div>
-          : yields.length === 0
-            ? <div className="empty-state"><div className="empty-state-icon"><span className="material-symbols-outlined" style={{ fontSize: 28 }}>inventory_2</span></div><div className="empty-state-title">No yields yet</div><div className="empty-state-desc">Create a yield from an open batch</div></div>
-            : <table>
-                <thead>
-                  <tr><th>Batch Code</th><th>Batch Date</th><th>Expiry</th><th>Items</th><th>Total Cost</th><th style={{ textAlign: 'right' }}>Actions</th></tr>
-                </thead>
-                <tbody>
-                  {yields.map(y => (
-                    <tr key={y.id}>
-                      <td className="mono" style={{ color: 'var(--gray-700)' }}>{y.batch_code}</td>
-                      <td>{formatDatePKT(y.batch_date)}</td>
-                      <td>{formatDatePKT(y.expiry_date)}</td>
-                      <td>{y.item_count} SKUs</td>
-                      <td style={{ fontWeight: 700 }}>{fmtPKR2(y.total_cost)}</td>
-                      <td style={{ textAlign: 'right' }}>
-                        <button className="btn btn-outline btn-sm btn-icon" title="View yield" onClick={() => openView(y)}><span className="material-symbols-outlined" style={{ fontSize: 16 }}>visibility</span></button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>}
-        </div>
-      </div>
-
-      {/* Yield Modal */}
-      <Modal isOpen={modal} onClose={() => setModal(false)} title="Create Yield — End Products from Batch" size="xl"
-        footer={
-          <div className="flex items-center justify-between w-full">
-            <div style={{ display: 'flex', gap: 16, fontSize: 13, alignItems: 'center' }}>
-              {selectedBatch && (
-                <>
-                  {!volUom && <span style={{ color: 'var(--red)', fontWeight: 700 }}>This batch has no valid volume unit</span>}
-                  {volUom && <span>Batch Volume: <strong>{inBatchUom(batchVolumeBase)}</strong></span>}
-                  {volUom && <span>Packaged: <strong style={{ color: volumeOk ? 'var(--green)' : 'var(--red)' }}>{inBatchUom(totalPackagedBase)}</strong></span>}
-                  {!volumeOk && batchVolumeBase > 0 && <span style={{ color: 'var(--red)', fontWeight: 700 }}>Volume mismatch: {totalPackagedBase < batchVolumeBase ? 'short' : 'over'} by {inBatchUom(volumeDiff)}</span>}
-                  {volumeOk && batchVolumeBase > 0 && <span style={{ color: 'var(--green)', fontWeight: 700 }}>Volume matched</span>}
-                </>
-              )}
+        <div className="mfg-filterbar">
+          <div className="mfg-filters">
+            <div className="mfg-filter-range">
+              <DateInput aria-label="From date" value={from} max={to || undefined} onChange={e => setFrom(e.target.value)} style={{ width: 136 }} />
+              <span aria-hidden="true">to</span>
+              <DateInput aria-label="To date" value={to} min={from || undefined} onChange={e => setTo(e.target.value)} style={{ width: 136 }} />
             </div>
-            <div className="flex gap-2">
-              <button className="btn btn-outline" onClick={() => setModal(false)}>Cancel</button>
-              <button className="btn btn-primary btn-lg" onClick={handleSave} disabled={saving || !volumeOk}>
-                {saving ? 'Creating...' : 'Create Yield & Add to Inventory'}
-              </button>
+            <div style={{ width: 180 }}>
+              <Picker ariaLabel="Product" value={productId} options={productOptions} placeholder="All products"
+                searchPlaceholder="All products" onChange={setProductId} />
+            </div>
+            <Segmented
+              ariaLabel="Type"
+              value={type}
+              onChange={setType}
+              options={[{ val: 'all', label: 'All' }, { val: 'pack', label: 'Packs' }, { val: 'by_product', label: 'By-products' }]}
+            />
+            <div className="search-bar">
+              <span className="material-symbols-outlined" aria-hidden="true">search</span>
+              <input placeholder="Search batch code" aria-label="Search by batch code" value={search} onChange={e => setSearch(e.target.value)} style={{ width: 140 }} />
             </div>
           </div>
-        }>
-
-        {/* Batch selection */}
-        <div className="form-group" style={{ marginBottom: 20 }}>
-          <label className="form-label">Select Open Batch *</label>
-          <select className="form-control" style={{ maxWidth: 400 }} value={selectedBatchId} onChange={e => handleBatchSelect(e.target.value)}>
-            <option value="">— Select a batch —</option>
-            {batches.map(b => <option key={b.id} value={b.id}>{b.batch_code} — {b.category_name || 'No Category'} — {formatDecimal(b.total_volume)} {b.vol_uom_symbol} — {fmtPKR2(b.total_cost)}</option>)}
-          </select>
         </div>
 
-        {selectedBatch && (
-          <div style={{ display: 'flex', gap: 12, marginBottom: 18, padding: '10px 14px', background: 'var(--blue-ultra)', border: '1px solid var(--blue-pale)', borderRadius: 10, fontSize: 12 }}>
-            <div><span style={{ color: 'var(--gray-500)' }}>Batch:</span> <strong>{selectedBatch.batch_code}</strong></div>
-            <div><span style={{ color: 'var(--gray-500)' }}>Expiry:</span> <strong>{formatDatePKT(selectedBatch.expiry_date)}</strong></div>
-            <div><span style={{ color: 'var(--gray-500)' }}>Total Cost:</span> <strong>{fmtPKR2(selectedBatch.total_cost)}</strong></div>
-            {volUom && parseFloat(selectedBatch.total_volume) > 0 && (
-              <div><span style={{ color: 'var(--gray-500)' }}>Cost per {volUom.symbol}:</span> <strong>{fmtPKR(parseFloat(selectedBatch.total_cost) / parseFloat(selectedBatch.total_volume))}</strong></div>
-            )}
+        {rangeError ? (
+          <div className="hr-empty hr-empty-sm" role="alert">
+            <div className="hr-empty-icon"><span className="material-symbols-outlined" aria-hidden="true">date_range</span></div>
+            <div className="hr-empty-title">{rangeError}</div>
           </div>
-        )}
-
-        <div className="divider" />
-        <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--gray-700)', marginBottom: 10 }}>
-          Yield Items — Define packaged SKUs
-        </div>
-
-        {/* Column headers */}
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1.2fr 1.7fr 1fr 1fr 1fr 36px', gap: 5, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 6, fontSize: 9.5, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase' }}>
-          <span>Product</span><span>Units</span><span>Pack Vol</span><span>Vol UOM</span><span>Packaging Mat.</span><span>Batch Cost/u</span><span>Pkg Cost/u</span><span>Total Cost/u</span><span></span>
-        </div>
-
-        {yieldItems.map((item, idx) => {
-          const profitColor = item._profit_pct === null ? 'var(--gray-400)'
-            : item._unit_cost_with_tax > item._sale_rate ? 'var(--red)'
-            : item._profit_pct < 15 ? 'var(--amber)' : 'var(--green)';
-
-          return (
-            <div key={idx} style={{ marginBottom: 8 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1.2fr 1.7fr 1fr 1fr 1fr 36px', gap: 5, alignItems: 'center', padding: '7px 8px', background: 'white', border: `1.5px solid ${item._profit_pct !== null && item._unit_cost_with_tax > item._sale_rate ? 'var(--red)' : item._profit_pct !== null && item._profit_pct < 15 ? '#fde68a' : 'var(--gray-200)'}`, borderRadius: 8 }}>
-                <select className="form-control" style={{ fontSize: 12, padding: '5px 7px' }}
-                  value={item.product_id} onChange={e => updateItem(idx, 'product_id', e.target.value)}>
-                  <option value="">— Product —</option>
-                  {products.map(p => <option key={p.id} value={p.id}>{p.name} ({p.pack_size || '—'})</option>)}
-                </select>
-                <input className="form-control" type="number" min="1" step="1" style={{ fontSize: 12, padding: '5px 7px' }} placeholder="Units"
-                  value={item.units_manufactured} onChange={e => updateItem(idx, 'units_manufactured', e.target.value)} />
-                <input className="form-control" type="number" step="0.01" style={{ fontSize: 12, padding: '5px 7px' }} placeholder="Vol"
-                  value={item.pack_volume} onChange={e => updateItem(idx, 'pack_volume', e.target.value)} />
-                <select className="form-control" style={{ fontSize: 12, padding: '5px 7px' }}
-                  value={item.pack_volume_uom_id} onChange={e => updateItem(idx, 'pack_volume_uom_id', e.target.value)}>
-                  <option value="">— UOM —</option>
-                  {uoms.filter(u => (volUom ? u.base_type === volUom.base_type : u.base_type !== 'count') || u.id === parseInt(item.pack_volume_uom_id)).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                </select>
-                <div style={{ display: 'flex', justifyContent: 'center', position: 'relative' }}>
-                  <button type="button" className="btn btn-outline btn-sm" onClick={() => {
-                    setPkgMenuIndex(idx);
-                    // normalize temp selection to strings for checkbox matching
-                    setPkgTempSelection(Array.isArray(item.packaging_material_ids) ? item.packaging_material_ids.map(String) : []);
-                  }}>{(item.packaging_material_ids?.length) ? `+Add (${item.packaging_material_ids.length})` : '+Add'}</button>
-                  {pkgMenuIndex === idx && (
-                    <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 60, background: 'white', border: '1px solid var(--gray-200)', boxShadow: '0 6px 18px rgba(0,0,0,0.08)', padding: 12, borderRadius: 8, marginTop: 6, minWidth: 260 }}>
-                      <div style={{ maxHeight: 220, overflow: 'auto' }}>
-                        {packagingMaterials.map(p => (
-                          <label key={p.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 4px' }}>
-                            <input type="checkbox" checked={pkgTempSelection.includes(String(p.id)) || pkgTempSelection.includes(p.id)} onChange={e => {
-                              const val = String(p.id);
-                              setPkgTempSelection(prev => e.target.checked ? Array.from(new Set([...prev, val])) : prev.filter(x => x !== val));
-                            }} />
-                            <span style={{ fontSize: 13 }}>{p.name}{p.volume ? ` (${p.volume}${p.vol_uom_symbol || ''})` : ''}</span>
-                          </label>
-                        ))}
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-                        <button className="btn btn-outline btn-sm" onClick={() => { setPkgMenuIndex(null); setPkgTempSelection([]); }}>Cancel</button>
-                        <button className="btn btn-primary btn-sm" onClick={() => { updateItem(idx, 'packaging_material_ids', pkgTempSelection.map(x => parseInt(x))); setPkgMenuIndex(null); setPkgTempSelection([]); }}>Continue</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              {/* Selected packaging materials count shown on button; chips removed to keep row height consistent */}
-              <div style={{ fontSize: 11, textAlign: 'right', color: 'var(--gray-600)', padding: '0 4px' }}>
-                {item._batch_cost_per_unit > 0 ? fmtPKR(item._batch_cost_per_unit) : '—'}
-              </div>
-                <div style={{ fontSize: 11, textAlign: 'right', color: 'var(--gray-600)', padding: '0 4px' }}>
-                  {item._pkg_cost_per_unit > 0 ? fmtPKR(item._pkg_cost_per_unit) : '—'}
-                </div>
-                <div style={{ fontSize: 11, textAlign: 'right', fontWeight: 700, color: 'var(--navy)', padding: '0 4px' }}>
-                  {item._unit_cost_with_tax > 0 ? fmtPKR2(item._unit_cost_with_tax) : '—'}
-                </div>
-                <button className="btn btn-danger btn-icon btn-sm" onClick={() => setYieldItems(p => p.filter((_, i) => i !== idx))}
-                  disabled={yieldItems.length === 1} aria-label="Remove row"
-                  style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, padding: 0, borderRadius: 4, lineHeight: 1, boxSizing: 'border-box' }}>
-                  <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true" focusable="false" style={{ display: 'block' }}>
-                    <path d="M2 2l8 8M10 2L2 10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                  </svg>
-                </button>
-              </div>
-              {/* Per-row info strip */}
-              {item._uom_error && (
-                <div style={{ padding: '5px 10px', background: 'var(--gray-50)', borderRadius: '0 0 8px 8px', fontSize: 11, fontWeight: 700, color: 'var(--red)' }}>
-                  Unit mismatch: {item._uom_error}. Pick a {volUom?.base_type} unit.
-                </div>
-              )}
-              {item._product && item._unit_cost_with_tax > 0 && (
-                <div style={{ display: 'flex', gap: 16, padding: '5px 10px', background: 'var(--gray-50)', borderRadius: '0 0 8px 8px', fontSize: 11, borderTop: 'none' }}>
-                  <span style={{ color: 'var(--gray-500)' }}>Sale Rate: <strong>{fmtPKR2(item._sale_rate)}</strong></span>
-                  {item._tax_rate > 0 && <span style={{ color: 'var(--gray-500)' }}>Tax: <strong>{item._tax_rate}%</strong></span>}
-                  <span style={{ color: 'var(--gray-500)' }}>Volume used: <strong>{inBatchUom(item._volume_base)}</strong></span>
-                  <span style={{ fontWeight: 700, color: profitColor }}>
-                    Profit: {item._profit_pct !== null ? `${formatDecimal(item._profit_pct, 1)}%` : '—'}
-                    {item._unit_cost_with_tax > item._sale_rate && ' ⛔ Cost exceeds sale rate!'}
-                    {item._profit_pct !== null && item._profit_pct >= 0 && item._profit_pct < 15 && item._unit_cost_with_tax <= item._sale_rate && ' ⚠ Below 15%'}
-                  </span>
-                </div>
-              )}
-            </div>
-          );
-        })}
-
-        <button className="btn btn-outline btn-sm mt-2" onClick={() => setYieldItems(p => [...p, { ...emptyYieldItem }])}>+ Add Product Row</button>
-      </Modal>
-
-      {/* View Yield Modal */}
-      <Modal isOpen={viewModal} onClose={() => setViewModal(false)} title={`Yield: ${viewData?.yield_code}`} size="lg">
-        {viewData && (
-          <div>
-            <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-              {[
-                { label: 'Yield Code', val: viewData.yield_code },
-                { label: 'Batch Code', val: viewData.batch_code },
-                { label: 'Batch Date', val: formatDatePKT(viewData.batch_date) },
-                { label: 'Expiry', val: formatDatePKT(viewData.expiry_date) },
-                { label: 'Total Batch Cost', val: fmtPKR2(viewData.total_cost) },
-              ].map((s, i) => (
-                <div key={i} style={{ padding: '8px 12px', background: 'var(--gray-50)', borderRadius: 8, minWidth: 120 }}>
-                  <div style={{ fontSize: 10, color: 'var(--gray-500)', marginBottom: 2 }}>{s.label}</div>
-                  <div style={{ fontWeight: 700 }}>{s.val}</div>
-                </div>
-              ))}
-            </div>
-            <table>
+        ) : rows === null ? (
+          <div style={{ padding: '8px 22px' }}><TableSkeleton columns={8} rows={5} /></div>
+        ) : rows.length === 0 ? (
+          <div className="hr-empty">
+            <div className="hr-empty-icon"><span className="material-symbols-outlined" aria-hidden="true">inventory_2</span></div>
+            <div className="hr-empty-title">Nothing was sent to inventory in this period.</div>
+          </div>
+        ) : (
+          <div className="hr-page-scroll">
+            <table className="hr-table hr-page-table mfg-compact">
               <thead>
-                <tr><th>Product</th><th>Units</th><th>Pack Vol</th><th>Packaging Materials</th><th>Batch Cost/u</th><th>Pkg Cost/u</th><th>Total Cost/u</th><th>Added to Inv.</th></tr>
+                <tr>
+                  <SortHead sort={sort} column="sent" label="Date sent" date style={{ width: '10%' }} />
+                  <SortHead sort={sort} column="batch_code" label="Batch code" style={{ width: '11%' }} />
+                  <SortHead sort={sort} column="item" label="Item" />
+                  <SortHead sort={sort} column="type" label="Type" style={{ width: '9%' }} />
+                  <SortHead sort={sort} column="batch_no" label="Batch no." style={{ width: '12%' }} />
+                  <SortHead sort={sort} column="expiry" label="Expiry" date style={{ width: '9%' }} />
+                  <SortHead sort={sort} column="qty" label="Qty" title="Quantity" num style={{ width: '9%' }} />
+                  <SortHead sort={sort} column="cost" label="Unit cost" title="Cost per unit" num style={{ width: '10%' }} />
+                  <SortHead sort={sort} column="value" label="Value (PKR)" num style={{ width: '11%' }} />
+                </tr>
               </thead>
               <tbody>
-                {(viewData.items || []).map((item, i) => (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 600 }}>{item.product_name}</td>
-                    <td>{item.units_manufactured}</td>
-                    <td>{formatDecimal(item.pack_volume)} {item.pack_uom_symbol || ''}</td>
-                    <td>{item.pkg_material_names || '—'}</td>
-                    <td className="mono">{fmtPKR(item.batch_cost_per_unit)}</td>
-                    <td className="mono">{fmtPKR(item.packaging_cost_per_unit)}</td>
-                    <td style={{ fontWeight: 700 }}>{fmtPKR2(item.unit_cost_with_tax)}</td>
-                    <td>{item.added_to_inventory ? <span className="badge badge-green">Yes</span> : <span className="badge badge-gray">No</span>}</td>
+                {shown.map(r => (
+                  <tr key={r.id}>
+                    <td style={tabular}>{fmtDate(String(r.sent_at || '').slice(0, 10))}</td>
+                    <td style={tabular}><Link className="mfg-link" to={`/manufacturing/batches/${r.batch_id}`}>{r.batch_code}</Link></td>
+                    <td><NameWithTag name={r.product_name} tag={r.pack_size} /></td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{r.is_by_product ? 'By-product' : 'Pack'}</td>
+                    <td style={tabular}>{r.batch_no}</td>
+                    <td style={tabular}>{fmtDate(r.exp_date)}</td>
+                    <td className="hr-num">{r.is_by_product ? byQtyLabel(r) : fmtQty(r.qty)}</td>
+                    <td className="hr-num"><Rate value={r.cost_per_unit} /></td>
+                    <td className="hr-num">{fmtAmount(r.value)}</td>
                   </tr>
                 ))}
               </tbody>
+              <tfoot>
+                <tr className="mfg-total-row">
+                  <td colSpan={6}>{`Total · ${rows.length} ${rows.length === 1 ? 'item' : 'items'}`}</td>
+                  <td colSpan={2} className="hr-num">{totals.qty}</td>
+                  <td className="hr-num">{fmtAmount(totals.value)}</td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         )}
-      </Modal>
+      </div>
     </Layout>
   );
 }

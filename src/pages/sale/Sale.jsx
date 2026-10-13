@@ -13,6 +13,7 @@ import usePagination from '../../hooks/usePagination';
 import { useAuth } from '../../context/AuthContext';
 import CustomerAutocomplete from '../../components/common/CustomerAutocomplete';
 
+import DateInput from '../../components/common/DateInput';
 const emptySaleItem = {
   row_id: null,
   product_id: '', product_search: '', product_name: '', pack_size: '', batch_no: '',
@@ -360,7 +361,7 @@ function SaleFormBody({
         </div>
         <div className="form-group" style={{ margin: 0 }}>
           <label className="form-label">Date *</label>
-          <input className="form-control" type="date" value={header.date} onChange={e => setHeader(p => ({ ...p, date: e.target.value }))} />
+          <DateInput className="form-control" value={header.date} onChange={e => setHeader(p => ({ ...p, date: e.target.value }))} />
         </div>
       </div>
 
@@ -1322,12 +1323,12 @@ export default function Sale() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 14 }}>
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label">Date From</label>
-                <input className="form-control" type="date" value={draftFilters.date_from}
+                <DateInput className="form-control" value={draftFilters.date_from}
                   onChange={e => setDraftFilters(p => ({ ...p, date_from: e.target.value }))} />
               </div>
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label">Date To</label>
-                <input className="form-control" type="date" value={draftFilters.date_to}
+                <DateInput className="form-control" value={draftFilters.date_to}
                   onChange={e => setDraftFilters(p => ({ ...p, date_to: e.target.value }))} />
               </div>
               <div className="form-group" style={{ margin: 0 }}>

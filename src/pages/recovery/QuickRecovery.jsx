@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { formatCurrency } from '../../utils/formatters';
 import { todayPKT, formatDatePKT } from '../../utils/dateUtils';
 import { blockWheelChange } from './recoveryUtils';
+import DateInput from '../../components/common/DateInput';
 import {
   ArrowLeft, RefreshCw, CheckSquare, Square, Search,
   AlertCircle, CheckCircle2, XCircle, Loader2,
@@ -206,12 +207,12 @@ export default function QuickRecovery() {
           >
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">From Date</label>
-              <input type="date" className="form-control" value={dateFrom}
+              <DateInput className="form-control" value={dateFrom}
                 onChange={e => { setDateFrom(e.target.value); setFiltersDirty(true); }} />
             </div>
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">To Date</label>
-              <input type="date" className="form-control" value={dateTo}
+              <DateInput className="form-control" value={dateTo}
                 onChange={e => { setDateTo(e.target.value); setFiltersDirty(true); }} />
             </div>
             <div className="form-group" style={{ margin: 0 }}>
@@ -296,7 +297,7 @@ export default function QuickRecovery() {
             <div className="flex items-center gap-3" style={{ flexWrap: 'wrap' }}>
               <div className="form-group" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <label className="form-label" style={{ margin: 0, whiteSpace: 'nowrap' }}>Recovery Date</label>
-                <input type="date" className="form-control" style={{ width: 'auto' }}
+                <DateInput className="form-control" style={{ width: 'auto' }}
                   value={recoveryDate} onChange={e => setRecoveryDate(e.target.value)} />
               </div>
               <button className="btn btn-ghost btn-sm" onClick={fetchInvoices} title="Refresh"

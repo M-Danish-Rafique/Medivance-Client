@@ -11,6 +11,7 @@ import usePagination from '../../hooks/usePagination';
 // "2026-10" -> "October 2026", exactly as Payroll names the Pay Run.
 import { fmtMonth } from '../hr/HrKit';
 
+import DateInput from '../../components/common/DateInput';
 const today = () => todayPKT();
 const emptyForm = () => ({ date: today(), category: 'Expense', description: '', expense_type_id: '', supplier_id: '', customer_id: '', amount: '', payment_type: '' });
 
@@ -179,7 +180,7 @@ export default function Finance() {
         <div className="form-grid form-grid-2">
           <div className="form-group">
             <label className="form-label">Date *</label>
-            <input className="form-control" type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} />
+            <DateInput className="form-control" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} />
           </div>
           <div className="form-group">
             <label className="form-label">Category *</label>

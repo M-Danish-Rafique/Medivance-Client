@@ -27,6 +27,9 @@ import QuickRecovery from './pages/recovery/QuickRecovery';
 import QuickReturn from './pages/recovery/QuickReturn';
 import RawMaterials from './pages/manufacturing/RawMaterials';
 import Batches from './pages/manufacturing/Batches';
+import BatchEditor from './pages/manufacturing/BatchEditor';
+import BatchRecord from './pages/manufacturing/BatchRecord';
+import BatchSheet from './pages/manufacturing/BatchSheet';
 import Yields from './pages/manufacturing/Yields';
 import ManufacturedProducts from './pages/manufacturing/ManufacturedProducts';
 import TaxLedger from './pages/manufacturing/TaxLedger';
@@ -73,6 +76,7 @@ export default function App() {
                   route with no app shell, rendered client-side and handed to
                   the browser's own print / Save-as-PDF dialog. */}
               <Route path="/hr/salary-slips/print" element={<PrivateRoute><SalarySlipBatchPrint /></PrivateRoute>} />
+              <Route path="/manufacturing/batches/:id/print" element={<PrivateRoute><BatchSheet /></PrivateRoute>} />
 
               {/* Persistent app shell — Sidebar stays mounted across navigations */}
               <Route element={<PrivateRoute><AppLayout /></PrivateRoute>}>
@@ -93,6 +97,9 @@ export default function App() {
                 <Route path="/recovery/quick-return" element={<QuickReturn />} />
                 <Route path="/manufacturing/raw-materials" element={<RawMaterials />} />
                 <Route path="/manufacturing/batches" element={<Batches />} />
+                <Route path="/manufacturing/batches/new" element={<BatchEditor />} />
+                <Route path="/manufacturing/batches/:id" element={<BatchRecord />} />
+                <Route path="/manufacturing/batches/:id/edit" element={<BatchEditor />} />
                 <Route path="/manufacturing/yields" element={<Yields />} />
                 <Route path="/manufacturing/products" element={<ManufacturedProducts />} />
                 <Route path="/manufacturing/tax-ledger" element={<TaxLedger />} />

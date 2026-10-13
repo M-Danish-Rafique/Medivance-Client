@@ -11,6 +11,7 @@ import usePagination from '../../hooks/usePagination';
 import TaxIdInput from '../../components/common/TaxIdInput';
 import LocationSelect from '../../components/common/LocationSelect';
 
+import DateInput from '../../components/common/DateInput';
 const emptyForm = {
   name: '', address: '', phone: '', license_no: '', license_expiry: '',
   city_id: '', area_id: '', territory_id: '', is_licensed: true,
@@ -427,7 +428,7 @@ export default function Customers() {
             </div>
             <div className="form-group">
               <label className="form-label">License Expiry Date</label>
-              <input className="form-control" type="date" value={form.license_expiry} onChange={e => setForm(p => ({ ...p, license_expiry: e.target.value }))} />
+              <DateInput className="form-control" value={form.license_expiry} onChange={e => setForm(p => ({ ...p, license_expiry: e.target.value }))} />
             </div>
           </div>
         )}

@@ -8,6 +8,7 @@ import usePagination from '../../hooks/usePagination';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { todayPKT } from '../../utils/dateUtils';
+import DateInput from '../../components/common/DateInput';
 import {
   HrStyles, SortableHeader, useSort, sortRows, byText, byNumber,
   KebabMenu, TableSkeleton, EmptyState, BusyButton, FormField, Select,
@@ -654,9 +655,8 @@ function RegisterList({ month, onMonthChange, onOpen }) {
             <label className="form-label" htmlFor="create-date">
               Date<span className="hr-required" aria-hidden="true">*</span>
             </label>
-            <input
+            <DateInput
               id="create-date"
-              type="date"
               className="form-control"
               value={createDate}
               min={first}

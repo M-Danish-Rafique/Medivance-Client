@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { HR_STYLES } from './hrStyles';
 import { formatDatePKT } from '../../utils/dateUtils';
 import { formatDecimal } from '../../utils/formatters';
+import { useExclusivePopup } from '../../utils/popupBus';
 
 // ─── Workforce Management UI kit ───────────────────────────────────────────
 // Pieces shared by three or more HR screens. Kept inside pages/hr rather than
@@ -129,14 +130,16 @@ export function apiFieldError(err) {
 }
 
 // ── Sorting ────────────────────────────────────────────────────────────────
+// A column's first click sorts `firstDirection` ('asc' unless the header
+// asks for 'desc', as number and date columns do); the next click reverses.
 export function useSort(defaultColumn, defaultDirection = 'asc') {
   const [sortConfig, setSortConfig] = useState({ column: defaultColumn, direction: defaultDirection });
 
-  const handleSort = useCallback((column) => {
+  const handleSort = useCallback((column, firstDirection = 'asc') => {
     setSortConfig(prev => (
       prev.column === column
         ? { column, direction: prev.direction === 'asc' ? 'desc' : 'asc' }
-        : { column, direction: 'asc' }
+        : { column, direction: firstDirection }
     ));
   }, []);
 
@@ -146,41 +149,75 @@ export function useSort(defaultColumn, defaultDirection = 'asc') {
   return { sortConfig, handleSort, onSort: handleSort };
 }
 
-export function sortRows(rows, sortConfig, comparators) {
+/**
+ * A comparator is either a function (a, b) -> number, or `{ value, text }`:
+ * `value(row)` gives the figure to sort on, `text: true` compares it as text
+ * (numbers inside it in order). With `{ value }`, empty values (null, '',
+ * NaN) always sort last, in both directions. `tieBreak(a, b)` orders rows
+ * the column ranks equal (pass the table's default order, so the order is
+ * stable).
+ */
+const isBlankSortValue = (v) => v === null || v === undefined || v === '' || (typeof v === 'number' && Number.isNaN(v));
+const compareText = (x, y) => String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
+const compareValue = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+
+export function sortRows(rows, sortConfig, comparators, tieBreak) {
   const cmp = comparators[sortConfig.column];
-  if (!cmp) return rows;
+  const then = tieBreak || (() => 0);
+  if (!cmp) return tieBreak ? [...rows].sort(tieBreak) : rows;
   const dir = sortConfig.direction === 'asc' ? 1 : -1;
-  return [...rows].sort((a, b) => cmp(a, b) * dir);
+  if (typeof cmp === 'function') return [...rows].sort((a, b) => cmp(a, b) * dir || then(a, b));
+  const compare = cmp.text ? compareText : compareValue;
+  return [...rows].sort((a, b) => {
+    const x = cmp.value(a);
+    const y = cmp.value(b);
+    const xBlank = isBlankSortValue(x);
+    const yBlank = isBlankSortValue(y);
+    if (xBlank || yBlank) return xBlank === yBlank ? then(a, b) : (xBlank ? 1 : -1);
+    return compare(x, y) * dir || then(a, b);
+  });
 }
 
 export const byText = (key) => (a, b) => String(a[key] || '').localeCompare(String(b[key] || ''));
 export const byNumber = (key) => (a, b) => num(a[key]) - num(b[key]);
 
 /** Sortable <th>. aria-sort is what a screen reader announces; the chevron is
- *  the visible equivalent. Operable by keyboard because it is a real button. */
-export function SortableHeader({ column, label, sortConfig, onSort, align, style }) {
+ *  the visible equivalent. Operable by keyboard because it is a real button.
+ *  Optional: `firstDirection` ('desc' for numbers and dates), `iconBefore`
+ *  (the chevron left of the label, so a right-aligned label lines up with
+ *  the figures under it), `title` (when `label` is not plain text) and
+ *  `after` (e.g. an (i) button; clicks on it never sort). */
+export function SortableHeader({
+  column, label, sortConfig, onSort, align, style, firstDirection, iconBefore, title, after, className,
+}) {
   const active = sortConfig.column === column;
   const icon = active
     ? (sortConfig.direction === 'asc' ? 'arrow_upward' : 'arrow_downward')
     : 'unfold_more';
   const isRight = align === 'right';
+  const sort = () => onSort(column, firstDirection);
+  const iconEl = <span className="hr-sort-icon material-symbols-outlined" aria-hidden="true">{icon}</span>;
 
   return (
     <th
-      className={`hr-sort-th${isRight ? ' hr-th-num' : ''}`}
+      className={`hr-sort-th${isRight ? ' hr-th-num' : ''}${className ? ` ${className}` : ''}`}
       style={style}
       aria-sort={active ? (sortConfig.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
-      onClick={() => onSort(column)}
+      onClick={sort}
       onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSort(column); }
+        if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); sort(); }
       }}
       tabIndex={0}
       role="columnheader"
-      title={`Sort by ${label}`}
+      title={`Sort by ${title || label}`}
     >
       <span className="hr-sort-label" style={{ justifyContent: isRight ? 'flex-end' : 'flex-start' }}>
+        {iconBefore && iconEl}
         {label}
-        <span className="hr-sort-icon material-symbols-outlined" aria-hidden="true">{icon}</span>
+        {!iconBefore && iconEl}
+        {after && (
+          <span className="hr-sort-after" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>{after}</span>
+        )}
       </span>
     </th>
   );
@@ -301,6 +338,7 @@ export function KebabMenu({ items, label = 'Row actions', trigger }) {
     setOpen(false);
     if (refocus && triggerRef.current) triggerRef.current.focus();
   }, []);
+  useExclusivePopup(open, () => setOpen(false));
 
   useEffect(() => {
     if (!open) return undefined;
@@ -807,15 +845,68 @@ export function FormField({ label, htmlFor, required, help, error, children, col
   );
 }
 
+// ── Dropdown anchoring (portal mode) ───────────────────────────────────────
+// Select and SearchSelect render their list inside their own wrapper by
+// default. Inside a dialog that list is clipped by the dialog's scroll box, so
+// `portal` moves it to <body>, positioned `fixed` under (or, without room,
+// over) the field, above the modal layer (z-index 260 > 200). Same approach
+// as KebabMenu: re-placed on any scroll and on resize.
+const DROPDOWN_GAP = 5;
+const DROPDOWN_MARGIN = 8;
+
+function useAnchoredDropdown(open, anchorRef, menuRef, maxHeight = 300) {
+  const [style, setStyle] = useState(null);
+
+  const place = useCallback(() => {
+    const anchor = anchorRef.current;
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const height = menuRef.current ? Math.min(menuRef.current.scrollHeight, maxHeight) : maxHeight;
+    const width = menuRef.current ? menuRef.current.offsetWidth : rect.width;
+    const below = window.innerHeight - rect.bottom - DROPDOWN_GAP - DROPDOWN_MARGIN;
+    const above = rect.top - DROPDOWN_GAP - DROPDOWN_MARGIN;
+    const up = below < Math.min(height, 180) && above > below;
+    setStyle({
+      position: 'fixed',
+      right: 'auto',
+      left: Math.round(Math.max(DROPDOWN_MARGIN, Math.min(rect.left, window.innerWidth - width - DROPDOWN_MARGIN))),
+      minWidth: Math.round(rect.width),
+      top: up ? 'auto' : Math.round(rect.bottom + DROPDOWN_GAP),
+      bottom: up ? Math.round(window.innerHeight - rect.top + DROPDOWN_GAP) : 'auto',
+      maxHeight: Math.round(Math.max(120, Math.min(maxHeight, up ? above : below))),
+    });
+  }, [anchorRef, menuRef, maxHeight]);
+
+  useLayoutEffect(() => {
+    if (!open) { setStyle(null); return undefined; }
+    place();
+    const raf = requestAnimationFrame(place);
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [open, place]);
+
+  return style;
+}
+
 // ── Custom select ──────────────────────────────────────────────────────────
 // A native <select> renders options as plain text, so an option carrying
 // metadata ("August 2026" + a status) has to cram it into the same string and
 // comes out cramped and unaligned. This lays the label and a status badge out
 // properly. Keyboard: Enter/Space/ArrowDown opens, arrows move, Escape closes.
 //
-// Options: [{ value, label, badge?, badgeTone?, badgeIcon? }]
+// Options: [{ value, label, badge?, badgeTone?, badgeIcon?, hint?, disabled? }]
 // badgeIcon is a Material Symbols name drawn before the badge text (the Pay
 // Run month picker puts the "lock" of Close Pay Run on a Closed month).
+// `hint` is muted text at the end of the option (stock on hand, a unit).
+//
+// Form use (Manufacturing): `block` fills the field's width at .form-control
+// height, `invalid` draws the error border, `portal` lets it open inside a
+// dialog, `placeholder` names the choice. None of these change the default.
 function SelectBadge({ option }) {
   return (
     <span className={`hr-tag hr-tag-${option.badgeTone || 'closed'}`}>
@@ -827,80 +918,124 @@ function SelectBadge({ option }) {
   );
 }
 
-export function Select({ id, value, onChange, options, ariaLabel, minWidth }) {
+export function Select({
+  id, value, onChange, options, ariaLabel, minWidth,
+  placeholder = 'Select…', invalid, disabled, block, portal, onBlur, emptyText = 'No matches',
+}) {
   const [open, setOpen] = useState(false);
   const wrapRef    = useRef(null);
   const triggerRef = useRef(null);
+  const menuRef    = useRef(null);
   const itemRefs   = useRef([]);
+  const portalStyle = useAnchoredDropdown(open && !!portal, triggerRef, menuRef);
+  useExclusivePopup(open, () => setOpen(false));
 
   const selected = options.find(o => String(o.value) === String(value)) || null;
 
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (e) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+      if (wrapRef.current?.contains(e.target) || menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+      if (onBlur) onBlur();
     };
     document.addEventListener('mousedown', onPointerDown);
     return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [open]);
+  }, [open, onBlur]);
 
+  // Focus the selected (or first enabled) option once per opening. In portal
+  // mode that waits for the first placement; re-placements on scroll must not
+  // pull focus back while the user is moving through the list.
+  const focusedRef = useRef(false);
   useEffect(() => {
-    if (!open) return;
-    const index = Math.max(0, options.findIndex(o => String(o.value) === String(value)));
-    itemRefs.current[index]?.focus();
-  }, [open, options, value]);
+    if (!open) { focusedRef.current = false; return; }
+    if (focusedRef.current || (portal && !portalStyle)) return;
+    const enabled = (o) => !o.disabled;
+    const current = options.findIndex(o => String(o.value) === String(value) && enabled(o));
+    const index = current >= 0 ? current : options.findIndex(enabled);
+    const node = itemRefs.current[index];
+    if (node) {
+      node.focus({ preventScroll: true });
+      node.scrollIntoView({ block: 'nearest' });
+    }
+    focusedRef.current = true;
+  }, [open, options, value, portal, portalStyle]);
 
   const close = (refocus) => {
     setOpen(false);
     if (refocus && triggerRef.current) triggerRef.current.focus();
+    else if (onBlur) onBlur();
   };
 
   const onMenuKeyDown = (e) => {
-    const focusables = itemRefs.current.filter(Boolean);
+    const focusables = itemRefs.current.filter(el => el && !el.disabled);
     const index = focusables.indexOf(document.activeElement);
-    if (e.key === 'Escape') { e.preventDefault(); close(true); }
+    // Escape closes the list only, never the dialog around it.
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
     else if (e.key === 'ArrowDown') { e.preventDefault(); focusables[(index + 1) % focusables.length]?.focus(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); focusables[(index - 1 + focusables.length) % focusables.length]?.focus(); }
-    else if (e.key === 'Tab') { setOpen(false); }
+    else if (e.key === 'Tab') { close(false); }
   };
 
+  const menu = (
+    <div
+      ref={menuRef}
+      className={`hr-select-menu${portal ? ' is-portal' : ''}`}
+      role="listbox"
+      aria-label={ariaLabel}
+      onKeyDown={onMenuKeyDown}
+      style={portal ? (portalStyle || { visibility: 'hidden' }) : undefined}
+    >
+      {options.length === 0 && <div className="hr-select-empty">{emptyText}</div>}
+      {options.map((option, i) => (
+        <button
+          key={option.value}
+          ref={el => { itemRefs.current[i] = el; }}
+          type="button"
+          role="option"
+          aria-selected={String(option.value) === String(value)}
+          aria-disabled={option.disabled ? 'true' : undefined}
+          disabled={!!option.disabled}
+          title={option.disabled && option.disabledReason ? option.disabledReason : undefined}
+          className={`hr-select-option${String(option.value) === String(value) ? ' is-selected' : ''}`}
+          onClick={() => { onChange(option.value); close(true); }}
+        >
+          <span className="hr-select-option-label">{option.label}</span>
+          {option.hint && <span className="hr-select-option-hint">{option.hint}</span>}
+          {option.badge && <SelectBadge option={option} />}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
-    <div className="hr-select" ref={wrapRef}>
+    <div className={`hr-select${block ? ' is-block' : ''}`} ref={wrapRef}>
       <button
         id={id}
         ref={triggerRef}
         type="button"
-        className="hr-select-trigger"
+        className={`hr-select-trigger${block ? ' is-block' : ''}${invalid ? ' is-invalid' : ''}`}
         style={minWidth ? { minWidth } : undefined}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}
+        aria-invalid={invalid ? 'true' : undefined}
+        disabled={disabled}
         onClick={() => setOpen(o => !o)}
-        onKeyDown={(e) => { if (e.key === 'ArrowDown' && !open) { e.preventDefault(); setOpen(true); } }}
+        onBlur={() => { if (!open && onBlur) onBlur(); }}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown' && !open) { e.preventDefault(); setOpen(true); }
+          else if (e.key === 'Escape' && open) { e.stopPropagation(); setOpen(false); }
+        }}
       >
-        <span className="hr-select-value">{selected ? selected.label : 'Select…'}</span>
+        <span className="hr-select-value">
+          {selected ? selected.label : <span className="hr-select-placeholder">{placeholder}</span>}
+        </span>
         {selected?.badge && <SelectBadge option={selected} />}
         <span className="hr-select-caret material-symbols-outlined" aria-hidden="true">expand_more</span>
       </button>
 
-      {open && (
-        <div className="hr-select-menu" role="listbox" aria-label={ariaLabel} onKeyDown={onMenuKeyDown}>
-          {options.map((option, i) => (
-            <button
-              key={option.value}
-              ref={el => { itemRefs.current[i] = el; }}
-              type="button"
-              role="option"
-              aria-selected={String(option.value) === String(value)}
-              className={`hr-select-option${String(option.value) === String(value) ? ' is-selected' : ''}`}
-              onClick={() => { onChange(option.value); close(false); }}
-            >
-              <span className="hr-select-option-label">{option.label}</span>
-              {option.badge && <SelectBadge option={option} />}
-            </button>
-          ))}
-        </div>
-      )}
+      {open && (portal ? createPortal(menu, document.body) : menu)}
     </div>
   );
 }
@@ -988,14 +1123,24 @@ export function BusyButton({
 // Used for the Master Data import picker and the attendance employee picker.
 // A plain <select> is unusable past a few dozen rows; CustomerAutocomplete is
 // hard-wired to customers, so this is the generic equivalent.
+//
+// `portal` opens the list over a dialog (see useAnchoredDropdown); options
+// with `disabled: true` stay listed but cannot be picked, and the arrow keys
+// skip them. While the list is open and nothing is typed, the placeholder
+// shows the current choice so the field never looks emptied.
 export function SearchSelect({
   id, options, value, onChange, onBlur, placeholder = 'Search…', emptyText = 'No matches',
-  renderOption, getLabel, invalid, disabled,
+  renderOption, getLabel, invalid, disabled, portal,
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen]   = useState(false);
   const [highlight, setHighlight] = useState(0);
-  const wrapRef = useRef(null);
+  const wrapRef  = useRef(null);
+  const inputRef = useRef(null);
+  const menuRef  = useRef(null);
+  const itemRefs = useRef([]);
+  const portalStyle = useAnchoredDropdown(open && !!portal, inputRef, menuRef, 260);
+  useExclusivePopup(open, () => { setOpen(false); setQuery(''); });
 
   const selected = useMemo(
     () => options.find(o => String(o.id) === String(value)) || null,
@@ -1008,73 +1153,111 @@ export function SearchSelect({
     return options.filter(o => getLabel(o).toLowerCase().includes(q)).slice(0, 50);
   }, [options, query, getLabel]);
 
+  const isEnabled = useCallback((i) => !!filtered[i] && !filtered[i].disabled, [filtered]);
+  const step = (from, dir) => {
+    for (let i = from + dir; i >= 0 && i < filtered.length; i += dir) if (isEnabled(i)) return i;
+    return from;
+  };
+
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (e) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) { setOpen(false); setQuery(''); }
+      if (wrapRef.current?.contains(e.target) || menuRef.current?.contains(e.target)) return;
+      setOpen(false); setQuery('');
     };
     document.addEventListener('mousedown', onPointerDown);
     return () => document.removeEventListener('mousedown', onPointerDown);
   }, [open]);
 
+  useEffect(() => {
+    if (open) itemRefs.current[highlight]?.scrollIntoView({ block: 'nearest' });
+  }, [open, highlight]);
+
+  // Typing re-filters: highlight the first match that can be picked.
+  useEffect(() => {
+    if (query) setHighlight(filtered.findIndex(o => !o.disabled));
+  }, [query, filtered]);
+
+  const openList = () => {
+    const current = filtered.findIndex(o => String(o.id) === String(value));
+    setHighlight(current >= 0 ? current : step(-1, 1));
+    setOpen(true);
+  };
+
   const pick = (option) => {
+    if (option?.disabled) return;
     onChange(option ? option.id : '');
     setOpen(false);
     setQuery('');
   };
 
   const onKeyDown = (e) => {
-    if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setHighlight(h => Math.min(h + 1, filtered.length - 1)); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlight(h => Math.max(h - 1, 0)); }
-    else if (e.key === 'Enter' && open) { e.preventDefault(); if (filtered[highlight]) pick(filtered[highlight]); }
-    else if (e.key === 'Escape') { setOpen(false); setQuery(''); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (!open) openList(); else setHighlight(h => step(h, 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlight(h => step(h, -1)); }
+    else if (e.key === 'Enter' && open) { e.preventDefault(); if (isEnabled(highlight)) pick(filtered[highlight]); }
+    else if (e.key === 'Escape' && open) { e.stopPropagation(); setOpen(false); setQuery(''); }
+    else if (e.key === 'Tab') { setOpen(false); setQuery(''); }
   };
+
+  const list = (
+    <div
+      ref={menuRef}
+      role="listbox"
+      className={portal ? 'hr-search-menu is-portal' : undefined}
+      style={portal
+        ? (portalStyle || { visibility: 'hidden' })
+        : {
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 40,
+          background: 'white', border: '1px solid var(--gray-200)', borderRadius: 10,
+          boxShadow: 'var(--shadow-lg)', maxHeight: 240, overflowY: 'auto', padding: 5,
+        }}
+    >
+      {filtered.length === 0
+        ? <div style={{ padding: '10px 11px', fontSize: 12.5, color: 'var(--gray-500)' }}>{emptyText}</div>
+        : filtered.map((option, i) => (
+          <button
+            key={option.id}
+            ref={el => { itemRefs.current[i] = el; }}
+            type="button"
+            role="option"
+            tabIndex={-1}
+            aria-selected={String(option.id) === String(value)}
+            aria-disabled={option.disabled ? 'true' : undefined}
+            title={option.disabled && option.disabledReason ? option.disabledReason : undefined}
+            className="hr-kebab-item"
+            style={i === highlight && !option.disabled ? { background: 'var(--gray-100)' } : undefined}
+            onMouseDown={(e) => e.preventDefault()}
+            onMouseEnter={() => { if (!option.disabled) setHighlight(i); }}
+            onClick={() => pick(option)}
+          >
+            {renderOption ? renderOption(option) : getLabel(option)}
+          </button>
+        ))}
+    </div>
+  );
 
   return (
     <div className="customer-autocomplete-wrap" ref={wrapRef}>
       <input
         id={id}
+        ref={inputRef}
         className={`form-control${invalid ? ' hr-invalid' : ''}`}
         role="combobox"
         aria-expanded={open}
         aria-autocomplete="list"
+        aria-invalid={invalid ? 'true' : undefined}
         autoComplete="off"
         disabled={disabled}
-        placeholder={placeholder}
+        placeholder={open && selected ? getLabel(selected) : placeholder}
         value={open ? query : (selected ? getLabel(selected) : '')}
-        onChange={(e) => { setQuery(e.target.value); setOpen(true); setHighlight(0); }}
-        onFocus={() => setOpen(true)}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={openList}
+        onClick={() => { if (!open) openList(); }}
         onBlur={onBlur}
         onKeyDown={onKeyDown}
       />
 
-      {open && (
-        <div
-          role="listbox"
-          style={{
-            position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 40,
-            background: 'white', border: '1px solid var(--gray-200)', borderRadius: 10,
-            boxShadow: 'var(--shadow-lg)', maxHeight: 240, overflowY: 'auto', padding: 5,
-          }}
-        >
-          {filtered.length === 0
-            ? <div style={{ padding: '10px 11px', fontSize: 12.5, color: 'var(--gray-500)' }}>{emptyText}</div>
-            : filtered.map((option, i) => (
-              <button
-                key={option.id}
-                type="button"
-                role="option"
-                aria-selected={String(option.id) === String(value)}
-                className="hr-kebab-item"
-                style={i === highlight ? { background: 'var(--gray-100)' } : undefined}
-                onMouseEnter={() => setHighlight(i)}
-                onClick={() => pick(option)}
-              >
-                {renderOption ? renderOption(option) : getLabel(option)}
-              </button>
-            ))}
-        </div>
-      )}
+      {open && (portal ? createPortal(list, document.body) : list)}
     </div>
   );
 }

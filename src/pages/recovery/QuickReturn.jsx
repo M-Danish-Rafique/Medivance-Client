@@ -10,6 +10,7 @@ import { todayPKT, formatDatePKT, addMonthsPKT } from '../../utils/dateUtils';
 import { useAuth } from '../../context/AuthContext';
 import { createRecoveryReturnLine, getExpiryStatus, isPastExpiryMonth, fieldError } from './recoveryUtils';
 import ReturnTable from './ReturnTable';
+import DateInput from '../../components/common/DateInput';
 import {
   ArrowLeft, RefreshCw, Search, RotateCcw, CheckCircle2, XCircle, Loader2,
 } from 'lucide-react';
@@ -239,11 +240,11 @@ export default function QuickReturn() {
           <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr auto', alignItems: 'end', gap: 16 }}>
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">From Date</label>
-              <input type="date" className="form-control" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+              <DateInput className="form-control" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
             </div>
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">To Date</label>
-              <input type="date" className="form-control" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+              <DateInput className="form-control" value={dateTo} onChange={e => setDateTo(e.target.value)} />
             </div>
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">Salesman</label>
@@ -387,7 +388,7 @@ export default function QuickReturn() {
 
             <div className="form-group" style={{ maxWidth: 220, marginBottom: 12 }}>
               <label className="form-label">Return Date</label>
-              <input type="date" className="form-control" value={returnDate} onChange={e => setReturnDate(e.target.value)} />
+              <DateInput className="form-control" value={returnDate} onChange={e => setReturnDate(e.target.value)} />
             </div>
 
             <ReturnTable lines={returnLines} isCross={false} updateReturnLine={updateReturnLine} isAdmin={isAdmin} errors={returnLineErrors} />

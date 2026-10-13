@@ -120,6 +120,9 @@ input.no-spinner[type=number] {
   line-height: 1;
   letter-spacing: normal;
   text-transform: none;
+  /* A glyph is a ligature word ("check_circle"): keep it out of copied text. */
+  user-select: none;
+  -webkit-user-select: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -276,6 +279,23 @@ input.no-spinner[type=number] {
 }
 .card-title { font-size: 15px; font-weight: 700; color: var(--gray-800); }
 .card-body { padding: 22px; }
+/* A table that ends its card must end on the card's curve. .card does not
+   clip, so a filled last row (a totals footer, or a hovered row) painted
+   square corners over the rounded ones and the border. Rounding the table's
+   scroll box clips the table to the curve, inset by the card's 1px border so
+   the two radii are concentric. .table-wrap, .hr-table-scroll and
+   .att-scroll already clip (overflow: auto). .hr-page-scroll has no overflow
+   so its header can stick under the topbar: it gets overflow: clip, which
+   clips without making a scroll container (hidden would, and the header
+   would stop sticking). At 1100px and below it scrolls sideways (hrStyles),
+   which clips as well. Row menus are position: fixed, so nothing cuts them. */
+.card > :is(.table-wrap, .hr-page-scroll, .hr-table-scroll, .att-scroll):last-child {
+  border-bottom-left-radius: calc(var(--radius-lg) - 1px);
+  border-bottom-right-radius: calc(var(--radius-lg) - 1px);
+}
+@media (min-width: 1101px) {
+  .card > .hr-page-scroll:last-child { overflow: clip; }
+}
 
 /* Stat Cards */
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 18px; margin-bottom: 24px; }
@@ -777,3 +797,47 @@ textarea.form-control { resize: vertical; min-height: 80px; line-height: 1.5; }
    plain positioning hook, kept out of inline styles so it's easy to
    tweak globally if the dropdown ever needs a different look. */
 .customer-autocomplete-wrap { position: relative; width: 100%; }
+
+/* Date field (components/common/DateInput.jsx): dd/mm/yyyy everywhere,
+   whatever the browser language. The wrapper takes the field's layout
+   (width, flex) so it sits exactly where the native date input did. */
+.date-input { position: relative; display: block; width: 100%; min-width: 0; }
+.date-input.has-width { display: inline-block; }
+.date-input > input { width: 100%; padding-right: 36px; font-variant-numeric: tabular-nums; }
+.date-input > input.is-date-invalid { border-color: var(--red); }
+.date-input-btn {
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+  width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: 6px; background: transparent; color: var(--gray-500); cursor: pointer;
+}
+.date-input-btn .material-symbols-outlined { font-size: 18px; }
+.date-input-btn:hover:not(:disabled) { background: var(--gray-100); color: var(--gray-900); }
+.date-input-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+.date-pop {
+  position: fixed; z-index: 260; width: 280px; padding: 10px;
+  background: white; border: 1px solid var(--gray-200); border-radius: 12px;
+  box-shadow: var(--shadow-lg); font-family: inherit;
+}
+.date-pop-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.date-pop-title { font-size: 13.5px; font-weight: 700; color: var(--gray-900); }
+.date-pop-nav {
+  width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: 8px; background: transparent; color: var(--gray-600); cursor: pointer;
+}
+.date-pop-nav:hover { background: var(--gray-100); color: var(--gray-900); }
+.date-pop-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.date-pop-wd { text-align: center; font-size: 10.5px; font-weight: 700; color: var(--gray-400); padding: 4px 0; text-transform: uppercase; }
+.date-pop-day {
+  height: 34px; border: none; border-radius: 8px; background: transparent;
+  font-family: inherit; font-size: 13px; color: var(--gray-800); cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.date-pop-day:hover:not(:disabled) { background: var(--gray-100); }
+.date-pop-day:focus-visible { outline: 2px solid var(--blue-light); outline-offset: -2px; }
+.date-pop-day.is-out { color: var(--gray-400); }
+.date-pop-day.is-today { box-shadow: inset 0 0 0 1.5px var(--blue-light); }
+.date-pop-day.is-selected { background: var(--blue); color: white; font-weight: 700; }
+.date-pop-day:disabled { color: var(--gray-300); cursor: not-allowed; }
+.date-pop-foot { display: flex; justify-content: space-between; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--gray-100); }
+.date-pop-link { border: none; background: none; color: var(--blue); font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 4px 6px; border-radius: 6px; }
+.date-pop-link:hover:not(:disabled) { background: var(--blue-ultra); }
+.date-pop-link:disabled { color: var(--gray-400); cursor: not-allowed; }

@@ -9,6 +9,7 @@ import CompanyLogo from '../../components/common/CompanyLogo';
 import { Building2, Users, UserCircle, ScrollText } from 'lucide-react';
 import { formatDatePKT } from '../../utils/dateUtils';
 
+import DateInput from '../../components/common/DateInput';
 const ALL_PERMS = [
   { key: 'perm_companies',         label: 'Companies',            section: 'Master Data' },
   { key: 'perm_products',          label: 'Products',             section: 'Master Data' },
@@ -24,7 +25,7 @@ const ALL_PERMS = [
   { key: 'perm_mfg_products',      label: 'Mfg. Products',        section: 'Manufacturing' },
   { key: 'perm_mfg_raw_materials', label: 'Raw Materials',        section: 'Manufacturing' },
   { key: 'perm_mfg_batches',       label: 'Batches',              section: 'Manufacturing' },
-  { key: 'perm_mfg_yields',        label: 'Yield (End Products)', section: 'Manufacturing' },
+  { key: 'perm_mfg_yields',        label: 'Yield', section: 'Manufacturing' },
   // Workforce Management. Unlike the older modules, these three are enforced
   // server-side as well (middleware/requirePermission.js) — the routes carry
   // salaries, CNICs and bank details.
@@ -539,11 +540,11 @@ export default function Profile() {
                 </div>
                 <div className="form-group" style={{ margin: 0, flex: '1 1 150px' }}>
                   <label className="form-label">From Date</label>
-                  <input className="form-control" type="date" value={logFilter.from} onChange={e => setLogFilter(p => ({ ...p, from: e.target.value }))} />
+                  <DateInput className="form-control" value={logFilter.from} onChange={e => setLogFilter(p => ({ ...p, from: e.target.value }))} />
                 </div>
                 <div className="form-group" style={{ margin: 0, flex: '1 1 150px' }}>
                   <label className="form-label">To Date</label>
-                  <input className="form-control" type="date" value={logFilter.to} onChange={e => setLogFilter(p => ({ ...p, to: e.target.value }))} />
+                  <DateInput className="form-control" value={logFilter.to} onChange={e => setLogFilter(p => ({ ...p, to: e.target.value }))} />
                 </div>
                 <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
                   <button className="btn btn-primary btn-sm" onClick={() => loadLogs(1)}>Search</button>

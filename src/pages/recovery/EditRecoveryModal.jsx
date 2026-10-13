@@ -3,6 +3,7 @@ import Modal from '../../components/common/Modal';
 import { formatCurrency } from '../../utils/formatters';
 import { blockWheelChange } from './recoveryUtils';
 
+import DateInput from '../../components/common/DateInput';
 export default function EditRecoveryModal({
   isOpen,
   onClose,
@@ -45,7 +46,7 @@ export default function EditRecoveryModal({
           <div className="form-grid form-grid-2" style={{ marginBottom: 16 }}>
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">Date *</label>
-              <input className="form-control" type="date" value={editDate}
+              <DateInput className="form-control" value={editDate}
                 onChange={e => setEditDate(e.target.value)} />
             </div>
             <div className="form-group" style={{ margin: 0 }}>

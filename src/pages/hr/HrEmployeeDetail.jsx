@@ -8,6 +8,7 @@ import { formatCNIC, handleCNICInput, handlePhoneInput, formatPhone } from '../.
 import { todayPKT, addMonthsPKT } from '../../utils/dateUtils';
 import { useAuth } from '../../context/AuthContext';
 import { withSavedEmployee } from '../../utils/employeeOptions';
+import DateInput from '../../components/common/DateInput';
 import {
   HrStyles, Panel, Tabs, TabPanel, FieldGrid, Field, FormField, Pill, BusyButton,
   StatusBadge, KebabMenu, EmptyState, FieldGridSkeleton, SearchSelect, Notice,
@@ -922,7 +923,7 @@ export default function HrEmployeeDetail() {
                 </FormField>
 
                 <FormField label="Date of birth" htmlFor="f-dob" col={3}>
-                  <input id="f-dob" type="date" className="form-control" value={form.date_of_birth}
+                  <DateInput id="f-dob" className="form-control" value={form.date_of_birth}
                     max={todayPKT()} onChange={e => setField('date_of_birth', e.target.value)} />
                 </FormField>
 
@@ -988,7 +989,7 @@ export default function HrEmployeeDetail() {
             {editing ? (
               <div className="hr-form-grid">
                 <FormField label="Date of joining" htmlFor="f-doj" required error={errorFor('date_of_joining')} col={3}>
-                  <input id="f-doj" type="date" className={`form-control${errorFor('date_of_joining') ? ' hr-invalid' : ''}`}
+                  <DateInput id="f-doj" className={`form-control${errorFor('date_of_joining') ? ' hr-invalid' : ''}`}
                     value={form.date_of_joining} max={todayPKT()}
                     onChange={e => setField('date_of_joining', e.target.value)}
                     onBlur={() => markTouched('date_of_joining')} />
@@ -1058,7 +1059,7 @@ export default function HrEmployeeDetail() {
                   <>
                     <FormField label="Date of leaving" htmlFor="f-dol" required
                       error={errorFor('date_of_leaving')} col={4}>
-                      <input id="f-dol" type="date"
+                      <DateInput id="f-dol"
                         className={`form-control${errorFor('date_of_leaving') ? ' hr-invalid' : ''}`}
                         value={form.date_of_leaving}
                         min={storedLeaving && storedLeaving < oldestLeaving ? undefined : oldestLeaving}
@@ -1728,7 +1729,7 @@ export default function HrEmployeeDetail() {
             </FormField>
 
             <FormField label="Date issued" htmlFor="l-date" required error={loanErrorFor('date_issued')} col={6}>
-              <input id="l-date" type="date"
+              <DateInput id="l-date"
                 className={`form-control${loanErrorFor('date_issued') ? ' hr-invalid' : ''}`}
                 value={loanForm.date_issued} max={todayPKT()}
                 onChange={e => setLoanForm(p => ({ ...p, date_issued: e.target.value }))}
@@ -1812,7 +1813,7 @@ export default function HrEmployeeDetail() {
 
                 <FormField label="Date given" htmlFor="adv-date" required
                   error={advanceErrorFor('date_given')} col={6}>
-                  <input id="adv-date" type="date"
+                  <DateInput id="adv-date"
                     className={`form-control${advanceErrorFor('date_given') ? ' hr-invalid' : ''}`}
                     value={advanceForm.date_given} max={todayPKT()}
                     onChange={e => setAdvanceForm(p => ({ ...p, date_given: e.target.value }))}

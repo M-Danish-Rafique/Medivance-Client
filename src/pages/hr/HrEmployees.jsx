@@ -8,6 +8,7 @@ import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { handleCNICInput, handlePhoneInput } from '../../utils/formatters';
 import { todayPKT, addMonthsPKT } from '../../utils/dateUtils';
+import DateInput from '../../components/common/DateInput';
 import {
   HrStyles, SortableHeader, useSort, sortRows, byText, Segmented, KebabMenu,
   TableSkeleton, EmptyState, BusyButton, StatusBadge, FormField,
@@ -651,9 +652,8 @@ export default function HrEmployees() {
 
           {/* Row 3 */}
           <FormField label="Date of joining" htmlFor="hr-doj" required error={errorFor('date_of_joining')} col={6}>
-            <input
+            <DateInput
               id="hr-doj"
-              type="date"
               className={`form-control${errorFor('date_of_joining') ? ' hr-invalid' : ''}`}
               value={form.date_of_joining}
               max={todayPKT()}
@@ -766,9 +766,8 @@ export default function HrEmployees() {
               col={12}
               error={exitErrorFor('date_of_leaving')}
             >
-              <input
+              <DateInput
                 id="exit-date"
-                type="date"
                 className={`form-control${exitErrorFor('date_of_leaving') ? ' hr-invalid' : ''}`}
                 value={exitForm.date_of_leaving}
                 min={oldestLeaving}

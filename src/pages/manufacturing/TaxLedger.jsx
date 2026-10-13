@@ -4,6 +4,34 @@ import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { formatCurrency } from '../../utils/formatters';
 import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
+import DateInput from '../../components/common/DateInput';
+import { HrStyles, useSort, sortRows, num } from '../hr/HrKit';
+import { MfgStyles, SortHead } from './mfgKit';
+
+// Both tables sort on every column (HrKit sorting, manufacturing rules):
+// transactions newest first, the summary by product A to Z. Totals stay last.
+const LEDGER_SORT = {
+  date: { value: r => String(r.sale_date || '').slice(0, 10) },
+  invoice: { value: r => r.invoice_no, text: true },
+  customer: { value: r => r.customer_name, text: true },
+  product: { value: r => r.product_name, text: true },
+  rate: { value: r => num(r.tax_rate) },
+  taxable: { value: r => num(r.taxable_amount) },
+  tax: { value: r => num(r.tax_amount) },
+  status: { value: r => (r.submitted_to_fbr ? 'Submitted' : 'Pending'), text: true },
+  fbr_date: { value: r => (r.fbr_submission_date ? String(r.fbr_submission_date).slice(0, 10) : null) },
+};
+const ledgerOrder = (a, b) => String(b.sale_date || '').localeCompare(String(a.sale_date || '')) || b.id - a.id;
+const SUMMARY_SORT = {
+  product: { value: p => p.product_name, text: true },
+  rate: { value: p => num(p.tax_rate) },
+  taxable: { value: p => num(p.taxable) },
+  tax: { value: p => num(p.tax) },
+  count: { value: p => p.rows?.length || 0 },
+};
+const summaryOrder = (a, b) => String(a.product_name || '').localeCompare(String(b.product_name || ''), undefined, { sensitivity: 'base' })
+  || num(a.tax_rate) - num(b.tax_rate);
+const right = { textAlign: 'right' };
 
 export default function TaxLedger() {
   const [data, setData] = useState({ rows: [], summary: {}, by_product: [] });
@@ -15,6 +43,8 @@ export default function TaxLedger() {
   const [submitting, setSubmitting] = useState(false);
   const [activeTab, setActiveTab] = useState('ledger');
   const [reportData, setReportData] = useState(null);
+  const ledgerSort = useSort('date', 'desc');
+  const summarySort = useSort('product');
 
   const load = async () => {
     setLoading(true);
@@ -63,9 +93,13 @@ export default function TaxLedger() {
   };
 
   const fmtPKR = formatCurrency;
+  const ledgerRows = sortRows(data.rows || [], ledgerSort.sortConfig, LEDGER_SORT, ledgerOrder);
+  const summaryRows = sortRows(reportData?.by_product || [], summarySort.sortConfig, SUMMARY_SORT, summaryOrder);
 
   return (
     <Layout title="FBR Tax Ledger">
+      <HrStyles />
+      <MfgStyles />
       {/* Summary cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
         <div className="stat-card">
@@ -89,8 +123,8 @@ export default function TaxLedger() {
         <div className="card-header">
           <div className="card-title">FBR Tax Records</div>
           <div className="flex items-center gap-3" style={{ flexWrap: 'wrap' }}>
-            <input className="form-control" type="date" style={{ width: 160 }} value={fromDate} onChange={e => setFromDate(e.target.value)} placeholder="From date" />
-            <input className="form-control" type="date" style={{ width: 160 }} value={toDate} onChange={e => setToDate(e.target.value)} placeholder="To date" />
+            <DateInput className="form-control" style={{ width: 160 }} value={fromDate} onChange={e => setFromDate(e.target.value)} placeholder="From date" />
+            <DateInput className="form-control" style={{ width: 160 }} value={toDate} onChange={e => setToDate(e.target.value)} placeholder="To date" />
             <select className="form-control" style={{ width: 160 }} value={submittedFilter} onChange={e => setSubmittedFilter(e.target.value)}>
               <option value="">All Records</option>
               <option value="0">Pending</option>
@@ -119,7 +153,7 @@ export default function TaxLedger() {
             : data.rows?.length === 0
               ? <div className="empty-state"><div className="empty-state-icon"><span className="material-symbols-outlined" style={{ fontSize: 28 }}>receipt_long</span></div><div className="empty-state-title">No tax records found</div><div className="empty-state-desc">Tax is recorded automatically on taxable product sales</div></div>
               : (
-                <table>
+                <table className="mfg-list">
                   <thead>
                     <tr>
                       <th>
@@ -127,11 +161,19 @@ export default function TaxLedger() {
                           checked={selected.length === data.rows.filter(r => !r.submitted_to_fbr).length && data.rows.some(r => !r.submitted_to_fbr)}
                           onChange={selectAllPending} title="Select all pending" />
                       </th>
-                      <th>Date</th><th>Invoice</th><th>Customer</th><th>Product</th><th>Tax Rate</th><th>Taxable Amt</th><th>Tax Amount</th><th>Status</th><th>FBR Date</th>
+                      <SortHead sort={ledgerSort} column="date" label="Date" date />
+                      <SortHead sort={ledgerSort} column="invoice" label="Invoice" />
+                      <SortHead sort={ledgerSort} column="customer" label="Customer" />
+                      <SortHead sort={ledgerSort} column="product" label="Product" />
+                      <SortHead sort={ledgerSort} column="rate" label="Tax Rate" num />
+                      <SortHead sort={ledgerSort} column="taxable" label="Taxable Amt" num />
+                      <SortHead sort={ledgerSort} column="tax" label="Tax Amount" num />
+                      <SortHead sort={ledgerSort} column="status" label="Status" />
+                      <SortHead sort={ledgerSort} column="fbr_date" label="FBR Date" date />
                     </tr>
                   </thead>
                   <tbody>
-                    {data.rows.map(r => (
+                    {ledgerRows.map(r => (
                       <tr key={r.id} style={{ background: r.submitted_to_fbr ? '#f0fdf4' : undefined }}>
                         <td>
                           {!r.submitted_to_fbr && (
@@ -142,9 +184,9 @@ export default function TaxLedger() {
                         <td><span className="mono badge badge-gray" style={{ fontSize: 10 }}>{r.invoice_no || '—'}</span></td>
                         <td>{r.customer_name || '—'}</td>
                         <td style={{ fontWeight: 600 }}>{r.product_name}</td>
-                        <td><span className="badge badge-amber">{r.tax_rate}%</span></td>
-                        <td className="mono">{fmtPKR(r.taxable_amount)}</td>
-                        <td style={{ fontWeight: 700, color: 'var(--amber)' }}>{fmtPKR(r.tax_amount)}</td>
+                        <td style={right}><span className="badge badge-amber">{r.tax_rate}%</span></td>
+                        <td className="mono" style={right}>{fmtPKR(r.taxable_amount)}</td>
+                        <td style={{ ...right, fontWeight: 700, color: 'var(--amber)' }}>{fmtPKR(r.tax_amount)}</td>
                         <td>
                           {r.submitted_to_fbr
                             ? <span className="badge badge-green">Submitted</span>
@@ -183,26 +225,32 @@ export default function TaxLedger() {
             </div>
 
             <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>Breakdown by Product</div>
-            <table>
+            <table className="mfg-list">
               <thead>
-                <tr><th>Product</th><th>Tax Rate</th><th>Total Taxable</th><th>Tax to Submit</th><th>Transactions</th></tr>
+                <tr>
+                  <SortHead sort={summarySort} column="product" label="Product" />
+                  <SortHead sort={summarySort} column="rate" label="Tax Rate" num />
+                  <SortHead sort={summarySort} column="taxable" label="Total Taxable" num />
+                  <SortHead sort={summarySort} column="tax" label="Tax to Submit" num />
+                  <SortHead sort={summarySort} column="count" label="Transactions" num />
+                </tr>
               </thead>
               <tbody>
-                {(reportData.by_product || []).map((p, i) => (
-                  <tr key={i}>
+                {summaryRows.map(p => (
+                  <tr key={p.rows?.[0]?.product_id ?? p.product_name}>
                     <td style={{ fontWeight: 600 }}>{p.product_name}</td>
-                    <td><span className="badge badge-amber">{p.tax_rate}%</span></td>
-                    <td className="mono">{fmtPKR(p.taxable)}</td>
-                    <td style={{ fontWeight: 700, color: 'var(--amber)' }}>{fmtPKR(p.tax)}</td>
-                    <td><span className="badge badge-gray">{p.rows?.length || 0}</span></td>
+                    <td style={right}><span className="badge badge-amber">{p.tax_rate}%</span></td>
+                    <td className="mono" style={right}>{fmtPKR(p.taxable)}</td>
+                    <td style={{ ...right, fontWeight: 700, color: 'var(--amber)' }}>{fmtPKR(p.tax)}</td>
+                    <td style={right}><span className="badge badge-gray">{p.rows?.length || 0}</span></td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr style={{ background: 'var(--navy)', color: 'white' }}>
                   <td colSpan={2} style={{ padding: '10px 14px', fontWeight: 700 }}>GRAND TOTAL</td>
-                  <td style={{ padding: '10px 14px', fontWeight: 700 }}>{fmtPKR(reportData.totals?.taxable)}</td>
-                  <td style={{ padding: '10px 14px', fontWeight: 700, color: '#fcd34d' }}>{fmtPKR(reportData.totals?.tax)}</td>
+                  <td style={{ padding: '10px 14px', fontWeight: 700, textAlign: 'right' }}>{fmtPKR(reportData.totals?.taxable)}</td>
+                  <td style={{ padding: '10px 14px', fontWeight: 700, color: '#fcd34d', textAlign: 'right' }}>{fmtPKR(reportData.totals?.tax)}</td>
                   <td></td>
                 </tr>
               </tfoot>

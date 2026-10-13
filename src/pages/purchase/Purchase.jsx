@@ -10,6 +10,7 @@ import { useAuth } from '../../context/AuthContext';
 import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
 import { formatCurrency } from '../../utils/formatters';
 
+import DateInput from '../../components/common/DateInput';
 const emptyItem = {
   row_id: null,
   product_id: '', product_search: '', pack_size: '', purchase_rate: '', sale_rate: '',
@@ -569,12 +570,12 @@ export default function Purchase() {
               </div>
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label">Date From</label>
-                <input className="form-control" type="date" value={draftFilters.date_from}
+                <DateInput className="form-control" value={draftFilters.date_from}
                   onChange={e => setDraftFilters(p => ({ ...p, date_from: e.target.value }))} />
               </div>
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label">Date To</label>
-                <input className="form-control" type="date" value={draftFilters.date_to}
+                <DateInput className="form-control" value={draftFilters.date_to}
                   onChange={e => setDraftFilters(p => ({ ...p, date_to: e.target.value }))} />
               </div>
             </div>
@@ -709,7 +710,7 @@ export default function Purchase() {
           </div>
           <div className="form-group" style={{ margin: 0 }}>
             <label className="form-label">Date *</label>
-            <input className="form-control" type="date" value={header.date}
+            <DateInput className="form-control" value={header.date}
               onChange={e => setHeader(p => ({ ...p, date: e.target.value }))} />
           </div>
         </div>
@@ -788,7 +789,7 @@ export default function Purchase() {
                 placeholder="Batch *" value={item.batch_no}
                 onChange={e => updateItem(idx, 'batch_no', e.target.value)} />
 
-              <input className="form-control" type="date"
+              <DateInput className="form-control"
                 style={{ ...inputSm, width: '100%', borderColor: !item.exp_date && item.product_id ? 'var(--red)' : undefined }}
                 value={item.exp_date} onChange={e => updateItem(idx, 'exp_date', e.target.value)} />
 
