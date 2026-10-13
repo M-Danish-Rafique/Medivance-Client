@@ -98,10 +98,12 @@ export default function DateInput({
   const dayRefs = useRef({});
   const popId = useId();
 
-  // The parent changed the value (or reset the form): show it.
+  // The parent changed the value (or reset the form): show it. `text` is left
+  // out of the dependencies on purpose (typing must not be overwritten). No
+  // eslint-disable directive: this project's ESLint config does not register
+  // eslint-plugin-react-hooks, and Vercel's CI build fails on unknown rules.
   useEffect(() => {
     if (fromDisplay(text) !== current) setText(toDisplay(current));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current]);
 
   useExclusivePopup(open, () => setOpen(false));
