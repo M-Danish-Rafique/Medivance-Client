@@ -23,7 +23,9 @@ import {
 // counting other charges in the landed rate. Using stock in a batch does not
 // change it; a batch freezes the rate when it takes the stock. The rate is
 // typed by hand only until the material's first purchase; a new purchase line
-// starts from the last purchase's invoice rate (before charges).
+// starts from the last purchase's invoice rate (before charges), or from the
+// rate set on the material while it has never been bought. A saved purchase
+// can be edited; the server corrects stock, averages and the supplier ledger.
 // Packaging is always counted in pcs. Count units (dozen = 12 pcs) take whole
 // quantities only. Purchases are one document with many lines; other charges
 // are shared over the lines by value and are not owed to the supplier.
@@ -76,7 +78,7 @@ export default function RawMaterials() {
   const [materialDialog, setMaterialDialog] = useState(null);   // { record }
   const [detail, setDetail] = useState(null);
   const [uomOpen, setUomOpen] = useState(false);
-  const [purchaseOpen, setPurchaseOpen] = useState(false);
+  const [purchaseDialog, setPurchaseDialog] = useState(null);   // { record } (record null = new)
   const [purchaseView, setPurchaseView] = useState(null);
   const [deleteMaterial, setDeleteMaterial] = useState(null);
   const [deletePurchase, setDeletePurchase] = useState(null);
@@ -190,7 +192,7 @@ export default function RawMaterials() {
                 </button>
               </>
             ) : (
-              <button type="button" className="btn btn-primary" onClick={() => setPurchaseOpen(true)}>
+              <button type="button" className="btn btn-primary" onClick={() => setPurchaseDialog({ record: null })}>
                 <span className="material-symbols-outlined" aria-hidden="true">add_shopping_cart</span>
                 Record purchase
               </button>
@@ -290,6 +292,7 @@ export default function RawMaterials() {
                           label={`Actions for purchase ${p.purchase_no}`}
                           items={[
                             { label: 'View purchase', icon: 'visibility', onClick: () => setPurchaseView(p) },
+                            { label: 'Edit purchase', icon: 'edit', onClick: () => setPurchaseDialog({ record: p }) },
                             { divider: true },
                             { label: 'Delete', icon: 'delete', danger: true, onClick: () => setDeletePurchase(p) },
                           ]}
@@ -314,13 +317,17 @@ export default function RawMaterials() {
       <MaterialDetail material={detail} onClose={() => setDetail(null)} />
       <UomDialog isOpen={uomOpen} onClose={() => setUomOpen(false)} uoms={uoms} onChanged={load} />
       <PurchaseDialog
-        isOpen={purchaseOpen}
+        state={purchaseDialog}
         materials={materials}
         suppliers={suppliers}
-        onClose={() => setPurchaseOpen(false)}
-        onSaved={() => { setPurchaseOpen(false); setTab('purchases'); load(); }}
+        onClose={() => setPurchaseDialog(null)}
+        onSaved={() => { setPurchaseDialog(null); setTab('purchases'); load(); }}
       />
-      <PurchaseView purchase={purchaseView} onClose={() => setPurchaseView(null)} />
+      <PurchaseView
+        purchase={purchaseView}
+        onClose={() => setPurchaseView(null)}
+        onEdit={() => { setPurchaseDialog({ record: purchaseView }); setPurchaseView(null); }}
+      />
 
       <ConfirmModal
         isOpen={!!deleteMaterial}
@@ -803,19 +810,52 @@ function UomDialog({ isOpen, onClose, uoms, onChanged }) {
 // Several materials per purchase (brief 7.1). Other charges are shared over
 // the lines by value and shown as each line's landed rate before saving
 // (7.3); they are not posted to the supplier's ledger (7.2).
-const newLine = () => ({ key: Math.random().toString(36).slice(2), raw_material_id: '', qty: '', rate: '' });
+const lineKey = () => Math.random().toString(36).slice(2);
+const newLine = () => ({ key: lineKey(), raw_material_id: '', qty: '', rate: '' });
 const emptyPurchase = () => ({ supplier_id: '', date: todayPKT(), invoice_no: '', other_charges: '', charges_note: '', lines: [newLine()] });
+const purchaseForm = (p) => ({
+  supplier_id: p.supplier_id,
+  date: p.date,
+  invoice_no: p.invoice_no || '',
+  other_charges: num(p.other_charges) > 0 ? String(num(p.other_charges)) : '',
+  charges_note: p.charges_note || '',
+  lines: p.lines.map(l => ({ key: lineKey(), raw_material_id: l.raw_material_id, qty: String(num(l.qty)), rate: String(num(l.rate)) })),
+});
+// What a save would change: ignores spacing, "5" vs "5.0" and blank vs 0 charges.
+const purchaseSignature = (f) => JSON.stringify([
+  String(f.supplier_id), f.date, cleanText(f.invoice_no), parseNum(f.other_charges) || 0, cleanText(f.charges_note),
+  f.lines.map(l => [String(l.raw_material_id), parseNum(l.qty), parseNum(l.rate)]),
+]);
+// The rate a new line starts from: the last purchase's invoice rate (before
+// other charges, which this purchase adds again), never the average. A
+// material never bought starts from the rate set on the material.
+const startingRate = (m) => {
+  if (!m) return '';
+  if (m.last_purchase_rate != null) return String(num(m.last_purchase_rate));
+  return num(m.purchase_rate) > 0 ? String(num(m.purchase_rate)) : '';
+};
+const rateHint = (m) => {
+  if (!m) return undefined;
+  if (m.last_purchase_rate != null) return `Last bought at ${fmtRate(m.last_purchase_rate)} on ${fmtDate(m.last_purchase_date)}`;
+  return num(m.purchase_rate) > 0 ? `Purchase rate set on the material: ${fmtRate(m.purchase_rate)}` : undefined;
+};
+const usedText = (used, m) => `${fmtQty(used, m.uom_symbol)} of ${m.name} from this purchase has already been used in batches. `
+  + `Keep at least ${fmtQty(used, m.uom_symbol)} on the purchase.`;
 
-function lineProblem(line, material) {
+// minQty (edit): what batches have already taken from this purchase.
+function lineProblem(line, material, minQty = 0) {
   if (!line.raw_material_id) return 'Choose a material.';
   const qty = parseNum(line.qty);
   if (!(qty > 0)) return `Enter a quantity greater than 0 for ${material?.name || 'this material'}.`;
   if (isCount(material) && !Number.isInteger(qty)) return `Enter a whole number of ${material.uom_symbol} for ${material.name}.`;
+  if (minQty > 0 && qty < minQty - 1e-9) return usedText(minQty, material);
   if (!(parseNum(line.rate) > 0)) return `Enter a rate greater than 0 for ${material?.name || 'this material'}.`;
   return null;
 }
 
-function PurchaseDialog({ isOpen, materials, suppliers, onClose, onSaved }) {
+function PurchaseDialog({ state, materials, suppliers, onClose, onSaved }) {
+  const isOpen = !!state;
+  const record = state?.record || null;
   const [form, setForm] = useState(emptyPurchase);
   const [attempted, setAttempted] = useState(false);
   const [lineTouched, setLineTouched] = useState({});
@@ -823,58 +863,99 @@ function PurchaseDialog({ isOpen, materials, suppliers, onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (isOpen) { setForm(emptyPurchase()); setAttempted(false); setLineTouched({}); setServerError(null); }
-  }, [isOpen]);
+    if (isOpen) { setForm(record ? purchaseForm(record) : emptyPurchase()); setAttempted(false); setLineTouched({}); setServerError(null); }
+  }, [isOpen, record]);
 
   const byId = useMemo(() => new Map(materials.map(m => [String(m.id), m])), [materials]);
+  // Edit: per material, the part of this purchase batches have already taken
+  // (its quantity less the stock left). The server applies the same rule.
+  const usedById = useMemo(() => {
+    const out = new Map();
+    (record?.lines || []).forEach(l => {
+      const m = byId.get(String(l.raw_material_id));
+      const used = m ? Math.round((num(l.qty) - num(m.stock_qty)) * 10000) / 10000 : 0;
+      if (used > 0) out.set(String(l.raw_material_id), used);
+    });
+    return out;
+  }, [record, byId]);
+  const initialSignature = useMemo(() => (record ? purchaseSignature(purchaseForm(record)) : null), [record]);
   const setHeader = (k, v) => { setForm(p => ({ ...p, [k]: v })); setServerError(null); };
   const setLine = (key, patch) => {
     setForm(p => ({ ...p, lines: p.lines.map(l => (l.key === key ? { ...l, ...patch } : l)) }));
     setServerError(null);
   };
-  const pickMaterial = (key, id) => {
-    const m = byId.get(String(id));
-    // The rate starts at the last purchase's invoice rate (before other
-    // charges, which this purchase adds again), never at the average. Empty
-    // for a material never bought. It stays editable.
-    setLine(key, { raw_material_id: id, rate: m && m.last_purchase_rate != null ? String(num(m.last_purchase_rate)) : '' });
-  };
+  // The rate stays editable.
+  const pickMaterial = (key, id) => setLine(key, { raw_material_id: id, rate: startingRate(byId.get(String(id))) });
 
   const charges = parseNum(form.other_charges);
   const chargesValue = Number.isFinite(charges) ? charges : 0;
   const filled = form.lines.map(l => ({ ...l, material: byId.get(String(l.raw_material_id)) }));
-  const valid = filled.filter(l => !lineProblem(l, l.material));
+  const minQty = (l) => usedById.get(String(l.raw_material_id)) || 0;
+  const valid = filled.filter(l => !lineProblem(l, l.material, minQty(l)));
   const costs = landedRates(valid.map(l => ({ qty: parseNum(l.qty), rate: parseNum(l.rate) })), chargesValue);
   const costByKey = new Map(valid.map((l, i) => [l.key, costs[i]]));
   const itemsTotal = round2(costs.reduce((s, c) => s + c.lineTotal, 0));
-  const supplier = suppliers.find(s => String(s.id) === String(form.supplier_id));
+  // The purchase's own supplier stays selectable on edit even if it is no
+  // longer listed as a raw material supplier.
+  const supplierOptions = record && !suppliers.some(s => String(s.id) === String(record.supplier_id))
+    ? [...suppliers, { id: record.supplier_id, name: record.supplier_name }] : suppliers;
+  const supplier = supplierOptions.find(s => String(s.id) === String(form.supplier_id));
 
   const headerErrors = {};
   if (!form.supplier_id) headerErrors.supplier_id = 'Choose the supplier.';
   if (!form.date) headerErrors.date = 'Enter the purchase date.';
   else if (form.date > todayPKT()) headerErrors.date = 'The purchase date cannot be in the future.';
   if (form.other_charges !== '' && !(charges >= 0)) headerErrors.other_charges = 'Enter other charges of 0 or more.';
-  const lineErrors = Object.fromEntries(filled.map(l => [l.key, lineProblem(l, l.material)]));
+  const lineErrors = Object.fromEntries(filled.map(l => [l.key, lineProblem(l, l.material, minQty(l))]));
   const firstLineError = filled.map(l => lineErrors[l.key]).find(Boolean);
-  const blockedReason = headerErrors.supplier_id || headerErrors.date || firstLineError || headerErrors.other_charges || null;
+  // A material batches have used cannot leave the purchase (its line was
+  // removed, or switched to another material).
+  const onForm = new Set(form.lines.map(l => String(l.raw_material_id)));
+  const removedUsed = [...usedById.entries()].find(([id]) => !onForm.has(id));
+  const removedError = removedUsed && byId.get(removedUsed[0]) ? usedText(removedUsed[1], byId.get(removedUsed[0])) : null;
+  const firstError = headerErrors.supplier_id || headerErrors.date || firstLineError || removedError || headerErrors.other_charges || null;
+  const isChanged = !record || purchaseSignature(form) !== initialSignature;
+  // Edit: Save stays disabled until there is a real, valid change, and the
+  // footer says why. Add: errors show after the first Save attempt.
+  const blockedReason = record && !isChanged ? 'No changes yet' : firstError;
+  const footerStatus = record || attempted ? blockedReason : null;
   const showLineError = (key) => (attempted || lineTouched[key]) && lineErrors[key];
 
   const save = async () => {
     setAttempted(true);
     if (blockedReason) return;
     setSaving(true); setServerError(null);
+    const payload = {
+      supplier_id: form.supplier_id, date: form.date, invoice_no: cleanText(form.invoice_no) || null,
+      other_charges: chargesValue, charges_note: cleanText(form.charges_note) || null,
+      lines: filled.map(l => ({ raw_material_id: l.raw_material_id, qty: l.qty, rate: l.rate })),
+    };
     try {
-      const r = await api.post('/raw-materials/purchases', {
-        supplier_id: form.supplier_id, date: form.date, invoice_no: cleanText(form.invoice_no) || null,
-        other_charges: chargesValue, charges_note: cleanText(form.charges_note) || null,
-        lines: filled.map(l => ({ raw_material_id: l.raw_material_id, qty: l.qty, rate: l.rate })),
-      });
-      toast.success(`Purchase ${r.data.purchase_no} recorded. ${fmtMoney(r.data.items_total)} posted to ${supplier?.name || 'the supplier'}.`);
+      if (record) {
+        const r = await api.put(`/raw-materials/purchases/${record.id}`, payload);
+        toast.success(`Purchase ${r.data.purchase_no} updated. Items total: ${fmtMoney(r.data.items_total)}.`);
+      } else {
+        const r = await api.post('/raw-materials/purchases', payload);
+        toast.success(`Purchase ${r.data.purchase_no} recorded. ${fmtMoney(r.data.items_total)} posted to ${supplier?.name || 'the supplier'}.`);
+      }
       onSaved();
     } catch (err) {
-      setServerError(err?.response?.data?.message || 'The purchase could not be recorded. Try again.');
+      setServerError(err?.response?.data?.message
+        || (record ? 'The purchase could not be saved. Try again.' : 'The purchase could not be recorded. Try again.'));
     } finally { setSaving(false); }
   };
+
+  // Consequence of an edit, stated before saving (only for a valid form, as
+  // the items total leaves out lines still being filled in).
+  const oldItems = num(record?.items_total);
+  let ledgerNote = null;
+  if (record && supplier && !firstError) {
+    if (String(record.supplier_id) !== String(supplier.id)) {
+      ledgerNote = `${fmtMoney(oldItems)} is removed from the ledger of ${record.supplier_name} and ${fmtMoney(itemsTotal)} is posted to the ledger of ${supplier.name}.`;
+    } else if (Math.abs(oldItems - itemsTotal) > 0.005) {
+      ledgerNote = `The ledger of ${supplier.name} is corrected from ${fmtMoney(oldItems)} to ${fmtMoney(itemsTotal)}.`;
+    }
+  }
 
   const taken = new Set(form.lines.map(l => String(l.raw_material_id)).filter(Boolean));
   const materialOptions = (current) => materials.map(m => ({
@@ -891,13 +972,17 @@ function PurchaseDialog({ isOpen, materials, suppliers, onClose, onSaved }) {
     <Modal
       isOpen={isOpen}
       onClose={() => { if (!saving) onClose(); }}
-      title="Record purchase"
+      title={record ? `Edit purchase ${record.purchase_no}` : 'Record purchase'}
       size="xl"
       footer={
         <>
-          {attempted && blockedReason && <span role="status" className="mfg-foot-status is-error" style={{ marginRight: 'auto' }}>{blockedReason}</span>}
+          {footerStatus && (
+            <span role="status" className={`mfg-foot-status${isChanged ? ' is-error' : ''}`} style={{ marginRight: 'auto' }}>{footerStatus}</span>
+          )}
           <button className="btn btn-outline" onClick={onClose} disabled={saving}>Cancel</button>
-          <BusyButton busy={saving} busyLabel="Saving…" onClick={save}>Save purchase</BusyButton>
+          <BusyButton busy={saving} busyLabel="Saving…" onClick={save} disabled={!!record && !!blockedReason}>
+            {record ? 'Save changes' : 'Save purchase'}
+          </BusyButton>
         </>
       }
     >
@@ -908,7 +993,7 @@ function PurchaseDialog({ isOpen, materials, suppliers, onClose, onSaved }) {
               <Picker
                 id="rp-supplier" value={form.supplier_id} placeholder="Select supplier" searchPlaceholder="Search suppliers"
                 invalid={attempted && !!headerErrors.supplier_id}
-                options={suppliers.map(s => ({ value: s.id, label: s.name }))}
+                options={supplierOptions.map(s => ({ value: s.id, label: s.name }))}
                 onChange={v => setHeader('supplier_id', v)}
               />
             </FormField>
@@ -960,8 +1045,7 @@ function PurchaseDialog({ isOpen, materials, suppliers, onClose, onSaved }) {
                   <div className="hr-line-cell">
                     <NumberField
                       ariaLabel={`Rate, line ${i + 1}`} value={l.rate}
-                      title={l.material?.last_purchase_rate != null
-                        ? `Last bought at ${fmtRate(l.material.last_purchase_rate)} on ${fmtDate(l.material.last_purchase_date)}` : undefined}
+                      title={rateHint(l.material)}
                       invalid={!!error && !(parseNum(l.rate) > 0)}
                       onChange={v => setLine(l.key, { rate: v })}
                       onBlur={() => setLineTouched(p => ({ ...p, [l.key]: true }))}
@@ -973,7 +1057,8 @@ function PurchaseDialog({ isOpen, materials, suppliers, onClose, onSaved }) {
                   </div>
                   <RemoveLine
                     label={`Remove line ${i + 1}`}
-                    disabled={form.lines.length === 1}
+                    title={minQty(l) > 0 ? 'Already used in batches. It stays on this purchase.' : undefined}
+                    disabled={form.lines.length === 1 || minQty(l) > 0}
                     onClick={() => setForm(p => ({ ...p, lines: p.lines.filter(x => x.key !== l.key) }))}
                   />
                   {error && (
@@ -1011,12 +1096,19 @@ function PurchaseDialog({ isOpen, materials, suppliers, onClose, onSaved }) {
             <div className="hr-total-cell is-net"><div className="hr-total-label">Total cost</div><div className="hr-total-value">{fmtMoney(itemsTotal + chargesValue)}</div></div>
           </div>
 
-          <p className="mfg-note">
-            {supplier && itemsTotal > 0
-              ? `${fmtMoney(itemsTotal)} is posted to the ledger of ${supplier.name}.`
-              : 'The items total is posted to the supplier’s ledger.'}
-            {' '}Each material&apos;s average rate is updated with its landed rate.
-          </p>
+          {record ? (
+            <p className="mfg-note">
+              {ledgerNote && `${ledgerNote} `}
+              Stock and average rates are recalculated from the corrected lines. Batches already created keep their costs.
+            </p>
+          ) : (
+            <p className="mfg-note">
+              {supplier && itemsTotal > 0
+                ? `${fmtMoney(itemsTotal)} is posted to the ledger of ${supplier.name}.`
+                : 'The items total is posted to the supplier’s ledger.'}
+              {' '}Each material&apos;s average rate is updated with its landed rate.
+            </p>
+          )}
           {serverError && <Notice tone="danger" style={{ marginTop: 12 }}>{serverError}</Notice>}
         </>
       )}
@@ -1025,10 +1117,24 @@ function PurchaseDialog({ isOpen, materials, suppliers, onClose, onSaved }) {
 }
 
 // ── View purchase ──────────────────────────────────────────────────────────
-function PurchaseView({ purchase, onClose }) {
+function PurchaseView({ purchase, onClose, onEdit }) {
   const p = purchase;
   return (
-    <Modal isOpen={!!p} onClose={onClose} title={p ? `Purchase ${p.purchase_no}` : ''} size="lg">
+    <Modal
+      isOpen={!!p}
+      onClose={onClose}
+      title={p ? `Purchase ${p.purchase_no}` : ''}
+      size="lg"
+      footer={
+        <>
+          <button className="btn btn-outline" onClick={onClose}>Close</button>
+          <button className="btn btn-primary" onClick={onEdit}>
+            <span className="material-symbols-outlined" aria-hidden="true">edit</span>
+            Edit purchase
+          </button>
+        </>
+      }
+    >
       {p && (
         <>
           <FieldGrid cols={4}>

@@ -398,10 +398,10 @@ export function WarnText({ children }) {
 }
 
 /** Line-editor remove control (the same × as every HR editor line). */
-export function RemoveLine({ label, onClick, disabled }) {
+export function RemoveLine({ label, onClick, disabled, title }) {
   return (
     <div className="hr-line-remove">
-      <button type="button" onClick={onClick} disabled={disabled} aria-label={label} title={label}>
+      <button type="button" onClick={onClick} disabled={disabled} aria-label={label} title={title || label}>
         <span className="material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden="true">close</span>
       </button>
     </div>
