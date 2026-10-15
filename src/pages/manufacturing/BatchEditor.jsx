@@ -352,8 +352,10 @@ export default function BatchEditor() {
     disabled: String(x.id) !== String(current) && (pack.packaging.some(r => String(r.raw_material_id) === String(x.id)) || num(x.stock_qty) <= 0),
     disabledReason: num(x.stock_qty) <= 0 ? 'Out of stock' : 'Already on this pack size',
   }));
+  // The pack type is the option's hint ("200 ml   Glass Bottle"): it tells the
+  // packing floor what to fill, but is not part of the pack size.
   const packOptions = (current) => (group?.packs || []).map(p => ({
-    value: p.id, label: p.pack_size,
+    value: p.id, label: p.pack_size, hint: p.pack_type || undefined,
     disabled: String(p.id) !== String(current) && (form.packs.some(r => String(r.product_id) === String(p.id)) || (outUom && p.vol_uom_base_type !== outUom.base_type)),
     disabledReason: outUom && p.vol_uom_base_type !== outUom.base_type ? `Cannot be filled from an output in ${outUom.symbol}` : 'Already in this batch',
   }));

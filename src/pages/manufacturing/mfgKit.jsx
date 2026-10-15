@@ -1,7 +1,8 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
-import { Select, SearchSelect, InfoPopover, SortableHeader, blockWheelChange, num } from '../hr/HrKit';
+import { Select, SearchSelect, InfoPopover, SortableHeader, blockWheelChange, num, useAnchoredMenu } from '../hr/HrKit';
+import { useExclusivePopup } from '../../utils/popupBus';
 
 // ─── Manufacturing UI kit ──────────────────────────────────────────────────
 // Shared by the four Manufacturing screens. Built on the HR kit (HrKit +
@@ -86,11 +87,11 @@ export function Margin({ sale, cost }) {
 export const cleanText = (value) => String(value ?? '').trim().replace(/\s+/g, ' ');
 /** "The same name": case and extra spaces ignored. Mirrors the server. */
 export const normKey = (value) => String(value ?? '').toLowerCase().trim().replace(/\s+/g, ' ');
-/** The generated pack size label, as the server stores it: "200 ml", "200 ml Pouch". */
-export const packLabel = (volume, symbol, packType) => {
+/** The generated pack size label, as the server stores it: number + unit
+ *  ("200 ml"). The pack type is never part of it. */
+export const packLabel = (volume, symbol) => {
   const n = String(Number(Math.round((Number(volume) + Number.EPSILON) * 10000) / 10000));
-  const type = cleanText(packType);
-  return `${n} ${symbol || ''}${type ? ` ${type}` : ''}`.trim();
+  return `${n} ${symbol || ''}`.trim();
 };
 export const plural = (n, one, many) => `${group(n, 0, 0)} ${Number(n) === 1 ? one : many}`;
 
@@ -300,8 +301,20 @@ export function PackSizeField({ id, volume, uomId, units, onVolume, onUnit, inva
 }
 
 // ── Pieces ─────────────────────────────────────────────────────────────────
-/** "KHALIS Hair Oil · 200 ml": the pack size is muted text, not a tag. */
-export function NameWithTag({ name, tag }) {
+/** "KHALIS Hair Oil · 200 ml": the pack size is muted text, not a tag.
+ *  `wrap`: when the column is too narrow, the size moves under the name
+ *  instead of widening the table (a table with optional columns at 1280px). */
+export function NameWithTag({ name, tag, wrap }) {
+  if (wrap) {
+    // The "·" is drawn before the size and hangs into the gap; on a line of
+    // its own it falls outside the box and is clipped (mfg-name.can-wrap).
+    return (
+      <span className="mfg-name can-wrap">
+        <span className="mfg-name-main">{name}</span>
+        {tag && <span className="mfg-name-size">{tag}</span>}
+      </span>
+    );
+  }
   return (
     <span className="mfg-name">
       <span className="mfg-name-main">{name}</span>
@@ -384,6 +397,160 @@ export function SortHead({ sort, column, label, num: isNum, date, style, info, t
       after={info}
       style={style}
     />
+  );
+}
+
+// ── Column choice ──────────────────────────────────────────────────────────
+// A list's optional columns, as on Inventory: a columns button in the table's
+// last header cell opens a checklist (portal, keyboard operable, one popup at
+// a time). The choice is kept in this browser; a private window or blocked
+// storage simply starts from the defaults. `defaults` = { key: shown } and is
+// a module-level constant.
+export function useColumnPrefs(storageKey, defaults) {
+  const [shown, setShown] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+      if (saved && typeof saved === 'object') {
+        return Object.fromEntries(Object.keys(defaults).map(k => [k, typeof saved[k] === 'boolean' ? saved[k] : defaults[k]]));
+      }
+    } catch { /* storage unavailable: defaults */ }
+    return defaults;
+  });
+  useEffect(() => {
+    try { localStorage.setItem(storageKey, JSON.stringify(shown)); } catch { /* not kept */ }
+  }, [storageKey, shown]);
+  return {
+    isShown: (key) => shown[key] !== false,
+    toggle: (key) => setShown(s => ({ ...s, [key]: s[key] === false })),
+    reset: () => setShown(defaults),
+    isDefault: Object.keys(defaults).every(k => (shown[k] !== false) === (defaults[k] !== false)),
+  };
+}
+
+/** columns: [{ key, label }] — the optional columns, in table order.
+ *  fixed: [labels] — columns that are always shown (listed first, ticked and
+ *  unavailable, so the operator sees why they cannot be hidden).
+ *  The trigger is a quiet `tune` icon in the header (not a bordered button,
+ *  which would read as one more row action); a blue dot marks a view that
+ *  differs from the default. Opened with the mouse, the menu itself takes
+ *  focus (no item looks hovered); opened from the keyboard, the first item. */
+export function ColumnMenu({ columns, prefs, fixed = [] }) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+  const itemRefs = useRef([]);
+  const byKeyboard = useRef(false);
+  const menuId = useId();
+  const style = useAnchoredMenu(open, triggerRef, menuRef, fixed.length + columns.length + 2);
+  const close = (refocus) => { setOpen(false); if (refocus) triggerRef.current?.focus(); };
+  const openMenu = (keyboard) => { byKeyboard.current = keyboard; setOpen(true); };
+  useExclusivePopup(open, () => setOpen(false));
+  const label = prefs.isDefault ? 'Choose columns' : 'Choose columns (changed from the default)';
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => {
+      if (triggerRef.current?.contains(e.target) || menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  // Focus once the portal has mounted: the first item from the keyboard, the
+  // menu itself from the mouse (arrow keys still start at the first item).
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!open) { focused.current = false; return; }
+    const target = byKeyboard.current ? itemRefs.current.find(Boolean) : menuRef.current;
+    if (focused.current || !target) return;
+    target.focus({ preventScroll: true });
+    focused.current = true;
+  }, [open, style]);
+
+  const onKeyDown = (e) => {
+    e.stopPropagation();
+    const items = itemRefs.current.filter(Boolean);
+    const i = items.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); close(true); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length]?.focus({ preventScroll: true }); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); items[i <= 0 ? items.length - 1 : i - 1]?.focus({ preventScroll: true }); }
+    else if (e.key === 'Tab') close(false);
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`mfg-icon-btn mfg-col-btn${open ? ' is-open' : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        aria-label={label}
+        title={label}
+        onClick={(e) => (open ? close(false) : openMenu(e.detail === 0))}
+        onKeyDown={(e) => { if (e.key === 'ArrowDown' && !open) { e.preventDefault(); openMenu(true); } }}
+      >
+        <span className="material-symbols-outlined" aria-hidden="true">tune</span>
+        {!prefs.isDefault && <span className="mfg-col-dot" aria-hidden="true" />}
+      </button>
+      {open && style && createPortal(
+        <div ref={menuRef} id={menuId} className="hr-kebab-menu mfg-col-menu" role="menu" aria-label="Show columns"
+          tabIndex={-1} style={style} onKeyDown={onKeyDown}>
+          <div className="mfg-col-menu-title" aria-hidden="true">Show columns</div>
+          {fixed.map((name, i) => (
+            <button
+              key={`fixed-${name}`}
+              ref={el => { itemRefs.current[i] = el; }}
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked="true"
+              aria-disabled="true"
+              className="hr-kebab-item"
+              title="Always shown"
+            >
+              <span className="material-symbols-outlined mfg-col-check is-on is-fixed" aria-hidden="true">check_box</span>
+              {name}
+            </button>
+          ))}
+          {columns.map((c, j) => {
+            const on = prefs.isShown(c.key);
+            const i = fixed.length + j;
+            return (
+              <button
+                key={c.key}
+                ref={el => { itemRefs.current[i] = el; }}
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={on}
+                className="hr-kebab-item"
+                onClick={() => prefs.toggle(c.key)}
+              >
+                <span className={`material-symbols-outlined mfg-col-check${on ? ' is-on' : ''}`} aria-hidden="true">
+                  {on ? 'check_box' : 'check_box_outline_blank'}
+                </span>
+                {c.label}
+              </button>
+            );
+          })}
+          <div className="hr-kebab-sep" role="separator" />
+          <button
+            ref={el => { itemRefs.current[fixed.length + columns.length] = el; }}
+            type="button"
+            role="menuitem"
+            className="hr-kebab-item"
+            aria-disabled={prefs.isDefault ? 'true' : undefined}
+            title={prefs.isDefault ? 'The default columns are shown.' : undefined}
+            onClick={() => { if (!prefs.isDefault) prefs.reset(); }}
+          >
+            <span className="material-symbols-outlined" aria-hidden="true">restart_alt</span>
+            Reset to default
+          </button>
+        </div>,
+        document.body
+      )}
+    </>
   );
 }
 
@@ -654,6 +821,24 @@ export const MFG_STYLES = `
   .mfg-opt-label { flex: 1; min-width: 0; }
   .mfg-opt-hint { margin-left: auto; padding-left: 16px; color: var(--gray-500); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
+  /* Column menu (ColumnMenu): a quiet header icon (same 32px box as the row
+     kebabs under it), light blue while open, a blue dot when changed from the
+     default; the menu has a caption, then one checkbox item per column. */
+  .mfg-icon-btn.mfg-col-btn { position: relative; width: 32px; height: 32px; }
+  .mfg-icon-btn.mfg-col-btn.is-open { background: var(--blue-ultra); color: var(--blue); }
+  .mfg-col-dot {
+    position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--blue); box-shadow: 0 0 0 2px var(--gray-50);
+  }
+  .mfg-col-menu:focus { outline: none; }
+  .mfg-col-menu-title {
+    padding: 6px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--gray-500); user-select: none;
+  }
+  .hr-kebab-item .mfg-col-check { font-size: 18px; color: var(--gray-400); }
+  .hr-kebab-item .mfg-col-check.is-on { color: var(--blue); font-variation-settings: 'FILL' 1; }
+  .hr-kebab-item .mfg-col-check.is-fixed { color: var(--gray-300); }
+
   /* Row highlight after an add or a rename (brief section 2) */
   @keyframes mfgFlash { 0%, 35% { background: #fef3c7; } 100% { background: transparent; } }
   .mfg-flash { animation: mfgFlash 1.8s ease-out; }
@@ -841,6 +1026,10 @@ export const MFG_STYLES = `
 
   /* "KHALIS Hair Oil · 200 ml": the pack size is muted text, not a tag. */
   .mfg-name { align-items: baseline; gap: 5px; }
+  .mfg-name.can-wrap { flex-wrap: wrap; gap: 0; overflow: hidden; }
+  .mfg-name.can-wrap .mfg-name-main { margin-right: 14px; white-space: normal; }
+  .mfg-name.can-wrap .mfg-name-size { margin-left: -14px; }
+  .mfg-name.can-wrap .mfg-name-size::before { content: '·'; display: inline-block; width: 14px; text-align: center; }
   .mfg-name-main { color: inherit; }
   .mfg-name-sep, .mfg-name-size { color: var(--gray-500); font-variant-numeric: tabular-nums; }
 

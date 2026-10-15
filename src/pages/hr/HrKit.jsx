@@ -267,7 +267,8 @@ const KEBAB_GAP     = 4;   // between trigger and menu
 const KEBAB_MARGIN  = 8;   // smallest gap the menu keeps from a viewport edge
 const KEBAB_MIN_H   = 96;  // below this, scrolling the menu beats shrinking it
 
-function useAnchoredMenu(open, triggerRef, menuRef, itemCount) {
+// Exported for menus built on the same placement (Manufacturing's column menu).
+export function useAnchoredMenu(open, triggerRef, menuRef, itemCount) {
   const [style, setStyle] = useState(null);
 
   const place = useCallback(() => {

@@ -9,24 +9,28 @@ import {
 } from '../hr/HrKit';
 import {
   MfgStyles, Picker, NumberField, MfgField, WarnText, NameWithTag, EMPTY, PackSizeField, Rate, Margin, SortHead,
-  parseNum, normKey, cleanText, packLabel, plural, marginPct,
+  ColumnMenu, useColumnPrefs, parseNum, normKey, cleanText, packLabel, plural, marginPct,
 } from './mfgKit';
 import { ByRateInfo, byRateInfo } from './batchKit';
 
 // ─── Manufactured products and by-products ─────────────────────────────────
 // Two tabs over one kind of record: both are rows in `products`, so Sale,
 // Inventory and Reports treat them like any other product.
-//   Manufactured product: pack size = number + unit (a weight or volume) plus
-//     an optional pack type from the managed list (pack_type_id); the server
-//     generates pack_size ("200 ml", "200 ml Pouch"). Unique by name + size in
-//     base units + pack type (1 L = 1000 ml), case and extra spaces ignored.
-//     Its purchase rate is the cost per unit of its latest batch.
+//   Manufactured product: pack size = number + unit; the server generates
+//     pack_size ("200 ml"). An optional pack type from the managed list
+//     (pack_type_id) is an attribute used inside Manufacturing only: never
+//     part of the pack size or the name, so never on an invoice (owner
+//     2026-10-15). Unique by name + size in base units (1 L = 1000 ml), case
+//     and extra spaces ignored. Its purchase rate is the cost per unit of its
+//     latest batch.
 //   By-product: its pack size IS its unit ("kg", "pcs"): no number, no pack
 //     type. Unique by name, case and extra spaces ignored. The unit is fixed
 //     once in use. Its purchase rate is entered here and values it in a batch.
 // Categories and pack types are managed in one dialog (two tabs), or added
-// from the product form with "+ New". A pack type in use cannot be renamed
-// or deleted: its name is printed inside pack sizes on invoices.
+// from the product form with "+ New". Both can be renamed while in use; one
+// in use cannot be deleted.
+// The products table has optional columns (ColumnMenu); Pack type is off by
+// default.
 // Rules mirror server/routes/manufacturing.js (authoritative).
 
 const KINDS = {
@@ -52,9 +56,27 @@ const LISTS = {
   },
   packTypes: {
     path: '/manufacturing/pack-types', noun: 'pack type', Noun: 'Pack type', maxLength: 40, placeholder: 'New pack type name',
-    lockedRename: (t) => `${t.name} is used by ${plural(t.product_count, 'product', 'products')}, so it can't be renamed or deleted.`,
-    lockedDelete: (t) => `${t.name} is used by ${plural(t.product_count, 'product', 'products')}, so it can't be renamed or deleted.`,
+    // Not part of any pack size or name, so a rename changes no document.
+    lockedRename: () => null,
+    lockedDelete: (t) => `${t.name} is used by ${plural(t.product_count, 'product', 'products')}. Choose another pack type on those products first.`,
   },
+};
+
+// Optional columns of the products table (ColumnMenu). Product and the
+// actions are always shown; Latest cost and Margin only to users who may see
+// purchase rates.
+const PRODUCT_COLUMNS = [
+  { key: 'pack_type', label: 'Pack type' },
+  { key: 'category', label: 'Category' },
+  { key: 'company', label: 'Company' },
+  { key: 'sale', label: 'Sale rate' },
+  { key: 'retail', label: 'Retail price' },
+  { key: 'tax', label: 'Sale tax' },
+  { key: 'cost', label: 'Latest cost', costOnly: true },
+  { key: 'margin', label: 'Margin', costOnly: true },
+];
+const PRODUCT_COLUMN_DEFAULTS = {
+  pack_type: false, category: true, company: true, sale: true, retail: true, tax: true, cost: true, margin: true,
 };
 const sortByName = (rows) => [...rows].sort((a, b) => a.name.localeCompare(b.name));
 const dupMessage = (list, name) => `A ${list.noun} named "${name}" already exists.`;
@@ -74,7 +96,7 @@ const toForm = (r, kind) => ({
   sale_tax_pct: Number(r.tax_applicable) ? String(num(r.sale_tax_pct)) : '',
 });
 
-function validate(form, kind, existing, editingId, uoms, packTypes) {
+function validate(form, kind, existing, editingId, uoms) {
   const e = {};
   const name = cleanText(form.name);
   if (!name) e.name = kind === 'product' ? 'Enter the product name.' : 'Enter the by-product name.';
@@ -84,14 +106,13 @@ function validate(form, kind, existing, editingId, uoms, packTypes) {
     if (!(volume > 0)) e.volume = 'Enter the pack size.';
     else if (!form.volume_uom_id) e.volume_uom_id = 'Choose the pack size unit.';
     else if (unit?.base_type === 'count' && !Number.isInteger(volume)) e.volume = `Enter a whole number of ${unit.symbol} for the pack size.`;
-    const typeName = packTypes.find(t => String(t.id) === String(form.pack_type_id))?.name || '';
     if (name && volume > 0 && unit) {
-      // Same name, same size in base units (1 L = 1000 ml, 1 kg = 1000 g), same pack type.
+      // Same name, same size in base units (1 L = 1000 ml, 1 kg = 1000 g). The
+      // pack type does not make a second product.
       const base = volume * parseNum(unit.to_base_factor);
       const dup = existing.find(p => p.id !== editingId && normKey(p.name) === normKey(name)
         && p.vol_uom_base_type === unit.base_type
-        && Math.abs(parseNum(p.volume) * parseNum(p.vol_uom_factor) - base) < 1e-6
-        && normKey(p.pack_type || '') === normKey(typeName));
+        && Math.abs(parseNum(p.volume) * parseNum(p.vol_uom_factor) - base) < 1e-6);
       if (dup) e.name = `${dup.name} — ${dup.pack_size} already exists.`;
     }
   } else {
@@ -161,6 +182,7 @@ const COMMON_SORT = {
 const PRODUCT_SORT = {
   ...COMMON_SORT,
   product: (a, b) => byName(a, b) || packBase(a) - packBase(b),
+  pack_type: { value: p => p.pack_type, text: true },
   category: { value: p => p.category_name, text: true },
   cost: { value: p => (num(p.purchase_rate) > 0 ? num(p.purchase_rate) : null) },
   margin: { value: p => marginPct(p.sale_rate, p.purchase_rate) },
@@ -186,6 +208,7 @@ export default function ManufacturedProducts() {
   const [search, setSearch] = useState('');
   const productSort = useSort('product');
   const bySort = useSort('name');
+  const cols = useColumnPrefs('mfg.products.columns.v1', PRODUCT_COLUMN_DEFAULTS);
 
   const [dialog, setDialog] = useState(null);     // { kind, record }
   const [form, setForm] = useState(emptyForm);
@@ -225,14 +248,13 @@ export default function ManufacturedProducts() {
   const touch = (key) => setTouched(p => ({ ...p, [key]: true }));
 
   const list = kind === 'product' ? products : byProducts;
-  const errors = dialog ? validate(form, kind, list, editing?.id, uoms, packTypes) : {};
+  const errors = dialog ? validate(form, kind, list, editing?.id, uoms) : {};
   const firstError = FIELD_ORDER.map(k => errors[k]).find(Boolean);
   const isChanged = editing ? changed(form, editing, kind) : true;
   const blockedReason = editing && !isChanged ? 'No changes yet' : firstError || null;
   const errorFor = (key) => serverErrors[key] || (touched[key] ? errors[key] : null);
   const retailBelowSale = parseNum(form.retail_price) > 0 && parseNum(form.sale_rate) > 0
     && parseNum(form.retail_price) < parseNum(form.sale_rate);
-  const packTypeName = packTypes.find(t => String(t.id) === String(form.pack_type_id))?.name || '';
 
   const save = async () => {
     setTouched(Object.fromEntries(FIELD_ORDER.map(k => [k, true])));
@@ -252,7 +274,7 @@ export default function ManufacturedProducts() {
         sale_tax_pct: form.tax_applicable ? form.sale_tax_pct : 0,
       };
     const unit = uoms.find(u => String(u.id) === String(form.volume_uom_id));
-    const label = kind === 'product' ? `${payload.name} — ${packLabel(form.volume, unit?.symbol, packTypeName)}` : payload.name;
+    const label = kind === 'product' ? `${payload.name} — ${packLabel(form.volume, unit?.symbol)}` : payload.name;
     try {
       if (editing) await api.put(`${KINDS[kind].path}/${editing.id}`, payload);
       else await api.post(KINDS[kind].path, payload);
@@ -282,22 +304,33 @@ export default function ManufacturedProducts() {
 
   // ── Lists ──
   const q = search.trim().toLowerCase();
+  const showCost = products.some(p => p.purchase_rate !== null);
+  const productColumns = PRODUCT_COLUMNS.filter(c => showCost || !c.costOnly);
+  const show = (key) => cols.isShown(key) && productColumns.some(c => c.key === key);
+  // Pack type, category and company are searched only while their column is
+  // shown, so a match is always visible in the row. Sorting on a hidden
+  // column falls back to the default order.
+  const findIn = ['pack_type', 'category', 'company'].filter(show).join();
+  const sortedHidden = productSort.sortConfig.column !== 'product' && !show(productSort.sortConfig.column);
+  const productSortConfig = useMemo(() => (sortedHidden ? { column: 'product', direction: 'asc' } : productSort.sortConfig),
+    [sortedHidden, productSort.sortConfig]);
+  const productSortView = { ...productSort, sortConfig: productSortConfig };
   const shownProducts = useMemo(() => sortRows(products.filter(p => !q
     || p.name.toLowerCase().includes(q) || (p.pack_size || '').toLowerCase().includes(q)
-    || (p.category_name || '').toLowerCase().includes(q) || (p.company_name || '').toLowerCase().includes(q)),
-  productSort.sortConfig, PRODUCT_SORT, productOrder), [products, q, productSort.sortConfig]);
+    || (findIn.includes('pack_type') && (p.pack_type || '').toLowerCase().includes(q))
+    || (findIn.includes('category') && (p.category_name || '').toLowerCase().includes(q))
+    || (findIn.includes('company') && (p.company_name || '').toLowerCase().includes(q))),
+  productSortConfig, PRODUCT_SORT, productOrder), [products, q, findIn, productSortConfig]);
   const shownBy = useMemo(() => sortRows(byProducts.filter(p => !q
     || p.name.toLowerCase().includes(q) || (p.pack_size || '').toLowerCase().includes(q)
     || (p.company_name || '').toLowerCase().includes(q)),
   bySort.sortConfig, BY_PRODUCT_SORT, byProductOrder), [byProducts, q, bySort.sortConfig]);
-  const showCost = products.some(p => p.purchase_rate !== null);
 
   const allUnits = uoms.map(u => ({ value: u.id, label: u.symbol }));
   const categoryOptions = [{ value: '', label: 'No category' }, ...categories.map(c => ({ value: c.id, label: c.name }))];
   const packTypeOptions = [{ value: '', label: 'No pack type' }, ...packTypes.map(t => ({ value: t.id, label: t.name }))];
   const companyOptions = companies.map(c => ({ value: c.id, label: c.name }));
   const formUnit = uoms.find(u => String(u.id) === String(form.volume_uom_id));
-  const formSize = parseNum(form.volume) > 0 && formUnit ? packLabel(form.volume, formUnit.symbol, packTypeName) : null;
   // The (i) texts of the by-product form: its unit and name once entered.
   const byUnit = uoms.find(u => String(u.id) === String(form.uom_id))?.symbol;
   const byCtx = { unit: byUnit || 'unit', name: cleanText(form.name) || 'the by-product', master: true };
@@ -364,32 +397,38 @@ export default function ManufacturedProducts() {
               <table className="hr-table hr-page-table">
                 <thead>
                   <tr>
-                    <SortHead sort={productSort} column="product" label="Product" />
-                    <SortHead sort={productSort} column="category" label="Category" style={{ width: '12%' }} />
-                    <SortHead sort={productSort} column="company" label="Company" style={{ width: '15%' }} />
-                    <SortHead sort={productSort} column="sale" label="Sale rate" num style={{ width: '9%' }} />
-                    <SortHead sort={productSort} column="retail" label="Retail" title="Retail price" num style={{ width: '10%' }} />
-                    <SortHead sort={productSort} column="tax" label="Sale tax" num style={{ width: '8%' }} />
-                    {showCost && <SortHead sort={productSort} column="cost" label="Latest cost" num style={{ width: '10%' }} />}
-                    {showCost && <SortHead sort={productSort} column="margin" label="Margin" num style={{ width: '8%' }} />}
-                    <th style={{ width: 56 }}><span className="hr-sr-only">Actions</span></th>
+                    <SortHead sort={productSortView} column="product" label="Product" />
+                    {/* Pack type takes its width from the two other text columns, so Product keeps its share. */}
+                    {show('pack_type') && <SortHead sort={productSortView} column="pack_type" label="Pack type" style={{ width: '10%' }} />}
+                    {show('category') && <SortHead sort={productSortView} column="category" label="Category" style={{ width: show('pack_type') ? '10%' : '12%' }} />}
+                    {show('company') && <SortHead sort={productSortView} column="company" label="Company" style={{ width: show('pack_type') ? '12%' : '15%' }} />}
+                    {show('sale') && <SortHead sort={productSortView} column="sale" label="Sale rate" num style={{ width: '9%' }} />}
+                    {show('retail') && <SortHead sort={productSortView} column="retail" label="Retail" title="Retail price" num style={{ width: '10%' }} />}
+                    {show('tax') && <SortHead sort={productSortView} column="tax" label="Sale tax" num style={{ width: '8%' }} />}
+                    {show('cost') && <SortHead sort={productSortView} column="cost" label="Latest cost" num style={{ width: '10%' }} />}
+                    {show('margin') && <SortHead sort={productSortView} column="margin" label="Margin" num style={{ width: '8%' }} />}
+                    <th style={{ width: 56, textAlign: 'right' }}>
+                      <ColumnMenu columns={productColumns} prefs={cols} fixed={['Product']} />
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {shownProducts.map(p => (
                     <tr key={p.id}>
-                      <td><NameWithTag name={p.name} tag={p.pack_size} /></td>
-                      <td>{p.category_name || EMPTY}</td>
-                      <td className="mfg-ellipsis" title={p.company_name || undefined}>{p.company_name || EMPTY}</td>
-                      <td className="hr-num">{fmtAmount(p.sale_rate)}</td>
-                      <td className="hr-num">{fmtAmount(p.retail_price)}</td>
-                      <td className="hr-num">{taxCell(p)}</td>
-                      {showCost && (
+                      {/* With the extra Pack type column a narrow screen wraps the size under the name. */}
+                      <td><NameWithTag name={p.name} tag={p.pack_size} wrap={show('pack_type')} /></td>
+                      {show('pack_type') && <td className="mfg-ellipsis" title={p.pack_type || undefined}>{p.pack_type || EMPTY}</td>}
+                      {show('category') && <td>{p.category_name || EMPTY}</td>}
+                      {show('company') && <td className="mfg-ellipsis" title={p.company_name || undefined}>{p.company_name || EMPTY}</td>}
+                      {show('sale') && <td className="hr-num">{fmtAmount(p.sale_rate)}</td>}
+                      {show('retail') && <td className="hr-num">{fmtAmount(p.retail_price)}</td>}
+                      {show('tax') && <td className="hr-num">{taxCell(p)}</td>}
+                      {show('cost') && (
                         <td className="hr-num" title={num(p.purchase_rate) > 0 ? 'Cost per unit of the latest batch sent to inventory' : 'Not produced yet'}>
                           {num(p.purchase_rate) > 0 ? <Rate value={p.purchase_rate} /> : EMPTY}
                         </td>
                       )}
-                      {showCost && (
+                      {show('margin') && (
                         <td className="hr-num" title="(Sale rate − latest cost) ÷ sale rate">
                           <Margin sale={p.sale_rate} cost={p.purchase_rate} />
                         </td>
@@ -501,7 +540,10 @@ export default function ManufacturedProducts() {
             {kind === 'product' && (
               <>
                 <MfgField label="Pack type" htmlFor="mp-type" className="hr-col-6" error={errorFor('pack_type_id')}
-                  help={packTypeName && formSize ? `Shown as ${formSize}.` : undefined}
+                  info={[
+                    'How the product is packed. It is used within Manufacturing only.',
+                    'It is not part of the product name or pack size, so invoices, sales and inventory never show it.',
+                  ]}
                   labelAction={(
                     <InlineNew list={LISTS.packTypes} items={packTypes} pickerId="mp-type"
                       onCreated={t => { setPackTypes(ts => sortByName([...ts, t])); setField('pack_type_id', t.id); }} />
@@ -676,7 +718,7 @@ function InlineNew({ list, items, pickerId, onCreated }) {
 // ── Categories & pack types pop-up ─────────────────────────────────────────
 // Two tabs over the same rows: add, rename in place and delete-when-unused.
 // Add and Save show a busy state, then the new or renamed row is briefly
-// highlighted. A pack type in use can be neither renamed nor deleted.
+// highlighted. Either kind can be renamed in use; one in use cannot be deleted.
 // Rules mirror the server (validateCategoryName / validatePackTypeName).
 function ListsDialog({ isOpen, onClose, lists, onChanged }) {
   const [which, setWhich] = useState('categories');
