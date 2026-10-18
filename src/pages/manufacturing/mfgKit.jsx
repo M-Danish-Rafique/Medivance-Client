@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
-import { Select, SearchSelect, InfoPopover, SortableHeader, blockWheelChange, num, useAnchoredMenu } from '../hr/HrKit';
+import { Select, SearchSelect, InfoPopover, SortableHeader, blockWheelChange, num, useAnchoredMenu, fmtDate } from '../hr/HrKit';
 import { useExclusivePopup } from '../../utils/popupBus';
 
 // ─── Manufacturing UI kit ──────────────────────────────────────────────────
@@ -140,10 +140,61 @@ export function BatchStatus({ status }) {
   return <span className={`mfg-badge ${s.tone}`}>{s.label}</span>;
 }
 
+// ── Formula status ─────────────────────────────────────────────────────────
+// A product's formula: raw materials (per product) and packaging (per pack
+// size). Complete has both, Incomplete one of them, Not set neither.
+// A status indicator, not a coloured pill: a small glyph beside a plain label
+// in the text colour, so a column of them stays calm and colour is never the
+// only cue (WCAG 1.4.1). The glyphs are one family (a 12px circle, 1.5px
+// ring, in a 14px box) that fills as the formula does, since a formula has two parts:
+// empty ring (0 of 2), half-filled ring (1 of 2), solid circle with a check
+// (2 of 2). Drawn as SVG so all three share exact geometry. The same
+// indicator on the products list (there a link to the formula, `to`) and the
+// formula page head.
+export const FORMULA_STATUS = {
+  complete: { label: 'Complete', tone: 'is-complete' },
+  partial: { label: 'Incomplete', tone: 'is-partial' },
+  none: { label: 'Not set', tone: 'is-none' },
+};
+function FormulaGlyph({ state }) {
+  return (
+    <svg className="mfg-fstatus-icon" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" focusable="false">
+      {state === 'complete' ? (
+        <>
+          <circle cx="7" cy="7" r="6" fill="currentColor" />
+          <path d="M4.5 7.1l1.7 1.7 3.3-3.4" fill="none" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </>
+      ) : (
+        <>
+          <circle cx="7" cy="7" r="5.25" fill="none" stroke="currentColor" strokeWidth="1.5" />
+          {state === 'partial' && <path d="M7 4a3 3 0 0 1 0 6z" fill="currentColor" />}
+        </>
+      )}
+    </svg>
+  );
+}
+export function FormulaStatus({ state, title, to, ariaLabel }) {
+  const s = FORMULA_STATUS[state];
+  if (!s) return null;
+  const body = (
+    <>
+      <FormulaGlyph state={state} />
+      <span className="mfg-fstatus-label">{s.label}</span>
+    </>
+  );
+  return to
+    ? <Link className={`mfg-fstatus is-link ${s.tone}`} to={to} title={title} aria-label={ariaLabel}>{body}</Link>
+    : <span className={`mfg-fstatus ${s.tone}`} title={title}>{body}</span>;
+}
+
 // ── Picker ─────────────────────────────────────────────────────────────────
 // The one dropdown of the module (brief section 3): HrKit Select up to eight
 // options, HrKit SearchSelect beyond that. Both open over dialogs (portal),
 // work from the keyboard and say "No matches" when nothing fits.
+// `searchable` keeps the search field at any count, for lists that grow into
+// the hundreds (the batch's Product), so the control does not change shape
+// when the ninth option arrives. The search field carries the same caret as
+// the Select, so it still reads as a dropdown.
 // options: [{ value, label, hint?, disabled?, disabledReason? }]
 export const SEARCH_THRESHOLD = 8;
 const pickerLabel = (o) => o.label;
@@ -155,24 +206,29 @@ const renderPickerOption = (o) => (
 );
 
 export function Picker({
-  id, value, onChange, options, placeholder = 'Select', searchPlaceholder, invalid, disabled, onBlur, ariaLabel,
+  id, value, onChange, options, placeholder = 'Select', searchPlaceholder, invalid, disabled, onBlur, ariaLabel, searchable,
 }) {
-  if (options.length > SEARCH_THRESHOLD) {
+  if (searchable || options.length > SEARCH_THRESHOLD) {
     const items = options.map(o => ({ ...o, id: o.value }));
+    // SearchSelect's input takes its accessible name from a <label for>.
     return (
-      <SearchSelect
-        id={id}
-        options={items}
-        value={value}
-        onChange={onChange}
-        onBlur={onBlur}
-        placeholder={searchPlaceholder || placeholder}
-        getLabel={pickerLabel}
-        renderOption={renderPickerOption}
-        invalid={invalid}
-        disabled={disabled}
-        portal
-      />
+      <div className="mfg-search">
+        {ariaLabel && id && <label className="hr-sr-only" htmlFor={id}>{ariaLabel}</label>}
+        <SearchSelect
+          id={id}
+          options={items}
+          value={value}
+          onChange={onChange}
+          onBlur={onBlur}
+          placeholder={searchPlaceholder || placeholder}
+          getLabel={pickerLabel}
+          renderOption={renderPickerOption}
+          invalid={invalid}
+          disabled={disabled}
+          portal
+        />
+        <span className="mfg-search-caret material-symbols-outlined" aria-hidden="true">expand_more</span>
+      </div>
     );
   }
   return (
@@ -232,7 +288,7 @@ function Stepper({ inputRef, onChange, disabled }) {
 // typed, and a pasted "2.5" keeps only the whole part.
 const NON_INTEGER_KEYS = new Set(['.', ',', 'e', 'E', '+', '-']);
 export function NumberField({
-  id, value, onChange, onBlur, invalid, suffix, disabled, ariaLabel, autoFocus, integer, onKeyDown, inputRef, title,
+  id, value, onChange, onBlur, invalid, suffix, disabled, ariaLabel, autoFocus, integer, onKeyDown, inputRef, title, describedBy,
 }) {
   const ownRef = useRef(null);
   const setRef = (el) => {
@@ -255,6 +311,7 @@ export function NumberField({
         disabled={disabled}
         aria-label={ariaLabel}
         aria-invalid={invalid ? 'true' : undefined}
+        aria-describedby={describedBy || undefined}
         autoFocus={autoFocus}
         title={title}
         onChange={e => onChange(integer ? e.target.value.replace(/[.,].*$/, '') : e.target.value)}
@@ -325,6 +382,30 @@ export function NameWithTag({ name, tag, wrap }) {
 
 /** An empty value: a muted "—". */
 export const EMPTY = <span className="mfg-empty-val">—</span>;
+
+// The message to show for a failed request: the server's own message for a
+// business rule (4xx, written for the operator), else the screen's fallback,
+// so a database or network error text never reaches the screen.
+export const mfgError = (err, fallback) => {
+  const status = err?.response?.status;
+  const message = err?.response?.data?.message;
+  return status && status < 500 && typeof message === 'string' && message ? message : fallback;
+};
+/** No response, or a server error: worth one automatic retry. */
+export const isTransient = (err) => !err?.response || err.response.status >= 500;
+/** Runs `load`; after a transient failure waits 800 ms and runs it once more
+ *  (unless `isLive()` turned false: the page was left). */
+export const retryOnce = (load, isLive = () => true) => load().catch(err => (isTransient(err)
+  ? new Promise(done => setTimeout(done, 800)).then(() => (isLive() ? load() : Promise.reject(err)))
+  : Promise.reject(err)));
+
+// "6:47 PM" and "12/10/2026 at 6:47 PM", the app's time style. Stamps are
+// PKT strings ("2026-10-12 18:47:00"), so no browser timezone is involved.
+export const fmtClock = (stamp) => {
+  const [h, m] = String(stamp || '').slice(11, 16).split(':').map(Number);
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+};
+export const fmtStamp = (stamp) => (stamp ? `${fmtDate(stamp.slice(0, 10))} at ${fmtClock(stamp)}` : null);
 
 /** Every "Add …" control: the same outline button with one "+" glyph. */
 export function AddButton({ children, onClick, disabled, title, id }) {
@@ -723,6 +804,9 @@ export const MFG_STYLES = `
   .mfg-record-title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .mfg-record-product { font-size: 15px; font-weight: 600; color: var(--gray-600); }
   .mfg-page-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-left: auto; }
+  /* Outline buttons are 2px taller than filled ones app-wide; in a page head
+     they sit side by side, so every button (and the More menu) is 36px. */
+  .mfg-page-actions .btn { height: 36px; box-sizing: border-box; }
   .mfg-page-status { font-size: 12.5px; color: var(--gray-500); margin-right: 4px; }
   .mfg-page-status.is-error { color: var(--red); }
   .mfg-record { display: grid; grid-template-columns: minmax(0, 7fr) minmax(300px, 3fr); gap: 20px; align-items: start; }
@@ -821,10 +905,25 @@ export const MFG_STYLES = `
   .mfg-opt-label { flex: 1; min-width: 0; }
   .mfg-opt-hint { margin-left: auto; padding-left: 16px; color: var(--gray-500); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
+  /* Searchable Picker: the Select's caret at the right of the search field;
+     clicks pass through to the field. */
+  .mfg-search { position: relative; width: 100%; min-width: 0; }
+  .mfg-search .customer-autocomplete-wrap input.form-control { padding-right: 34px; text-overflow: ellipsis; }
+  .mfg-search-caret {
+    position: absolute; top: 50%; right: 10px; margin-top: -9px;
+    color: var(--gray-400); font-size: 18px; line-height: 1; pointer-events: none;
+    transition: transform 0.18s ease;
+  }
+  .mfg-search:has(input[aria-expanded="true"]) .mfg-search-caret { transform: rotate(180deg); }
+  .mfg-search:has(input:disabled) .mfg-search-caret { opacity: 0.5; }
+
   /* Column menu (ColumnMenu): a quiet header icon (same 32px box as the row
      kebabs under it), light blue while open, a blue dot when changed from the
      default; the menu has a caption, then one checkbox item per column. */
   .mfg-icon-btn.mfg-col-btn { position: relative; width: 32px; height: 32px; }
+  /* In a header cell it overlaps the cell's padding, so a table with the
+     button has the same header height as one without. */
+  thead th .mfg-icon-btn.mfg-col-btn { margin: -7px 0; vertical-align: middle; }
   .mfg-icon-btn.mfg-col-btn.is-open { background: var(--blue-ultra); color: var(--blue); }
   .mfg-col-dot {
     position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%;
@@ -859,6 +958,8 @@ export const MFG_STYLES = `
   .mfg-lines .mfg-num input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
   .mfg-lines .mfg-num input { -moz-appearance: textfield; }
   .mfg-lines .mfg-num.has-suffix input { padding-right: 44px !important; }
+  /* Figures in line tables sit right, under their right-aligned header. */
+  .mfg-lines .hr-line .mfg-num input { text-align: right; }
   .mfg-lines .mfg-num-suffix { right: 12px; font-size: 12px; }
   .mfg-cell {
     padding: 11px 12px;
@@ -939,7 +1040,14 @@ export const MFG_STYLES = `
     padding: 10px 14px; border-top: 1.5px solid var(--gray-200);
     background: var(--gray-50); font-weight: 700; color: var(--gray-900);
   }
-  .mfg-subrow td { padding-top: 0 !important; color: var(--gray-500); font-size: 12.5px; }
+  .mfg-subrow td { padding-top: 0 !important; color: var(--gray-500); font-size: 12.5px; line-height: 1.6; }
+  .mfg-nowrap { white-space: nowrap; }
+  .mfg-subrow-sep { color: var(--gray-300); }
+  /* A record panel with nothing to list says so in one quiet line. */
+  .mfg-record .hr-panel-body > .hr-lines-empty { padding: 2px 0; text-align: left; }
+  /* The "·" before a panel's status: the same space on both sides (the head's
+     12px gap already sits before it). */
+  .mfg-page .hr-panel-status::before, .mfg-record .hr-panel-status::before { margin-left: -5px; }
   .mfg-warn-cell { color: #b45309; font-weight: 600; }
 
   /* Card header with tabs on the left and actions on the right; the active
@@ -1155,6 +1263,15 @@ export const MFG_STYLES = `
 
   /* Yield: the filters get their own row under the card title. */
   .mfg-filterbar { padding: 12px 22px; border-bottom: 1px solid var(--gray-100); }
+  /* Key figures of a period, between the filters and the table (tax ledger). */
+  .mfg-figures { display: flex; flex-wrap: wrap; gap: 8px 48px; padding: 14px 22px; border-bottom: 1px solid var(--gray-100); }
+  .mfg-figures > div { display: flex; flex-direction: column; gap: 3px; }
+  .mfg-figures span { font-size: 12.5px; color: var(--gray-500); }
+  .mfg-figures strong { font-size: 17px; font-weight: 700; color: var(--gray-900); font-variant-numeric: tabular-nums; }
+  .mfg-figures strong.mfg-amber { color: #b45309; }
+  .mfg-row-check { width: 16px; height: 16px; margin: 0; vertical-align: middle; accent-color: var(--blue); cursor: pointer; }
+  .mfg-row-check:disabled { cursor: not-allowed; }
+  .mfg-confirm-text { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--gray-700); }
   .mfg-filterbar .mfg-filters { justify-content: flex-start; }
 
   /* "+ New" at the end of a field label, and its small popover under the label. */
@@ -1179,6 +1296,118 @@ export const MFG_STYLES = `
     text-decoration: underline; text-underline-offset: 3px;
   }
   .mfg-page-status.is-link:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 2px; border-radius: 4px; }
+
+  /* Formula status indicator (FormulaStatus). The label is the cell's own
+     text (same size, colour and line), the glyph centred on it. Tones are the
+     app's semantic colours: --green and --amber keep 3:1 on white (WCAG
+     1.4.11); "Not set" is the quiet gray-400 ring (the label carries it). As a
+     link (products list) the hit area is at least 28px high (WCAG 2.5.8 asks
+     24), the hover tints it and underlines the label, and focus shows the
+     module's ring. */
+  .mfg-fstatus { display: inline-flex; align-items: center; gap: 6px; font-size: inherit; line-height: 20px; color: var(--gray-700); white-space: nowrap; vertical-align: middle; }
+  .mfg-fstatus-icon { flex: none; display: block; }
+  /* In a table cell, middle alignment leaves the label 1px under the row's
+     other text; lift it onto the same line. */
+  td > .mfg-fstatus { position: relative; top: -1px; }
+  .mfg-fstatus.is-complete .mfg-fstatus-icon { color: var(--green); }
+  .mfg-fstatus.is-partial .mfg-fstatus-icon { color: var(--amber); }
+  .mfg-fstatus.is-none .mfg-fstatus-icon { color: var(--gray-400); }
+  .mfg-fstatus.is-link {
+    min-height: 28px; padding: 4px 8px; margin: -4px -8px; border-radius: 6px;
+    text-decoration: none; cursor: pointer; transition: background-color 0.12s ease;
+  }
+  .mfg-fstatus.is-link:hover { background: var(--gray-100); color: var(--gray-900); }
+  .mfg-fstatus.is-link:hover .mfg-fstatus-label { text-decoration: underline; text-underline-offset: 3px; }
+  .mfg-fstatus.is-link:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 1px; }
+  .mfg-page-head .mfg-fstatus { font-size: 13.5px; font-weight: 500; }
+
+  /* ── Product formula page ── */
+  .mfg-badge.is-neutral { background: transparent; color: var(--gray-600); box-shadow: inset 0 0 0 1px var(--gray-200); }
+  .mfg-skel-title { display: inline-block; width: 220px; vertical-align: middle; }
+  /* One grid for every line table of the page, so Material, Quantity and the
+     figures line up from Raw materials down through every pack size. */
+  .mfg-formula-lines .hr-lines-head, .mfg-formula-lines .hr-line {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr) 40px;
+  }
+  .mfg-formula-lines .hr-lines-head > span { overflow: visible; }
+  .mfg-formula-lines .hr-line .mfg-num input { text-align: right; }
+  /* Right-aligned figures stop short of a fixed suffix box, so "1 pcs" and
+     "24 units" keep the same gap. */
+  .mfg-formula-lines .mfg-num.has-suffix input { padding-right: 66px !important; }
+  .mfg-formula-lines .mfg-num-suffix { width: 36px; text-align: left; }
+  /* A line warning ("Check this: …") reads like a line error, in amber. */
+  .mfg-line-error > .mfg-warn-text { font-size: 11.5px; line-height: 1.35; }
+  .mfg-line-error > .mfg-warn-text .material-symbols-outlined { font-size: 13px; margin-top: 0; }
+  .hr-notice-body:has(> .hr-notice-text > .mfg-notice-line) { flex: 1; }
+  /* "Quantities for [100] [L] (i)": a sentence, not a form grid. */
+  .mfg-ref-row { display: flex; align-items: center; gap: 10px; }
+  .mfg-ref-label { margin: 0; font-size: 13.5px; color: var(--gray-700); white-space: nowrap; }
+  .mfg-ref-qty { width: 140px; }
+  .mfg-ref-unit { width: 92px; }
+  .mfg-ref-unit .hr-select-trigger { min-width: 0; }
+  /* Its error sits on the same line, after the (i): no empty band is
+     reserved under the row, and nothing moves when the error appears. */
+  .mfg-ref-row { margin-bottom: 16px; min-height: 38px; }
+  .mfg-ref-row > .hr-error { margin: 0 0 0 6px; min-width: 0; }
+  /* The line tables read like a table until a line is pointed at or edited:
+     the pickers' caret and the number steppers show on that line only. A
+     blank picker keeps its caret, so an empty line still looks choosable. */
+  .mfg-formula-lines .hr-line .mfg-search-caret,
+  .mfg-formula-lines .hr-line .mfg-stepper { opacity: 0; transition: opacity 0.12s ease; }
+  .mfg-formula-lines .hr-line:hover .mfg-search-caret,
+  .mfg-formula-lines .hr-line:hover .mfg-stepper,
+  .mfg-formula-lines .hr-line:focus-within .mfg-search-caret,
+  .mfg-formula-lines .hr-line:focus-within .mfg-stepper,
+  .mfg-formula-lines .mfg-search:has(input:placeholder-shown) .mfg-search-caret { opacity: 1; }
+  @media (hover: none) {
+    .mfg-formula-lines .hr-line .mfg-search-caret, .mfg-formula-lines .hr-line .mfg-stepper { opacity: 1; }
+  }
+  /* The figures in those fields end before the stepper's place (and the
+     unit box), so their headings end at the same x as the figures. */
+  .mfg-formula-lines .hr-lines-head > .is-field { padding-right: 27px; }
+  /* Packaging: one block per pack size inside one line table; each block
+     opens with a tinted band (size, pack type, cost per unit). */
+  .mfg-fpack + .mfg-fpack { border-top: 1px solid var(--gray-200); }
+  .mfg-fpack-head {
+    display: flex; align-items: baseline; gap: 8px; padding: 10px 12px;
+    background: var(--gray-50); border-bottom: 1px solid var(--gray-100);
+  }
+  .mfg-fpack-size { font-size: 13.5px; font-weight: 600; color: var(--gray-900); font-variant-numeric: tabular-nums; }
+  .mfg-fpack-type { font-size: 13px; color: var(--gray-500); }
+  .mfg-fpack-cost { margin-left: auto; font-size: 12.5px; color: var(--gray-600); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .mfg-fpack-empty {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 12px; font-size: 13px; color: var(--gray-500);
+  }
+  .mfg-fpack-actions { display: inline-flex; align-items: center; gap: 12px; }
+  .mfg-fpack-foot { padding: 10px 12px 12px; }
+  /* Cost per unit (side) */
+  .mfg-fcost + .mfg-fcost { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--gray-100); }
+  .mfg-fcost-pack { display: flex; align-items: baseline; gap: 6px; margin-bottom: 2px; font-size: 13px; font-weight: 600; color: var(--gray-900); }
+  .mfg-fcost-pack .mfg-sub { font-size: 12.5px; font-weight: 400; }
+  .mfg-summary-line.mfg-fcost-total { margin-top: 4px; padding-top: 7px; border-top: 1px solid var(--gray-200); font-weight: 600; color: var(--gray-900); }
+  .mfg-summary-line.mfg-fcost-total > span:last-child { color: var(--gray-900); }
+  .mfg-fcost-meta { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--gray-100); font-size: 12px; color: var(--gray-500); }
+  /* Notices inside a section, or above the record, keep the module's gaps. */
+  .mfg-page .hr-panel-body > .hr-notice { margin-bottom: 12px; }
+  .mfg-page > .hr-notice, .mfg-record-main > .hr-notice { margin-bottom: 16px; }
+  .mfg-notice-line { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .mfg-notice-line .btn { flex-shrink: 0; }
+
+  /* Batch editor: the formula zone of a panel head (muted state, then a text
+     link or Reset), and a second line under a material name. A line with
+     that second line stretches every cell (the dividers run its full height)
+     and keeps their content at the top, so each figure stays level with the
+     material name and the × with the first line. */
+  .mfg-formula-zone { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--gray-500); line-height: 24px; white-space: nowrap; }
+  .mfg-formula-zone .hr-info-btn { margin: 0; }
+  .hr-panel-actions .mfg-text-btn { margin: 0; line-height: 24px; }
+  .mfg-lines .hr-line.has-sub { align-items: stretch; }
+  .mfg-lines .hr-line.has-sub .hr-line-remove { height: auto; align-items: flex-start; padding-top: 9px; }
+  .mfg-line-sub { margin-top: -8px; padding: 0 12px 10px; font-size: 12.5px; line-height: 16px; color: var(--gray-500); font-variant-numeric: tabular-nums; }
+  a.mfg-text-btn { text-decoration: none; }
+  .mfg-pkg-foot-actions { display: inline-flex; align-items: center; gap: 14px; }
+  .mfg-text-btn .material-symbols-outlined.is-after { margin-left: 2px; }
 `;
 
 export function MfgStyles() {

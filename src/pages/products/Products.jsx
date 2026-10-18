@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Layout from '../../components/layout/Layout';
 import Modal from '../../components/common/Modal';
 import ConfirmModal from '../../components/common/ConfirmModal';
@@ -6,6 +6,7 @@ import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { formatCurrency } from '../../utils/formatters';
 import { useAuth } from '../../context/AuthContext';
+import { HrStyles, SuggestInput } from '../hr/HrKit';
 
 const emptyForm = { name: '', pack_size: '', purchase_rate: '', sale_rate: '', retail_price: '', company_id: '', show_purchase_rate: true };
 
@@ -13,6 +14,9 @@ const emptyForm = { name: '', pack_size: '', purchase_rate: '', sale_rate: '', r
 // over a focused field silently increments/decrements its value. Blurring on
 // wheel lets the page scroll act as intended and leaves the value untouched.
 const blockNumberWheel = (e) => e.currentTarget.blur();
+
+// Product names compare without case or extra spaces.
+const nameKey = (name) => String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 export default function Products() {
   const { user, can } = useAuth();
@@ -85,12 +89,40 @@ export default function Products() {
     } catch (err) { toast.error('Error deleting'); } finally { setDeleting(false); }
   };
 
+  // Name suggestions while adding: one row per product name with its pack
+  // sizes. Picking one copies the exact name, and the company when none is
+  // chosen, so the new pack size is spelled like the existing ones.
+  const nameGroups = useMemo(() => {
+    const groups = new Map();
+    data.forEach(p => {
+      const key = nameKey(p.name);
+      if (!groups.has(key)) groups.set(key, { id: key, name: p.name, packs: [] });
+      groups.get(key).packs.push(p);
+    });
+    return [...groups.values()];
+  }, [data]);
+  const nameSuggestions = useMemo(() => nameGroups.map(g => ({
+    id: g.id, label: g.name, group: g,
+    sub: [...new Set(g.packs.map(p => p.pack_size).filter(Boolean))].join(', '),
+  })), [nameGroups]);
+  const pickName = ({ group: g }) => {
+    const companyIds = new Set(g.packs.map(p => String(p.company_id ?? '')));
+    setForm(f => ({
+      ...f,
+      name: g.name,
+      company_id: f.company_id || (companyIds.size === 1 ? g.packs[0].company_id ?? '' : ''),
+    }));
+  };
+  const nameMatch = !selected && nameKey(form.name) ? nameGroups.find(g => g.id === nameKey(form.name)) : null;
+  const existingSizes = nameMatch ? nameMatch.packs.map(p => p.pack_size).filter(Boolean) : [];
+
   const filtered = data.filter(p => p.name.toLowerCase().includes(search.toLowerCase()) || (p.company_name || '').toLowerCase().includes(search.toLowerCase()));
 
   const fmt = (n) => n != null ? formatCurrency(n) : '—';
 
   return (
     <Layout title="Products">
+      <HrStyles />
       <div className="card">
         <div className="card-header">
           <div>
@@ -161,13 +193,25 @@ export default function Products() {
           </>
         }>
         <div className="form-group">
-          <label className="form-label">Product Name *</label>
-          <input className="form-control" placeholder="e.g. Panadol 500mg" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} autoFocus />
+          <label className="form-label" htmlFor="product-name">Product Name *</label>
+          <SuggestInput
+            id="product-name"
+            placeholder="Enter the product name"
+            value={form.name}
+            options={selected ? [] : nameSuggestions}
+            listLabel="Existing products"
+            onPick={pickName}
+            onChange={v => setForm(p => ({ ...p, name: v }))}
+            autoFocus
+          />
+          {existingSizes.length > 0 && (
+            <div className="hr-help" style={{ marginTop: 6 }}>Existing pack sizes: {existingSizes.join(', ')}.</div>
+          )}
         </div>
         <div className="form-grid form-grid-2">
           <div className="form-group">
             <label className="form-label">Pack Size *</label>
-            <input className="form-control" placeholder="e.g. 10 tablets" value={form.pack_size} required onChange={e => setForm(p => ({ ...p, pack_size: e.target.value }))} />
+            <input className="form-control" placeholder="Enter the pack size" value={form.pack_size} required onChange={e => setForm(p => ({ ...p, pack_size: e.target.value }))} />
           </div>
           <div className="form-group">
             <label className="form-label">Company</label>

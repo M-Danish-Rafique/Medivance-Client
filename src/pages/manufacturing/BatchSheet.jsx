@@ -3,6 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import api from '../../utils/api';
 import { getLogoUrl } from '../../components/common/CompanyLogo';
 import { fmtNum, fmtDate, fmtPrintedAt } from '../sale/InvoiceDocument';
+import { mfgError } from './mfgKit';
 
 // ─── Printed batch sheet ───────────────────────────────────────────────────
 // One A4 page (brief 2.4) in the design language every printed document uses
@@ -88,7 +89,7 @@ export function BatchSheetDocument({ batch, company, printedAt }) {
             <div className="bs-caption">Dates</div>
             <Detail label="Batch Date" value={fmtDate(batch.batch_date)} />
             <Detail label="Expiry Date" value={fmtDate(batch.expiry_date)} />
-            {batch.sent_at && <Detail label="Sent to Stock" value={fmtDate(batch.sent_at.slice(0, 10))} />}
+            {batch.sent_at && <Detail label="Sent to Inventory" value={fmtDate(batch.sent_at.slice(0, 10))} />}
           </div>
           <div>
             <div className="bs-caption">Output</div>
@@ -200,7 +201,7 @@ export default function BatchSheet() {
       setBatch(b.data);
       setCompany({ ...DEFAULT_COMPANY, ...(c.data || {}), name: c.data?.name || DEFAULT_COMPANY.name });
       document.title = `Batch Sheet ${b.data.batch_code}.pdf`;
-    }).catch(err => setError(err?.response?.data?.message || 'The batch could not be loaded.'));
+    }).catch(err => setError(mfgError(err, 'The batch could not be loaded.')));
   }, [id]);
 
   useEffect(() => {

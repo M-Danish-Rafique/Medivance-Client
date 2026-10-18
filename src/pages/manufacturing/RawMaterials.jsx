@@ -13,7 +13,7 @@ import {
 import {
   MfgStyles, MfgField, Picker, NumberField, RemoveLine, AddButton, NameWithTag, EMPTY, BatchStatus, UOM_CATEGORIES,
   parseNum, cleanText, fmtQty, fmtRate, Rate, landedRates, round2, plural, StockQty, SortHead,
-  AverageRateInfo, AVERAGE_RATE_TITLE, averageRateText,
+  AverageRateInfo, AVERAGE_RATE_TITLE, averageRateText, mfgError,
 } from './mfgKit';
 
 // ─── Raw & packaging materials ─────────────────────────────────────────────
@@ -34,7 +34,7 @@ import {
 const TYPE_LABEL = { raw_material: 'Raw material', packaging_material: 'Packaging' };
 const TYPE_OPTIONS = [
   { value: 'raw_material', label: 'Raw material' },
-  { value: 'packaging_material', label: 'Packaging material' },
+  { value: 'packaging_material', label: 'Packaging' },
 ];
 const tabular = { fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
 const isCount = (m) => m?.base_type === 'count';
@@ -91,7 +91,7 @@ export default function RawMaterials() {
     api.get('/suppliers', { params: { type: 'raw_material' } }),
   ]).then(([m, p, u, s]) => {
     setMaterials(m.data); setPurchases(p.data); setUoms(u.data); setSuppliers(s.data);
-  }).catch(err => toast.error(err?.response?.data?.message || 'The materials could not be loaded. Refresh the page.'))
+  }).catch(err => toast.error(mfgError(err, 'The materials could not be loaded. Refresh the page.')))
     .finally(() => setLoading(false));
   useEffect(() => { load(); }, []);
 
@@ -117,7 +117,7 @@ export default function RawMaterials() {
       setDeleteMaterial(null); load();
     } catch (err) {
       setDeleteMaterial(null);
-      toast.error(err?.response?.data?.message || 'The material could not be deleted. Try again.');
+      toast.error(mfgError(err, 'The material could not be deleted. Try again.'));
       load();
     } finally { setDeleting(false); }
   };
@@ -130,7 +130,7 @@ export default function RawMaterials() {
       setDeletePurchase(null); load();
     } catch (err) {
       setDeletePurchase(null);
-      toast.error(err?.response?.data?.message || 'The purchase could not be deleted. Try again.');
+      toast.error(mfgError(err, 'The purchase could not be deleted. Try again.'));
     } finally { setDeleting(false); }
   };
 
@@ -165,7 +165,7 @@ export default function RawMaterials() {
                 onChange={setTypeFilter}
                 options={[
                   { val: 'all', label: 'All', count: counts.all },
-                  { val: 'raw_material', label: 'Raw', count: counts.raw_material },
+                  { val: 'raw_material', label: 'Raw material', count: counts.raw_material },
                   { val: 'packaging_material', label: 'Packaging', count: counts.packaging_material },
                 ]}
               />
@@ -173,7 +173,7 @@ export default function RawMaterials() {
             <div className="search-bar">
               <span className="material-symbols-outlined" aria-hidden="true">search</span>
               <input
-                placeholder={tab === 'materials' ? 'Search materials' : 'Search purchases'}
+                placeholder={tab === 'materials' ? 'Search materials…' : 'Search purchases…'}
                 aria-label={tab === 'materials' ? 'Search materials' : 'Search purchases'}
                 value={search}
                 onChange={e => setSearch(e.target.value)}
@@ -241,7 +241,8 @@ export default function RawMaterials() {
                             { divider: true },
                             {
                               label: 'Delete', icon: 'delete', danger: true,
-                              disabled: m.in_use, title: m.in_use ? m.usage : undefined,
+                              // A material in a product formula is removed there first.
+                              disabled: m.in_use || !!m.formula_usage, title: m.usage || m.formula_usage || undefined,
                               onClick: () => setDeleteMaterial(m),
                             },
                           ]}
@@ -291,8 +292,8 @@ export default function RawMaterials() {
                         <KebabMenu
                           label={`Actions for purchase ${p.purchase_no}`}
                           items={[
-                            { label: 'View purchase', icon: 'visibility', onClick: () => setPurchaseView(p) },
-                            { label: 'Edit purchase', icon: 'edit', onClick: () => setPurchaseDialog({ record: p }) },
+                            { label: 'View details', icon: 'visibility', onClick: () => setPurchaseView(p) },
+                            { label: 'Edit', icon: 'edit', onClick: () => setPurchaseDialog({ record: p }) },
                             { divider: true },
                             { label: 'Delete', icon: 'delete', danger: true, onClick: () => setDeletePurchase(p) },
                           ]}
@@ -381,7 +382,11 @@ function MaterialDialog({ state, uoms, materials, onClose, onSaved }) {
   const pcs = uoms.find(u => u.symbol === 'pcs');
   const isPackaging = form.material_type === 'packaging_material';
   const unit = isPackaging ? pcs : uoms.find(u => String(u.id) === String(form.uom_id));
-  const locked = !!record?.in_use;
+  // Type and unit are fixed once stock moved, and while a product formula
+  // counts in them.
+  const lockReason = record?.in_use ? 'The type and unit cannot be changed once the material has purchases or batches.'
+    : record?.formula_usage ? 'The type and unit cannot be changed while the material is in a product formula.' : null;
+  const locked = !!lockReason;
   // Once bought, the rate is the average of the purchases: shown, not typed.
   const rateLocked = num(record?.purchase_count) > 0;
 
@@ -452,13 +457,13 @@ function MaterialDialog({ state, uoms, materials, onClose, onSaved }) {
             />
           </FormField>
           <FormField label="Type" htmlFor="rm-type" required col={6} error={errorFor('material_type')}
-            help={locked ? 'Fixed once the material has purchases or batches.' : undefined}>
+            help={lockReason || undefined}>
             <Picker id="rm-type" value={form.material_type} options={TYPE_OPTIONS} disabled={locked}
               onChange={v => setField('material_type', v)} />
           </FormField>
           <MfgField label="Unit" htmlFor="rm-uom" required className="hr-col-6" error={errorFor('uom_id')}
             info={isPackaging ? 'Packaging is always counted in pcs.' : undefined}
-            help={!isPackaging && locked ? 'Fixed once the material has purchases or batches.' : undefined}>
+            >
             {isPackaging ? (
               <input id="rm-uom" className="form-control" value="pcs" disabled readOnly />
             ) : (
@@ -472,11 +477,10 @@ function MaterialDialog({ state, uoms, materials, onClose, onSaved }) {
             )}
           </MfgField>
           {rateLocked ? (
-            <MfgField label="Purchase rate" className="hr-col-6" error={errorFor('purchase_rate')}
+            <MfgField label="Average rate" className="hr-col-6" error={errorFor('purchase_rate')}
               info={averageRateText(record.uom_symbol)} infoTitle={AVERAGE_RATE_TITLE}>
               <div className="mfg-static-value">
                 <span>{`PKR ${fmtRate(record.purchase_rate)} / ${record.uom_symbol}`}</span>
-                <span className="mfg-sub">· average of purchases</span>
               </div>
             </MfgField>
           ) : (
@@ -513,7 +517,7 @@ function MaterialDetail({ material, onClose }) {
       .catch(err => {
         if (live) {
           setData({ purchases: [], usage: [] });
-          toast.error(err?.response?.data?.message || 'The history could not be loaded. Try again.');
+          toast.error(mfgError(err, 'The history could not be loaded. Try again.'));
         }
       });
     return () => { live = false; };
@@ -538,10 +542,9 @@ function MaterialDetail({ material, onClose }) {
             <>
               <div className="mfg-section">
                 <div className="mfg-section-head">
-                  <h3 className="mfg-section-title">Purchases</h3>
-                  <span className="mfg-section-note">{plural(data.purchases.length, 'purchase', 'purchases')}</span>
+                  <h3 className="mfg-section-title">{`Purchases (${data.purchases.length})`}</h3>
                 </div>
-                {data.purchases.length === 0 ? <div className="hr-lines-empty">No purchases recorded</div> : (
+                {data.purchases.length === 0 ? <div className="hr-lines-empty">No purchases recorded yet.</div> : (
                   <div className="mfg-doc-table">
                     <table className="hr-table is-dense">
                       <thead><tr>
@@ -569,10 +572,9 @@ function MaterialDetail({ material, onClose }) {
 
               <div className="mfg-section">
                 <div className="mfg-section-head">
-                  <h3 className="mfg-section-title">Used in batches</h3>
-                  <span className="mfg-section-note">{plural(data.usage.length, 'use', 'uses')}</span>
+                  <h3 className="mfg-section-title">{`Used in batches (${data.usage.length})`}</h3>
                 </div>
-                {data.usage.length === 0 ? <div className="hr-lines-empty">Not used in any batch</div> : (
+                {data.usage.length === 0 ? <div className="hr-lines-empty">Not used in any batch yet.</div> : (
                   <div className="mfg-doc-table">
                     <table className="hr-table is-dense">
                       <thead><tr>
@@ -658,7 +660,7 @@ function UomDialog({ isOpen, onClose, uoms, onChanged }) {
       setSymbol(''); setFactor('');
       toast.success(`Unit ${s} added.`);
     } catch (err) {
-      setAddError(err?.response?.data?.message || 'The unit could not be added. Try again.');
+      setAddError(mfgError(err, 'The unit could not be added. Try again.'));
       setAddField(err?.response?.data?.field === 'to_base_factor' ? 'factor' : 'symbol');
     } finally { setAdding(false); }
   };
@@ -675,7 +677,7 @@ function UomDialog({ isOpen, onClose, uoms, onChanged }) {
       setEdit(null);
       toast.success(`Unit ${s} saved.`);
     } catch (err) {
-      setEdit(p => ({ ...p, error: err?.response?.data?.message || 'The unit could not be saved. Try again.' }));
+      setEdit(p => ({ ...p, error: mfgError(err, 'The unit could not be saved. Try again.') }));
     } finally { setSavingEdit(false); }
   };
 
@@ -688,7 +690,7 @@ function UomDialog({ isOpen, onClose, uoms, onChanged }) {
       toast.success(`Unit ${u.symbol} deleted.`);
     } catch (err) {
       setConfirmId(null);
-      setRowNotice({ id: u.id, message: err?.response?.data?.message || 'The unit could not be deleted. Try again.' });
+      setRowNotice({ id: u.id, message: mfgError(err, 'The unit could not be deleted. Try again.') });
     } finally { setDeletingId(null); }
   };
 
@@ -754,8 +756,8 @@ function UomDialog({ isOpen, onClose, uoms, onChanged }) {
                         integer={category === 'count'}
                         onChange={v => setEdit(p => ({ ...p, factor: v, error: null }))} />
                     </div>
-                    <BusyButton className="btn btn-primary btn-sm" busy={savingEdit} busyLabel="Saving…" onClick={saveEdit}>Save</BusyButton>
                     <button type="button" className="btn btn-outline btn-sm" onClick={() => setEdit(null)} disabled={savingEdit}>Cancel</button>
+                    <BusyButton className="btn btn-primary btn-sm" busy={savingEdit} busyLabel="Saving…" onClick={saveEdit}>Save</BusyButton>
                   </div>
                   {(edit.error || u.in_use) && (
                     <div className={edit.error ? 'hr-error' : 'hr-help'} role={edit.error ? 'alert' : undefined} style={{ marginTop: 4 }}>
@@ -836,8 +838,8 @@ const startingRate = (m) => {
 };
 const rateHint = (m) => {
   if (!m) return undefined;
-  if (m.last_purchase_rate != null) return `Last bought at ${fmtRate(m.last_purchase_rate)} on ${fmtDate(m.last_purchase_date)}`;
-  return num(m.purchase_rate) > 0 ? `Purchase rate set on the material: ${fmtRate(m.purchase_rate)}` : undefined;
+  if (m.last_purchase_rate != null) return `Last bought at PKR ${fmtRate(m.last_purchase_rate)} on ${fmtDate(m.last_purchase_date)}.`;
+  return num(m.purchase_rate) > 0 ? `Purchase rate set on the material: PKR ${fmtRate(m.purchase_rate)}.` : undefined;
 };
 const usedText = (used, m) => `${fmtQty(used, m.uom_symbol)} of ${m.name} from this purchase has already been used in batches. `
   + `Keep at least ${fmtQty(used, m.uom_symbol)} on the purchase.`;
@@ -915,10 +917,10 @@ function PurchaseDialog({ state, materials, suppliers, onClose, onSaved }) {
   const removedError = removedUsed && byId.get(removedUsed[0]) ? usedText(removedUsed[1], byId.get(removedUsed[0])) : null;
   const firstError = headerErrors.supplier_id || headerErrors.date || firstLineError || removedError || headerErrors.other_charges || null;
   const isChanged = !record || purchaseSignature(form) !== initialSignature;
-  // Edit: Save stays disabled until there is a real, valid change, and the
-  // footer says why. Add: errors show after the first Save attempt.
+  // The primary button stays disabled until the purchase is valid (edit: and
+  // really changed); the footer says why, as in every add/edit dialog.
   const blockedReason = record && !isChanged ? 'No changes yet' : firstError;
-  const footerStatus = record || attempted ? blockedReason : null;
+  const footerStatus = blockedReason;
   const showLineError = (key) => (attempted || lineTouched[key]) && lineErrors[key];
 
   const save = async () => {
@@ -940,8 +942,7 @@ function PurchaseDialog({ state, materials, suppliers, onClose, onSaved }) {
       }
       onSaved();
     } catch (err) {
-      setServerError(err?.response?.data?.message
-        || (record ? 'The purchase could not be saved. Try again.' : 'The purchase could not be recorded. Try again.'));
+      setServerError(mfgError(err, record ? 'The purchase could not be saved. Try again.' : 'The purchase could not be recorded. Try again.'));
     } finally { setSaving(false); }
   };
 
@@ -977,11 +978,11 @@ function PurchaseDialog({ state, materials, suppliers, onClose, onSaved }) {
       footer={
         <>
           {footerStatus && (
-            <span role="status" className={`mfg-foot-status${isChanged ? ' is-error' : ''}`} style={{ marginRight: 'auto' }}>{footerStatus}</span>
+            <span role="status" className={`mfg-foot-status${record && isChanged ? ' is-error' : ''}`} style={{ marginRight: 'auto' }}>{footerStatus}</span>
           )}
           <button className="btn btn-outline" onClick={onClose} disabled={saving}>Cancel</button>
-          <BusyButton busy={saving} busyLabel="Saving…" onClick={save} disabled={!!record && !!blockedReason}>
-            {record ? 'Save changes' : 'Save purchase'}
+          <BusyButton busy={saving} busyLabel="Saving…" onClick={save} disabled={!!blockedReason}>
+            {record ? 'Save changes' : 'Record purchase'}
           </BusyButton>
         </>
       }
@@ -1013,8 +1014,8 @@ function PurchaseDialog({ state, materials, suppliers, onClose, onSaved }) {
               <span className="mfg-lines-head-num">Quantity</span>
               <span>Unit</span>
               <span className="mfg-lines-head-num">Rate (PKR)</span>
-              <span className="mfg-lines-head-num">Line total</span>
-              <span className="mfg-lines-head-num">Landed rate</span>
+              <span className="mfg-lines-head-num">Line total (PKR)</span>
+              <span className="mfg-lines-head-num">Landed rate (PKR)</span>
               <span />
             </div>
             {filled.map((l, i) => {
@@ -1024,6 +1025,8 @@ function PurchaseDialog({ state, materials, suppliers, onClose, onSaved }) {
                 <div key={l.key} className="hr-line" style={{ gridTemplateColumns: GRID }}>
                   <div className="hr-line-cell">
                     <Picker
+                      id={`rp-${l.key}-mat`}
+                      searchable
                       ariaLabel={`Material, line ${i + 1}`}
                       value={l.raw_material_id}
                       placeholder="Select material"
@@ -1056,7 +1059,7 @@ function PurchaseDialog({ state, materials, suppliers, onClose, onSaved }) {
                     {cost ? <Rate value={cost.landedRate} /> : '—'}
                   </div>
                   <RemoveLine
-                    label={`Remove line ${i + 1}`}
+                    label={`Remove material, line ${i + 1}`}
                     title={minQty(l) > 0 ? 'Already used in batches. It stays on this purchase.' : undefined}
                     disabled={form.lines.length === 1 || minQty(l) > 0}
                     onClick={() => setForm(p => ({ ...p, lines: p.lines.filter(x => x.key !== l.key) }))}
@@ -1072,15 +1075,14 @@ function PurchaseDialog({ state, materials, suppliers, onClose, onSaved }) {
             <div className="hr-lines-foot">
               <AddButton onClick={() => setForm(p => ({ ...p, lines: [...p.lines, newLine()] }))}
                 disabled={form.lines.length >= materials.length}>
-                Add line
+                Add material
               </AddButton>
-              <span className="mfg-lines-total">Items total <strong>{fmtMoney(itemsTotal)}</strong></span>
             </div>
           </div>
 
           <div className="hr-form-grid is-modal" style={{ marginTop: 16 }}>
             <MfgField label="Other charges (PKR)" htmlFor="rp-charges" className="hr-col-4" error={headerErrors.other_charges}
-              info="Freight, loading and similar costs. Shared over the lines by value; they raise the landed rates and are not owed to the supplier.">
+              info={['Freight, loading and similar costs.', 'They are shared over the lines by value and raise the landed rates. They are not owed to the supplier.']}>
               <NumberField id="rp-charges" value={form.other_charges}
                 invalid={!!headerErrors.other_charges} onChange={v => setHeader('other_charges', v)} />
             </MfgField>
@@ -1179,7 +1181,7 @@ function PurchaseView({ purchase, onClose, onEdit }) {
           </div>
           {num(p.other_charges) > 0 && (
             <p className="mfg-note">
-              Other charges {fmtMoney(p.other_charges)}{p.charges_note ? `: ${p.charges_note}` : ''}. Not owed to the supplier.
+              Other charges {fmtMoney(p.other_charges)}{p.charges_note ? `: ${p.charges_note}` : ''}. These charges are not owed to the supplier.
             </p>
           )}
         </>

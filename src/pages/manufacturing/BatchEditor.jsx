@@ -6,13 +6,15 @@ import DateInput from '../../components/common/DateInput';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { todayPKT } from '../../utils/dateUtils';
-import { HrStyles, Panel, FormField, Notice, BusyButton, fmtAmount, num } from '../hr/HrKit';
+import { HrStyles, Panel, FormField, Notice, BusyButton, FieldGridSkeleton, TableSkeleton, fmtAmount, num } from '../hr/HrKit';
 import {
-  MfgStyles, MfgPageHead, MfgField, Picker, NumberField, RemoveLine, AddButton, BatchStatus, Tip, Rate, Qty, StockQty, fmtQty, parseNum, round2, plural,
+  MfgStyles, MfgPageHead, MfgField, Picker, NumberField, RemoveLine, AddButton, BatchStatus, Tip, Rate, Qty, StockQty, Info, fmtQty, parseNum, round2, plural, mfgError,
 } from './mfgKit';
 import {
   buildBatchModel, draftPayload, createPayload, emptyForm, groupKeyOf, CostSummary, useUnsavedGuard, SECTIONS,
   newMaterialRow, newPkgRow, newPackRow, newByRow, byProductBatchNo, ByRateHead, byInfoContext,
+  blankMaterial, blankPkg, formulaPath, formulaSnapshot, formulaMaterialRows, formulaPackagingRows, replaceableLines,
+  materialsDifferFromFormula, packagingDiffersFromFormula, followFormula, followPackUnits, perUnitsLabel, unitWord,
 } from './batchKit';
 
 // ─── New batch / edit draft ────────────────────────────────────────────────
@@ -27,6 +29,11 @@ import {
 //                 it) and jumps to the first one. The server re-checks stock,
 //                 deducts it, assigns the batch code, and the batch becomes
 //                 "Ready for inventory".
+// Formulas: picking the product fills Raw materials from its formula
+// (quantities follow Total output), picking a pack size fills its packaging
+// (quantities follow Units). A line stops following once its quantity is
+// typed. The form keeps the formula it used (form.formula), so a reopened
+// draft keeps following, and a draft is never refilled when it opens.
 
 const MAT_GRID = 'minmax(0, 2fr) minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 40px';
 const PACK_GRID = 'minmax(0, 1.3fr) minmax(0, 0.85fr) minmax(0, 0.75fr) minmax(0, 1.35fr) minmax(0, 1.15fr) 40px';
@@ -51,6 +58,8 @@ function RowError({ message }) {
  * else the first quantity, and returns to the Packaging cell on close (Modal).
  */
 function PackagingDialog({ edit, materials, matById, usedElsewhere, onCancel, onDone }) {
+  // The pack size's formula packaging for the current units (Reset to formula).
+  const formulaRows = edit.formulaRows || [];
   const [rows, setRows] = useState(edit.rows);
   const initial = useRef(edit.rows);
   const focusNext = useRef(null);
@@ -93,6 +102,12 @@ function PackagingDialog({ edit, materials, matById, usedElsewhere, onCancel, on
     return null;
   };
   const total = round2(rows.reduce((s, x) => s + (parseNum(x.qty) > 0 ? round2(parseNum(x.qty) * num(matById.get(String(x.raw_material_id))?.purchase_rate)) : 0), 0));
+  const differs = formulaRows.length > 0
+    && packagingDiffersFromFormula(rows, { packaging: { pack: formulaRows } }, 'pack');
+  const resetToFormula = () => {
+    focusNext.current = `dlg-pkgq-${formulaRows[0].key}`;
+    setRows(formulaRows.map(r => ({ ...r })));
+  };
 
   return (
     <Modal
@@ -112,23 +127,27 @@ function PackagingDialog({ edit, materials, matById, usedElsewhere, onCancel, on
           <div className="hr-lines-head" style={{ gridTemplateColumns: DLG_GRID }}>
             <span>Material</span><span className="mfg-lines-head-num">Quantity</span><span>Unit</span>
             <span className="mfg-lines-head-num">In stock</span><span className="mfg-lines-head-num">Rate (PKR)</span>
-            <span className="mfg-lines-head-num">Amount</span><span />
+            <span className="mfg-lines-head-num">Amount (PKR)</span><span />
           </div>
           {rows.map((x, xi) => {
             const m = matById.get(String(x.raw_material_id));
             const qty = parseNum(x.qty);
             const error = lineError(x);
             const isLast = xi === rows.length - 1;
+            // "1 for every 24 units" sits under the material name.
+            const ratio = x.fromFormula && num(x.fPer) > 1 ? perUnitsLabel(x.fQty, x.fPer) : null;
             return (
-              <div key={x.key} className="hr-line" style={{ gridTemplateColumns: DLG_GRID }}>
+              <div key={x.key} className={`hr-line${ratio ? ' has-sub' : ''}`} style={{ gridTemplateColumns: DLG_GRID }}>
                 <div className="hr-line-cell">
-                  <Picker id={`dlg-pkg-${x.key}`} ariaLabel={`Packaging material ${xi + 1}`} value={x.raw_material_id}
+                  <Picker id={`dlg-pkg-${x.key}`} searchable ariaLabel={`Packaging material ${xi + 1}`} value={x.raw_material_id}
                     placeholder="Select packaging" searchPlaceholder="Search packaging" options={options(x.raw_material_id)}
                     invalid={!!error && !m}
                     onChange={v => setLine(x.key, {
                       raw_material_id: v,
+                      fromFormula: false,
                       qty: x.qtyTouched || !(parseNum(edit.units) > 0) ? x.qty : String(edit.units),
                     })} />
+                  {ratio && <div className="mfg-line-sub">{ratio}</div>}
                 </div>
                 <div className="hr-line-cell">
                   <NumberField id={`dlg-pkgq-${x.key}`} ariaLabel={`Packaging quantity ${xi + 1}`} value={x.qty} integer
@@ -146,14 +165,19 @@ function PackagingDialog({ edit, materials, matById, usedElsewhere, onCancel, on
                 </div>
                 <div className="hr-line-cell mfg-cell is-num">{m ? <Rate value={m.purchase_rate} /> : '—'}</div>
                 <div className="hr-line-cell mfg-cell is-num">{m && qty > 0 ? fmtAmount(round2(qty * num(m.purchase_rate))) : '—'}</div>
-                <RemoveLine label={`Remove packaging ${xi + 1}`} disabled={rows.length === 1}
+                <RemoveLine label={`Remove packaging, line ${xi + 1}`} disabled={rows.length === 1}
                   onClick={() => setRows(rs => rs.filter(r => r.key !== x.key))} />
                 <RowError message={error} />
               </div>
             );
           })}
           <div className="hr-lines-foot">
-            <AddButton onClick={addLine} title="Or press Enter in the last quantity">Add packaging</AddButton>
+            <span className="mfg-pkg-foot-actions">
+              <AddButton onClick={addLine} title="You can also press Enter in the last quantity.">Add packaging</AddButton>
+              {differs && (
+                <button type="button" className="mfg-text-btn" onClick={resetToFormula}>Reset to formula</button>
+              )}
+            </span>
             <span className="mfg-lines-total">Packaging <strong>{`PKR ${fmtAmount(total)}`}</strong></span>
           </div>
         </div>
@@ -196,10 +220,16 @@ export default function BatchEditor() {
   const [attempted, setAttempted] = useState(false);
   const [serverIssue, setServerIssue] = useState(null);     // { section, message }
   const [nextCode, setNextCode] = useState('');
+  const [codeUnavailable, setCodeUnavailable] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [pkgEdit, setPkgEdit] = useState(null);   // { packKey, title, units, rows }
+  const [pkgEdit, setPkgEdit] = useState(null);   // { packKey, title, units, rows, formulaRows }
   const focusAfter = useRef(null);
+  // Formulas fetched this session, by product group (a snapshot; an empty one
+  // means the product has no formula).
+  const formulaCache = useRef(new Map());
+  const latest = useRef({ form, refs });
+  latest.current = { form, refs };
 
   // ── Load: one automatic retry, then "Try again" reloads the data only ──
   useEffect(() => {
@@ -245,8 +275,10 @@ export default function BatchEditor() {
   useEffect(() => {
     if (!form.batch_date || !/^\d{4}-\d{2}-\d{2}$/.test(form.batch_date)) return undefined;
     let live = true;
+    setCodeUnavailable(false);
     api.get('/manufacturing/batches/next-code', { params: { date: form.batch_date } })
-      .then(r => { if (live) setNextCode(r.data.batch_code); }).catch(() => {});
+      .then(r => { if (live) setNextCode(r.data.batch_code); })
+      .catch(() => { if (live) { setNextCode(''); setCodeUnavailable(true); } });
     return () => { live = false; };
   }, [form.batch_date]);
 
@@ -263,6 +295,49 @@ export default function BatchEditor() {
     const el = document.getElementById(focusAfter.current);
     focusAfter.current = null;
     if (el) el.focus();
+  });
+
+  // The product's formula, once per session.
+  const fetchFormula = (g, r) => {
+    const cached = formulaCache.current.get(g.key);
+    if (cached) return Promise.resolve(cached);
+    return api.get(`/manufacturing/products/${g.packs[0].id}/formula`).then(res => {
+      const snap = formulaSnapshot(g, res.data, r.uoms);
+      formulaCache.current.set(g.key, snap);
+      return snap;
+    });
+  };
+  // Raw materials take the formula when every line is blank or still the
+  // previous formula's own; typed lines stay, and the formula is offered.
+  const applyFormula = (g, snap, r) => {
+    const mats = new Map(r.materials.map(m => [String(m.id), m]));
+    setForm(f => {
+      if (f.groupKey !== g.key) return f;
+      const next = { ...f, formula: snap, keptFor: null };
+      if (replaceableLines(f.materials, blankMaterial)) {
+        if (snap.materials.length) next.materials = formulaMaterialRows(snap);
+        else if (f.materials.some(x => x.fromFormula)) next.materials = [newMaterialRow()];
+      } else if (snap.materials.length) {
+        next.keptFor = g.key;
+      }
+      return followFormula(next, r.uoms, mats);
+    });
+  };
+
+  // Back from "Set one up" (another tab): a product that had no formula is
+  // asked again, and its formula fills the lines nobody has typed in.
+  useEffect(() => {
+    const onFocus = () => {
+      const { form: f, refs: r } = latest.current;
+      const snap = f.formula;
+      if (!r || !snap || snap.groupKey !== f.groupKey || snap.materials.length) return;
+      const g = buildBatchModel(f, r, '').group;
+      if (!g) return;
+      formulaCache.current.delete(g.key);
+      fetchFormula(g, r).then(next => applyFormula(g, next, r)).catch(() => {});
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
   });
 
   const crumbs = [
@@ -292,7 +367,16 @@ export default function BatchEditor() {
   if (!refs || !model) {
     return (
       <Layout title="Batches">
-        <div className="loading-center" role="status" aria-label="Loading"><div className="spinner" /></div>
+        <HrStyles /><MfgStyles />
+        <div className="mfg-page" role="status" aria-label="Loading">
+          <MfgPageHead crumbs={crumbs} title={draftId ? 'Edit draft' : 'New batch'} />
+          <div className="mfg-record">
+            <div className="mfg-record-main">
+              <div className="hr-panel"><div className="hr-panel-body"><FieldGridSkeleton fields={6} cols={3} /></div></div>
+              <div className="hr-panel"><div className="hr-panel-body"><TableSkeleton columns={5} rows={3} /></div></div>
+            </div>
+          </div>
+        </div>
       </Layout>
     );
   }
@@ -308,7 +392,8 @@ export default function BatchEditor() {
     return a ? byAnchor[a] : null;
   };
 
-  const patch = (p) => { setForm(f => ({ ...f, ...p })); setServerIssue(null); };
+  const follow = (f) => followFormula(f, refs.uoms, matById);
+  const patch = (p) => { setForm(f => follow({ ...f, ...p })); setServerIssue(null); };
   const setRow = (list, key, p) => { setForm(f => ({ ...f, [list]: f[list].map(r => (r.key === key ? { ...r, ...p } : r)) })); setServerIssue(null); };
   const removeRow = (list, key) => setForm(f => ({ ...f, [list]: f[list].filter(r => r.key !== key) }));
   const setPack = (packKey, fn) => setForm(f => ({ ...f, packs: f.packs.map(p => (p.key === packKey ? fn(p) : p)) }));
@@ -327,14 +412,29 @@ export default function BatchEditor() {
   const selectGroup = (key) => {
     const g = model.groups.find(x => x.key === key);
     const types = new Set((g?.packs || []).map(p => p.vol_uom_base_type));
+    const changed = key !== form.groupKey;
     setForm(f => ({
       ...f,
       groupKey: key,
       packs: key === f.groupKey ? f.packs : [newPackRow()],
       output_uom_id: outUom && types.has(outUom.base_type) ? f.output_uom_id : '',
+      ...(key !== f.groupKey && { formula: null, keptFor: null }),
     }));
     touch('bf-product');
     setServerIssue(null);
+    if (changed && g) fetchFormula(g, refs).then(snap => applyFormula(g, snap, refs)).catch(() => {});
+  };
+  const resetMaterials = () => {
+    setForm(f => follow({ ...f, materials: formulaMaterialRows(f.formula), keptFor: null }));
+    setServerIssue(null);
+  };
+  // Picking a pack size fills its packaging from the formula, unless lines
+  // were typed in; then they stay.
+  const withPackFormula = (p, productId, snap) => {
+    if (!replaceableLines(p.packaging, blankPkg)) return { ...p, product_id: productId };
+    const rows = formulaPackagingRows(snap, productId, p.units);
+    if (rows.length) return { ...p, product_id: productId, packaging: rows };
+    return { ...p, product_id: productId, packaging: p.packaging.some(x => x.fromFormula) ? [newPkgRow()] : p.packaging };
   };
   const groupTypes = new Set((group?.packs || []).map(p => p.vol_uom_base_type));
   const outputUnits = refs.uoms.filter(u => !group || groupTypes.has(u.base_type)).map(u => ({ value: u.id, label: u.symbol }));
@@ -376,7 +476,10 @@ export default function BatchEditor() {
   const openPackaging = (pack, prod) => {
     const units = parseNum(pack.units);
     const title = [group?.name, prod?.pack_size || 'Pack size not chosen', units > 0 ? `${fmtQty(units)} units` : null].filter(Boolean).join(' · ');
-    setPkgEdit({ packKey: pack.key, title, units: pack.units, rows: pack.packaging.map(x => ({ ...x })) });
+    setPkgEdit({
+      packKey: pack.key, title, units: pack.units, rows: pack.packaging.map(x => ({ ...x })),
+      formulaRows: pack.product_id ? formulaPackagingRows(form.formula, pack.product_id, pack.units) : [],
+    });
   };
   // Packaging already taken by the other pack rows (stock is shared by the batch).
   const usedElsewhere = (materialId) => form.packs
@@ -398,7 +501,8 @@ export default function BatchEditor() {
 
   // ── Actions ──
   const saveDraft = async () => {
-    if (!group) { setAttempted(true); jump({ section: 'batch', anchor: 'bf-product' }); toast.error('Choose the product before saving a draft.'); return; }
+    // A draft needs only its product: point at that field, nothing else.
+    if (!group) { touch('bf-product'); jump({ section: 'batch', anchor: 'bf-product' }); return; }
     setSavingDraft(true);
     try {
       const body = draftPayload(form, model);
@@ -413,7 +517,7 @@ export default function BatchEditor() {
         guard.leave(`/manufacturing/batches/${r.data.id}/edit`);
       }
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'The draft could not be saved. Try again.');
+      toast.error(mfgError(err, 'The draft could not be saved. Try again.'));
     } finally { setSavingDraft(false); }
   };
 
@@ -447,6 +551,44 @@ export default function BatchEditor() {
   const over = model.outputBase > 0 && model.packedBase > model.outputBase * (1 + 1e-9) + 1e-6;
   const sectionNotice = (section) => (serverIssue?.section === section
     ? <Notice tone="danger" style={{ marginBottom: 12 }}>{serverIssue.message}</Notice> : null);
+
+  // ── The product's formula (Raw materials head and notices) ──
+  const snap = group && form.formula?.groupKey === group.key ? form.formula : null;
+  const rawFormula = !!snap?.materials.length;
+  const kept = rawFormula && form.keptFor === group.key;
+  const following = rawFormula && !kept && form.materials.some(r => r.fromFormula);
+  // "L or ml": the units Total output could use instead, largest first.
+  const refUnits = refs.uoms.filter(u => u.base_type === snap?.ref_base_type)
+    .sort((a, b) => num(b.to_base_factor) - num(a.to_base_factor)).map(u => u.symbol);
+  const unitChoice = refUnits.length > 1 ? `${refUnits.slice(0, -1).join(', ')} or ${refUnits[refUnits.length - 1]}` : refUnits[0];
+  const mismatch = following && outUom && snap.ref_base_type && outUom.base_type !== snap.ref_base_type
+    && form.materials.some(r => r.fromFormula && !r.qtyTouched);
+  const noFormula = snap && !rawFormula;
+  // The panel head's right side is the one place for the formula: what the
+  // lines follow, or Reset once they differ, or a link to set one up. The
+  // title side keeps only the title and cost, like every other panel.
+  const packagingOnly = noFormula && Object.keys(snap.packaging).length > 0;
+  const materialsActions = following && materialsDifferFromFormula(form) ? (
+    <button type="button" className="mfg-text-btn" onClick={resetMaterials}>Reset to formula</button>
+  ) : following ? (
+    <span className="mfg-formula-zone">
+      <span>{`Following formula · ${fmtQty(snap.ref_qty, snap.ref_symbol)}`}</span>
+      <Info title="Following formula">
+        Quantities follow Total output until you change them. Changes here apply to this batch only.
+      </Info>
+    </span>
+  ) : noFormula ? (
+    <span className="mfg-formula-zone">
+      <span>{packagingOnly ? 'No raw materials in formula' : 'No formula'}</span>
+      <span aria-hidden="true">·</span>
+      <a className="mfg-text-btn" href={formulaPath(snap.product_id)} target="_blank" rel="noopener noreferrer"
+        title="Opens in a new tab. This batch stays as it is.">
+        {packagingOnly ? 'Edit formula' : 'Set one up'}
+        <span className="material-symbols-outlined is-after" aria-hidden="true">open_in_new</span>
+        <span className="hr-sr-only"> (opens in a new tab)</span>
+      </a>
+    </span>
+  ) : undefined;
 
   // After Create batch: the red count beside the buttons, a link to the list.
   const toFix = attempted && allIssues.length > 0;
@@ -490,7 +632,7 @@ export default function BatchEditor() {
                 {sectionNotice('batch')}
                 <div className="hr-form-grid">
                   <FormField label="Product" htmlFor="bf-product" required col={7} error={show('bf-product')}>
-                    <Picker id="bf-product" value={form.groupKey} placeholder="Select product" searchPlaceholder="Search products"
+                    <Picker id="bf-product" searchable value={form.groupKey} placeholder="Select product" searchPlaceholder="Search products"
                       invalid={!!show('bf-product')}
                       options={model.groups.map(g => ({ value: g.key, label: g.label, hint: plural(g.packs.length, 'pack size', 'pack sizes') }))}
                       onChange={selectGroup} />
@@ -507,7 +649,7 @@ export default function BatchEditor() {
                   </FormField>
                   <MfgField label="Batch code" htmlFor="bf-code" className="hr-col-4"
                     info="Numbered in date order. If another batch with the same date is created first, this batch takes the next number.">
-                    <input id="bf-code" className="form-control mfg-readonly" value={nextCode} placeholder="Enter the batch date" readOnly />
+                    <input id="bf-code" className="form-control mfg-readonly" value={nextCode} placeholder={!form.batch_date ? 'Enter the batch date' : codeUnavailable ? 'Assigned when the batch is created' : ''} readOnly />
                   </MfgField>
                   <FormField label="Batch date" htmlFor="bf-date" required col={4} error={show('bf-date')}>
                     <DateInput id="bf-date" value={form.batch_date} max={todayPKT()} invalid={!!show('bf-date')}
@@ -524,13 +666,27 @@ export default function BatchEditor() {
 
             {/* b) Raw materials */}
             <section id="sec-materials" tabIndex={-1} className="mfg-sec">
-              <Panel title="Raw materials" status={view.raw_material_cost > 0 ? `PKR ${fmtAmount(view.raw_material_cost)}` : undefined}>
+              <Panel title="Raw materials" status={view.raw_material_cost > 0 ? `PKR ${fmtAmount(view.raw_material_cost)}` : undefined}
+                actions={materialsActions}>
                 {sectionNotice('materials')}
+                {kept && (
+                  <Notice tone="info">
+                    <span className="mfg-notice-line">
+                      <span>Raw materials kept from your edits.</span>
+                      <button type="button" className="btn btn-outline btn-sm" onClick={resetMaterials}>{`Use ${group.name} formula`}</button>
+                    </span>
+                  </Notice>
+                )}
+                {mismatch && (
+                  <Notice tone="warning">
+                    {`The formula is set per ${unitWord(snap.ref_symbol)}. Enter quantities by hand, or choose ${unitChoice} for Total output.`}
+                  </Notice>
+                )}
                 <div className="hr-lines mfg-lines">
                   <div className="hr-lines-head" style={{ gridTemplateColumns: MAT_GRID }}>
                     <span>Material</span><span className="mfg-lines-head-num">Quantity</span>
                     <span className="mfg-lines-head-num">In stock</span><span className="mfg-lines-head-num">Rate (PKR)</span>
-                    <span className="mfg-lines-head-num">Amount</span><span />
+                    <span className="mfg-lines-head-num">Amount (PKR)</span><span />
                   </div>
                   {form.materials.map((row, i) => {
                     const m = matById.get(String(row.raw_material_id));
@@ -539,16 +695,16 @@ export default function BatchEditor() {
                     return (
                       <div key={row.key} className="hr-line" style={{ gridTemplateColumns: MAT_GRID }}>
                         <div className="hr-line-cell">
-                          <Picker id={`rm-${row.key}-mat`} ariaLabel={`Raw material, line ${i + 1}`} value={row.raw_material_id}
+                          <Picker id={`rm-${row.key}-mat`} searchable ariaLabel={`Raw material, line ${i + 1}`} value={row.raw_material_id}
                             placeholder="Select raw material" searchPlaceholder="Search raw materials" options={rawOptions(row.raw_material_id)}
                             invalid={!!show(`rm-${row.key}-mat`)}
-                            onChange={v => { setRow('materials', row.key, { raw_material_id: v }); touch(`rm-${row.key}-mat`); }} />
+                            onChange={v => { setRow('materials', row.key, { raw_material_id: v, fromFormula: false }); touch(`rm-${row.key}-mat`); }} />
                         </div>
                         <div className="hr-line-cell">
                           <NumberField id={`rm-${row.key}-qty`} ariaLabel={`Quantity, line ${i + 1}`} value={row.qty} suffix={m?.uom_symbol}
                             integer={m?.base_type === 'count'}
                             invalid={!!show(`rm-${row.key}-qty`)}
-                            onChange={v => setRow('materials', row.key, { qty: v })}
+                            onChange={v => setRow('materials', row.key, { qty: v, qtyTouched: true })}
                             onBlur={() => touch(`rm-${row.key}-qty`)}
                             onKeyDown={(e) => {
                               if (e.key !== 'Enter' || !isLast) return;
@@ -561,13 +717,13 @@ export default function BatchEditor() {
                         </div>
                         <div className="hr-line-cell mfg-cell is-num">{m ? <Rate value={m.purchase_rate} /> : '—'}</div>
                         <div className="hr-line-cell mfg-cell is-num">{m && qty > 0 ? fmtAmount(round2(qty * num(m.purchase_rate))) : '—'}</div>
-                        <RemoveLine label={`Remove line ${i + 1}`} disabled={form.materials.length === 1} onClick={() => removeRow('materials', row.key)} />
+                        <RemoveLine label={`Remove raw material, line ${i + 1}`} disabled={form.materials.length === 1} onClick={() => removeRow('materials', row.key)} />
                         <RowError message={rowError(`rm-${row.key}`)} />
                       </div>
                     );
                   })}
                   <div className="hr-lines-foot">
-                    <AddButton onClick={addMaterial} title="Or press Enter in the last quantity">Add raw material</AddButton>
+                    <AddButton onClick={addMaterial} title="You can also press Enter in the last quantity.">Add raw material</AddButton>
                   </div>
                 </div>
               </Panel>
@@ -627,17 +783,18 @@ export default function BatchEditor() {
                       return (
                         <div key={pack.key} className="hr-line" style={{ gridTemplateColumns: PACK_GRID }}>
                           <div className="hr-line-cell">
-                            <Picker id={`pk-${pack.key}-size`} ariaLabel={`Pack size, line ${pi + 1}`} value={pack.product_id} placeholder="Select pack size"
+                            <Picker id={`pk-${pack.key}-size`} searchable ariaLabel={`Pack size, line ${pi + 1}`} value={pack.product_id} placeholder="Select pack size" searchPlaceholder="Search pack sizes"
                               invalid={!!show(`pk-${pack.key}-size`)} options={packOptions(pack.product_id)}
-                              onChange={v => { setRow('packs', pack.key, { product_id: v }); touch(`pk-${pack.key}-size`); }} />
+                              onChange={v => {
+                                setForm(f => ({ ...f, packs: f.packs.map(p => (p.key === pack.key ? withPackFormula(p, v, f.formula) : p)) }));
+                                setServerIssue(null);
+                                touch(`pk-${pack.key}-size`);
+                              }} />
                           </div>
                           <div className="hr-line-cell">
                             <NumberField id={`pk-${pack.key}-units`} ariaLabel={`Units, line ${pi + 1}`} value={pack.units} integer
                               invalid={!!show(`pk-${pack.key}-units`)} onBlur={() => touch(`pk-${pack.key}-units`)}
-                              onChange={v => setPack(pack.key, p => ({
-                                ...p, units: v,
-                                packaging: p.packaging.map(x => (x.qtyTouched || !x.raw_material_id ? x : { ...x, qty: v })),
-                              }))}
+                              onChange={v => setPack(pack.key, p => ({ ...p, units: v, packaging: followPackUnits(p.packaging, v) }))}
                               onKeyDown={(e) => {
                                 if (e.key !== 'Enter' || !isLast) return;
                                 e.preventDefault();
@@ -663,14 +820,14 @@ export default function BatchEditor() {
                             </Tip>
                           </div>
                           <div className="hr-line-cell mfg-cell is-num">{pkgCost > 0 ? fmtAmount(pkgCost) : '—'}</div>
-                          <RemoveLine label={`Remove pack size ${pi + 1}`} disabled={form.packs.length === 1} onClick={() => removeRow('packs', pack.key)} />
+                          <RemoveLine label={`Remove pack size, line ${pi + 1}`} disabled={form.packs.length === 1} onClick={() => removeRow('packs', pack.key)} />
                           <RowError message={packErr} />
                         </div>
                       );
                     })}
                     <div className="hr-lines-foot">
                       <AddButton disabled={form.packs.length >= group.packs.length}
-                        title={form.packs.length >= group.packs.length ? 'Every pack size of this product is already listed' : 'Or press Enter in the last Units field'}
+                        title={form.packs.length >= group.packs.length ? 'Every pack size of this product is already listed.' : 'You can also press Enter in the last units field.'}
                         onClick={addPack}>
                         Add pack size
                       </AddButton>
@@ -694,9 +851,9 @@ export default function BatchEditor() {
                 {sectionNotice('byproducts')}
                 {form.byproducts.length === 0 ? (
                   <div className="mfg-empty-inline">
-                    <span>No by-products added</span>
+                    <span>No by-products added yet.</span>
                     <AddButton disabled={refs.byProducts.length === 0}
-                      title={refs.byProducts.length === 0 ? 'Add by-products on the Manufactured products screen first' : 'Their value is deducted from the cost shared by the packs'}
+                      title={refs.byProducts.length === 0 ? 'Add by-products on the Manufactured products screen first.' : 'Their value is deducted from the cost shared by the packs.'}
                       onClick={() => setForm(f => ({ ...f, byproducts: [newByRow()] }))}>
                       Add by-product
                     </AddButton>
@@ -714,7 +871,7 @@ export default function BatchEditor() {
                       return (
                         <div key={b.key} className="hr-line">
                           <div className="hr-line-cell">
-                            <Picker id={`bp-${b.key}-prod`} ariaLabel={`By-product, line ${i + 1}`} value={b.product_id} placeholder="Select"
+                            <Picker id={`bp-${b.key}-prod`} searchable ariaLabel={`By-product, line ${i + 1}`} value={b.product_id} placeholder="Select by-product"
                               searchPlaceholder="Search by-products" options={byOptions(b.product_id)} invalid={!!show(`bp-${b.key}-prod`)}
                               onChange={v => {
                                 const p = byById.get(String(v));
@@ -735,7 +892,7 @@ export default function BatchEditor() {
                           <div className="hr-line-cell mfg-batchno">
                             <input id={`bp-${b.key}-no`} className={`form-control${show(`bp-${b.key}-no`) ? ' hr-invalid' : ''}`}
                               aria-label={`Batch number, line ${i + 1}`} maxLength={100}
-                              title={b.followsCode ? 'The batch code with "-BP", final when the batch is created' : undefined}
+                              title={b.followsCode ? 'The batch code with "-BP". It is final when the batch is created.' : undefined}
                               value={b.followsCode ? byProductBatchNo(nextCode) : b.batch_no}
                               onChange={e => setRow('byproducts', b.key, { batch_no: e.target.value, followsCode: false })}
                               onBlur={() => touch(`bp-${b.key}-no`)} />
@@ -763,13 +920,14 @@ export default function BatchEditor() {
                               invalid={!!show(`bp-${b.key}-srate`)} onBlur={() => touch(`bp-${b.key}-srate`)}
                               onChange={v => setRow('byproducts', b.key, { sale_rate: v })} />
                           </div>
-                          <RemoveLine label={`Remove by-product ${i + 1}`} onClick={() => removeRow('byproducts', b.key)} />
+                          <RemoveLine label={`Remove by-product, line ${i + 1}`} onClick={() => removeRow('byproducts', b.key)} />
                           <RowError message={rowError(`bp-${b.key}`)} />
                         </div>
                       );
                     })}
                     <div className="hr-lines-foot">
                       <AddButton disabled={form.byproducts.length >= refs.byProducts.length}
+                        title={form.byproducts.length >= refs.byProducts.length ? 'Every by-product is already listed.' : undefined}
                         onClick={() => setForm(f => ({ ...f, byproducts: [...f.byproducts, newByRow()] }))}>
                         Add by-product
                       </AddButton>

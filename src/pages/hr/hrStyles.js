@@ -183,6 +183,7 @@ export const HR_STYLES = `
     position: fixed;
     z-index: 260;
     overflow-y: auto;
+    overscroll-behavior: contain; /* scrolling past the list's end never moves the page under it */
     padding: 5px;
     background: white;
     border: 1px solid var(--gray-200);
@@ -192,6 +193,42 @@ export const HR_STYLES = `
   }
   .hr-search-menu .hr-kebab-item[aria-disabled="true"] { color: var(--gray-400); cursor: not-allowed; }
   .hr-search-menu .hr-kebab-item[aria-disabled="true"]:hover { background: transparent; }
+  /* SuggestInput: rows of label + hint with an optional muted second line
+     (ellipsis, the list keeps the field's width). */
+  .hr-suggest-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    min-width: 0;
+    padding: 7px 10px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--gray-700);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+  }
+  button.hr-suggest-item.is-active { background: var(--gray-100); }
+  .hr-suggest-item.is-static { cursor: default; }
+  .hr-suggest-line { display: flex; align-items: baseline; gap: 16px; min-width: 0; }
+  .hr-suggest-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hr-suggest-hint { flex: none; color: var(--gray-500); font-size: 12px; white-space: nowrap; }
+  .hr-suggest-sub {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--gray-500); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums;
+  }
+  /* SearchSelect footer when more options match than are listed. */
+  .hr-search-more {
+    margin: 4px -5px -5px;
+    padding: 8px 11px;
+    border-top: 1px solid var(--gray-100);
+    color: var(--gray-500);
+    font-size: 12px;
+  }
 
   /* Status capsule used inside the select and beside section titles. */
   .hr-tag {

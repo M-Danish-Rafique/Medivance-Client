@@ -6,7 +6,7 @@ import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { todayPKT } from '../../utils/dateUtils';
 import { HrStyles, Segmented, TableSkeleton, useSort, sortRows, fmtAmount, fmtDate, num } from '../hr/HrKit';
-import { MfgStyles, Picker, NameWithTag, Rate, SortHead, fmtQty } from './mfgKit';
+import { MfgStyles, Picker, NameWithTag, Rate, SortHead, fmtQty, mfgError } from './mfgKit';
 import { byQtyLabel } from './batchKit';
 
 // ─── Yield: production output record ───────────────────────────────────────
@@ -64,7 +64,7 @@ export default function Yields() {
     api.get('/manufacturing/yields', {
       params: { from, to, product_id: productId || undefined, type: type === 'all' ? undefined : type, q: query || undefined },
     }).then(r => { if (live) setRows(r.data.rows); })
-      .catch(err => { if (live) { setRows([]); toast.error(err?.response?.data?.message || 'The production record could not be loaded.'); } });
+      .catch(err => { if (live) { setRows([]); toast.error(mfgError(err, 'The production record could not be loaded.')); } });
     return () => { live = false; };
   }, [from, to, productId, type, query]);
 
@@ -86,7 +86,8 @@ export default function Yields() {
 
   const productOptions = [
     { value: '', label: 'All products' },
-    ...products.map(p => ({ value: p.id, label: `${p.name} · ${p.pack_size}`, hint: p.is_by_product ? 'By-product' : undefined })),
+    // A by-product's size is its unit, so it shows the name alone.
+    ...products.map(p => ({ value: p.id, label: p.is_by_product ? p.name : `${p.name} · ${p.pack_size}`, hint: p.is_by_product ? 'By-product' : undefined })),
   ];
 
   return (
@@ -105,7 +106,7 @@ export default function Yields() {
               <DateInput aria-label="To date" value={to} min={from || undefined} onChange={e => setTo(e.target.value)} style={{ width: 136 }} />
             </div>
             <div style={{ width: 180 }}>
-              <Picker ariaLabel="Product" value={productId} options={productOptions} placeholder="All products"
+              <Picker id="yf-product" ariaLabel="Product" value={productId} options={productOptions} placeholder="All products"
                 searchPlaceholder="All products" onChange={setProductId} />
             </div>
             <Segmented
@@ -116,7 +117,7 @@ export default function Yields() {
             />
             <div className="search-bar">
               <span className="material-symbols-outlined" aria-hidden="true">search</span>
-              <input placeholder="Search batch code" aria-label="Search by batch code" value={search} onChange={e => setSearch(e.target.value)} style={{ width: 140 }} />
+              <input placeholder="Search batch code…" aria-label="Search by batch code" value={search} onChange={e => setSearch(e.target.value)} style={{ width: 140 }} />
             </div>
           </div>
         </div>
@@ -131,7 +132,7 @@ export default function Yields() {
         ) : rows.length === 0 ? (
           <div className="hr-empty">
             <div className="hr-empty-icon"><span className="material-symbols-outlined" aria-hidden="true">inventory_2</span></div>
-            <div className="hr-empty-title">Nothing was sent to inventory in this period.</div>
+            <div className="hr-empty-title">{productId || type !== 'all' || query ? 'No items match these filters.' : 'Nothing was sent to inventory in this period.'}</div>
           </div>
         ) : (
           <div className="hr-page-scroll">

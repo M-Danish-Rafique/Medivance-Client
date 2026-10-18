@@ -4,7 +4,7 @@ import Modal from '../../components/common/Modal';
 import { Panel, fmtAmount, fmtDate, num } from '../hr/HrKit';
 import { todayPKT } from '../../utils/dateUtils';
 import {
-  EMPTY, NameWithTag, Info, Qty, Rate, Margin, allocate, round2, round4, normKey, parseNum, fmtQty, fmtPct, marginPct,
+  EMPTY, NameWithTag, Info, Qty, Rate, Margin, allocate, round2, round4, normKey, parseNum, fmtQty, fmtPct, marginPct, plural,
 } from './mfgKit';
 
 // ─── Batch kit ─────────────────────────────────────────────────────────────
@@ -89,11 +89,139 @@ export const byRates = (row, prod) => ({
 export const emptyForm = () => ({
   groupKey: '', output_qty: '', output_uom_id: '', batch_date: todayPKT(), expiry_date: '',
   materials: [newMaterialRow()], packs: [newPackRow()], byproducts: [], misc_expense: '', misc_note: '',
+  formula: null, keptFor: null,
 });
 
-const blankMaterial = (m) => !m.raw_material_id && m.qty === '';
-const blankPkg = (x) => !x.raw_material_id && x.qty === '';
+export const blankMaterial = (m) => !m.raw_material_id && m.qty === '';
+export const blankPkg = (x) => !x.raw_material_id && x.qty === '';
 const blankPack = (p) => !p.product_id && p.units === '' && p.packaging.every(blankPkg);
+
+// ── Product formulas ───────────────────────────────────────────────────────
+// GET /manufacturing/products/:id/formula: raw materials for a reference
+// output ("for 100 L") and each pack size's packaging ("1 for every 24
+// units"). A new batch copies them into its form as lines that FOLLOW the
+// batch (total output, units) until the user types a quantity (qtyTouched).
+// The form keeps a snapshot of the formula it used (form.formula), so a draft
+// keeps following after it is reopened, and a later change to the formula
+// never changes a draft or a batch.
+export const formulaPath = (productId) => `/manufacturing/products/${productId}/formula`;
+
+/** A formula quantity for a batch output: qty × output ÷ reference, both in
+ *  base units. 3 decimals; count units round UP to a whole number. '' when
+ *  the output is not entered or is measured differently (litres vs kg). */
+export function scaleFormulaQty(qty, ref, out, countUnit) {
+  if (!ref || !out || !(ref.qty > 0) || !(out.qty > 0) || ref.base_type !== out.base_type) return '';
+  const x = (num(qty) * out.qty * out.factor) / (ref.qty * ref.factor);
+  return String(countUnit ? Math.ceil(x - 1e-9) : Math.round((x + Number.EPSILON) * 1000) / 1000);
+}
+
+/** Packaging pcs for a number of units: ceil(units × qty ÷ per units). '' until
+ *  the units are a whole number above 0. */
+export function packagingQty(units, qty, perUnits) {
+  const u = parseNum(units);
+  if (!Number.isInteger(u) || u <= 0) return '';
+  return String(Math.ceil((u * (num(qty) || 1)) / (num(perUnits) || 1) - 1e-9));
+}
+
+/** "1 for every 24 units" / "1 for every unit". */
+export const perUnitsLabel = (qty, perUnits) => `${fmtQty(qty)} for every ${num(perUnits) === 1 ? 'unit' : `${fmtQty(perUnits)} units`}`;
+
+/** The unit a formula is set in, as a word ("litre"); the symbol otherwise. */
+const UNIT_WORDS = { L: 'litre', ml: 'millilitre', kg: 'kilogram', g: 'gram', ton: 'ton', pcs: 'piece' };
+export const unitWord = (symbol) => UNIT_WORDS[symbol] || symbol;
+
+/** What a batch form keeps of a GET …/formula answer. */
+export function formulaSnapshot(group, data, uoms) {
+  const ref = data.formula ? uoms.find(u => String(u.id) === String(data.formula.ref_uom_id)) : null;
+  return {
+    groupKey: group.key,
+    product_id: group.packs[0]?.id,
+    ref_qty: data.formula ? num(data.formula.ref_qty) : null,
+    ref_uom_id: data.formula?.ref_uom_id ?? null,
+    ref_symbol: ref?.symbol || '',
+    ref_base_type: ref?.base_type || null,
+    ref_factor: num(ref?.to_base_factor) || 1,
+    materials: data.formula?.materials || [],
+    packaging: Object.fromEntries((data.packs || []).filter(p => p.packaging.length).map(p => [String(p.product_id), p.packaging])),
+  };
+}
+
+/** Raw-material lines filled from the formula (quantities follow the output). */
+export const formulaMaterialRows = (snap) => snap.materials.map(m => ({
+  ...newMaterialRow(), raw_material_id: m.raw_material_id, fromFormula: true, qtyTouched: false,
+}));
+
+/** Packaging lines of one pack size filled from the formula, for `units`. */
+export const formulaPackagingRows = (snap, productId, units) => (snap?.packaging?.[String(productId)] || []).map(x => ({
+  ...newPkgRow(), raw_material_id: x.raw_material_id, qty: packagingQty(units, x.qty, x.per_units),
+  fromFormula: true, fQty: x.qty, fPer: x.per_units,
+}));
+
+/** Lines that are still the formula's own: nothing typed over them. */
+const untouchedFormulaLine = (r) => r.fromFormula && !r.qtyTouched;
+export const replaceableLines = (rows, isBlank) => rows.every(r => isBlank(r) || untouchedFormulaLine(r));
+
+/** The raw-material lines differ from the formula (Reset to formula shows). */
+export function materialsDifferFromFormula(form) {
+  const snap = form.formula;
+  if (!snap?.materials?.length) return false;
+  const rows = form.materials.filter(r => !blankMaterial(r));
+  return rows.length !== snap.materials.length || rows.some(r => !untouchedFormulaLine(r));
+}
+
+/** One pack row's packaging differs from its formula packaging. */
+export function packagingDiffersFromFormula(rows, snap, productId) {
+  const lines = snap?.packaging?.[String(productId)];
+  if (!lines?.length) return false;
+  const filled = rows.filter(r => !blankPkg(r));
+  return filled.length !== lines.length || filled.some(r => !untouchedFormulaLine(r));
+}
+
+/** Untouched formula lines take the quantity for the current total output. */
+export function followFormula(form, uoms, matById) {
+  const snap = form.formula;
+  if (!snap?.materials?.length) return form;
+  const outUom = uoms.find(u => String(u.id) === String(form.output_uom_id));
+  const outQty = parseNum(form.output_qty);
+  const ref = { qty: num(snap.ref_qty), factor: num(snap.ref_factor) || 1, base_type: snap.ref_base_type };
+  const out = outUom && outQty > 0 ? { qty: outQty, factor: num(outUom.to_base_factor) || 1, base_type: outUom.base_type } : null;
+  const byId = new Map(snap.materials.map(m => [String(m.raw_material_id), m]));
+  let changed = false;
+  const materials = form.materials.map(r => {
+    if (!untouchedFormulaLine(r)) return r;
+    const m = byId.get(String(r.raw_material_id));
+    if (!m) return r;
+    const qty = scaleFormulaQty(m.qty, ref, out, matById.get(String(r.raw_material_id))?.base_type === 'count');
+    if (qty === r.qty) return r;
+    changed = true;
+    return { ...r, qty };
+  });
+  return changed ? { ...form, materials } : form;
+}
+
+/** Untouched packaging lines follow the pack's units: formula lines by their
+ *  ratio, other lines one for one (as before formulas). */
+export const followPackUnits = (rows, units) => rows.map(x => {
+  if (x.qtyTouched || !x.raw_material_id) return x;
+  return { ...x, qty: x.fromFormula ? packagingQty(units, x.fQty, x.fPer) : units };
+});
+
+/** A batch's packaging line as a formula line. Exact ratios become "q for
+ *  every n". Anything else becomes the nearest whole ratio, flagged for a
+ *  second look: 21 for 500 units -> 1 for every 24 (500 / 21 = 23.8);
+ *  1,100 for 500 -> 2 for every 1. */
+export function packagingFromBatch(qty, units) {
+  const q = Math.round(num(qty));
+  const u = Math.round(num(units));
+  if (!(q > 0) || !(u > 0)) return { qty: '', per_units: '1', check: null };
+  if (q === u) return { qty: '1', per_units: '1', check: null };
+  if (u % q === 0) return { qty: '1', per_units: String(u / q), check: null };
+  if (q % u === 0) return { qty: String(q / u), per_units: '1', check: null };
+  const check = `Check this: the batch used ${fmtQty(q)} for ${plural(u, 'unit', 'units')}.`;
+  return q < u
+    ? { qty: '1', per_units: String(Math.round(u / q)), check }
+    : { qty: String(Math.round(q / u)), per_units: '1', check };
+}
 
 /**
  * The form -> { group, outUom, view, issues, warnings }.
@@ -148,7 +276,7 @@ export function buildBatchModel(form, refs, batchCode) {
   packRows.forEach(row => {
     const prod = packById.get(String(row.product_id));
     const units = parseNum(row.units);
-    if (!prod) { issue('packs', `pk-${row.key}-size`, 'Choose a pack size on every row.'); return; }
+    if (!prod) { issue('packs', `pk-${row.key}-size`, 'Choose a pack size on every line.'); return; }
     if (outUom && prod.vol_uom_base_type !== outUom.base_type) {
       issue('packs', `pk-${row.key}-size`, `${prod.pack_size} cannot be filled from an output measured in ${outUom.symbol}.`); return;
     }
@@ -196,7 +324,7 @@ export function buildBatchModel(form, refs, batchCode) {
   form.byproducts.forEach(row => {
     const prod = byById.get(String(row.product_id));
     const qty = parseNum(row.qty);
-    if (!prod) { issue('byproducts', `bp-${row.key}-prod`, 'Choose the by-product or remove the row.'); return; }
+    if (!prod) { issue('byproducts', `bp-${row.key}-prod`, 'Choose the by-product or remove the line.'); return; }
     if (!Number.isInteger(qty) || qty <= 0) { issue('byproducts', `bp-${row.key}-qty`, `Enter a whole-number quantity for ${prod.name}.`); return; }
     if (!row.followsCode && !row.batch_no.trim()) { issue('byproducts', `bp-${row.key}-no`, `Enter the batch number for ${prod.name}.`); return; }
     if (!row.followsCode && batchCode && normKey(row.batch_no) === normKey(batchCode)) {
@@ -321,14 +449,14 @@ export function createPayload(form, model, draftId) {
 // ── Read-only section cards (record page) ──────────────────────────────────
 const tabular = { fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
 
-export function BatchFacts({ batch, codeLabel }) {
+export function BatchFacts({ batch }) {
   const unit = batch.vol_uom_symbol;
   const units = batch.packs.reduce((s, p) => s + num(p.units), 0);
   const lossPct = num(batch.total_volume) > 0 ? (num(batch.loss_volume) / num(batch.total_volume)) * 100 : 0;
   return (
     <dl className="hr-kv hr-kv-4">
-      <Fact label="Product" value={batch.category_name ? `${batch.product_name} (${batch.category_name})` : batch.product_name} />
-      <Fact label="Batch code" value={codeLabel || batch.batch_code} />
+      <Fact label="Product" value={batch.product_name} />
+      <Fact label="Category" value={batch.category_name || null} />
       <Fact label="Batch date" value={batch.batch_date ? fmtDate(batch.batch_date) : null} />
       <Fact label="Expiry date" value={batch.expiry_date ? fmtDate(batch.expiry_date) : null} />
       <Fact label="Total output" value={num(batch.total_volume) > 0 ? fmtQty(batch.total_volume, unit) : null} />
@@ -407,7 +535,13 @@ export function PacksTable({ packs, unit }) {
               {p.packaging.length > 0 && (
                 <tr className="mfg-subrow">
                   <td colSpan={8} style={{ paddingLeft: 24 }}>
-                    {p.packaging.map(x => `${x.rm_name} ${fmtQty(x.qty, x.uom_symbol)} at ${fmtAmount(x.unit_cost)}`).join(' · ')}
+                    {/* Each material stays on one line; the list wraps between them. */}
+                    {p.packaging.map((x, i) => (
+                      <React.Fragment key={x.raw_material_id ?? i}>
+                        {i > 0 && <span className="mfg-subrow-sep" aria-hidden="true"> · </span>}
+                        <span className="mfg-nowrap">{`${x.rm_name} ${fmtQty(x.qty, x.uom_symbol)} at ${fmtAmount(x.unit_cost)}`}</span>
+                      </React.Fragment>
+                    ))}
                   </td>
                 </tr>
               )}
@@ -438,14 +572,14 @@ export const byRateInfo = {
     `The value of 1 ${unit} of ${name} produced in ${master ? 'a' : 'this'} batch.`,
     'The by-product value (quantity × purchase rate) is subtracted from the batch cost, so the manufactured packs carry a lower cost.',
     "This value also becomes the by-product's cost in inventory, used to work out its profit when it is sold.",
-    'Example: a batch costs PKR 50,000 and gives 100 kg at PKR 40. The by-product value is PKR 4,000, so the packs carry PKR 46,000.',
+    'Example: a batch costs PKR 50,000.00 and gives 100 kg at PKR 40.00. The by-product value is PKR 4,000.00, so the packs carry PKR 46,000.00.',
     master ? 'Each batch starts from this rate and can change it for its own stock.' : 'Leave it at 0 to keep the full batch cost on the packs.',
   ],
   sale: ({ unit, name, master }) => [
     `The price of 1 ${unit} of ${name} when it is sold to a customer.`,
     'It fills in the rate on the sale invoice, where it can still be changed.',
     'It does not affect the batch cost.',
-    master ? 'Each batch starts from this rate and can change it for its own stock.' : "Starts from the by-product's sale rate; a change here applies only to this batch.",
+    master ? 'Each batch starts from this rate and can change it for its own stock.' : "It starts from the by-product's sale rate. A change here applies only to this batch.",
   ],
 };
 /** { unit, name } for the texts from by-product rows ({ name, unit }). */
@@ -495,10 +629,10 @@ export function ByproductsTable({ byproducts }) {
   );
 }
 
-export function BatchSections({ batch, codeLabel }) {
+export function BatchSections({ batch }) {
   return (
     <>
-      <Panel title="Batch"><BatchFacts batch={batch} codeLabel={codeLabel} /></Panel>
+      <Panel title="Batch"><BatchFacts batch={batch} /></Panel>
       <Panel title="Raw materials" status={num(batch.raw_material_cost) > 0 ? `PKR ${fmtAmount(batch.raw_material_cost)}` : undefined}>
         <MaterialsTable materials={batch.materials} total={batch.raw_material_cost} />
       </Panel>
@@ -546,7 +680,7 @@ export function CostSummary({ view, issues, attempted, warnings, shortfalls, onJ
         <div className="mfg-summary-block">
           <div className="mfg-summary-sub">Per pack size</div>
           <table className="mfg-summary-packs">
-            <thead><tr><th>Pack</th><th>Cost / unit</th><th>Sale rate</th><th>Margin</th></tr></thead>
+            <thead><tr><th>Pack size</th><th>Cost / unit</th><th>Sale rate</th><th>Margin</th></tr></thead>
             <tbody>
               {view.packs.map(p => {
                 const m = marginPct(p.sale_rate, p.cost_per_unit);
@@ -555,7 +689,7 @@ export function CostSummary({ view, issues, attempted, warnings, shortfalls, onJ
                     {/* "100 ml" never splits; a pack type may wrap below it. */}
                     <td>{String(p.pack_size).replace(/^(\S+) (\S+)/, '$1 $2')}</td>
                     <td><Rate value={p.cost_per_unit} /></td>
-                    <td>{fmtAmount(p.sale_rate)}</td>
+                    <td>{num(p.sale_rate) > 0 ? fmtAmount(p.sale_rate) : EMPTY}</td>
                     <td className={m !== null && m < 0 ? 'mfg-neg' : undefined}>{m === null ? '—' : fmtPct(m)}</td>
                   </tr>
                 );
@@ -571,7 +705,7 @@ export function CostSummary({ view, issues, attempted, warnings, shortfalls, onJ
             <div key={w} className="mfg-summary-warn"><span className="material-symbols-outlined" aria-hidden="true">warning</span>{w}</div>
           ))}
           {shortfalls.map(({ m, short }) => (
-            <div key={m.id} className="mfg-summary-warn"><span className="material-symbols-outlined" aria-hidden="true">inventory</span>{`${m.name}: short by ${fmtQty(short, m.uom_symbol)}`}</div>
+            <div key={m.id} className="mfg-summary-warn"><span className="material-symbols-outlined" aria-hidden="true">inventory</span>{`${m.name} is short by ${fmtQty(short, m.uom_symbol)}.`}</div>
           ))}
         </div>
       )}

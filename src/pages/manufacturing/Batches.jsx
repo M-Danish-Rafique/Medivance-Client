@@ -7,7 +7,7 @@ import toast from 'react-hot-toast';
 import {
   HrStyles, Tabs, KebabMenu, useSort, sortRows, fmtAmount, fmtDate, num,
 } from '../hr/HrKit';
-import { MfgStyles, BatchStatus, EMPTY, SortHead, fmtQty } from './mfgKit';
+import { MfgStyles, BatchStatus, EMPTY, SortHead, fmtQty, mfgError } from './mfgKit';
 import { SendToInventoryDialog, openBatchSheet } from './batchKit';
 
 // ─── Batches ───────────────────────────────────────────────────────────────
@@ -46,7 +46,7 @@ export default function Batches() {
 
   const load = useCallback(() => api.get('/manufacturing/batches')
     .then(r => setBatches(r.data))
-    .catch(err => toast.error(err?.response?.data?.message || 'The batches could not be loaded. Refresh the page.'))
+    .catch(err => toast.error(mfgError(err, 'The batches could not be loaded. Refresh the page.')))
     .finally(() => setLoading(false)), []);
   useEffect(() => { load(); }, [load]);
 
@@ -68,7 +68,7 @@ export default function Batches() {
     try {
       const r = await api.get(`/manufacturing/batches/${b.id}`);
       setSendBatch(r.data);
-    } catch (err) { toast.error(err?.response?.data?.message || 'The batch could not be loaded.'); }
+    } catch (err) { toast.error(mfgError(err, 'The batch could not be loaded.')); }
   };
   const send = async () => {
     setSending(true); setSendError(null);
@@ -77,7 +77,7 @@ export default function Batches() {
       toast.success(`Batch ${sendBatch.batch_code} is in inventory.`);
       setSendBatch(null); load();
     } catch (err) {
-      setSendError(err?.response?.data?.message || 'The batch could not be sent to inventory. Try again.');
+      setSendError(mfgError(err, 'The batch could not be sent to inventory. Try again.'));
     } finally { setSending(false); }
   };
   const remove = async () => {
@@ -88,7 +88,7 @@ export default function Batches() {
       setDeleteTarget(null); load();
     } catch (err) {
       setDeleteTarget(null);
-      toast.error(err?.response?.data?.message || 'The batch could not be deleted. Try again.');
+      toast.error(mfgError(err, 'The batch could not be deleted. Try again.'));
       load();
     } finally { setDeleting(false); }
   };
@@ -138,7 +138,7 @@ export default function Batches() {
           <div className="mfg-head-actions">
             <div className="search-bar">
               <span className="material-symbols-outlined" aria-hidden="true">search</span>
-              <input placeholder="Search batches" aria-label="Search batches by code or product" value={search}
+              <input placeholder="Search batches…" aria-label="Search batches by code or product" value={search}
                 onChange={e => setSearch(e.target.value)} style={{ width: 170 }} />
             </div>
             <button type="button" className="btn btn-primary" onClick={() => navigate('/manufacturing/batches/new')}>
@@ -160,14 +160,14 @@ export default function Batches() {
             <table className="hr-table hr-page-table">
               <thead>
                 <tr>
-                  <SortHead sort={sort} column="batch_code" label="Batch code" style={{ width: '13%' }} />
+                  <SortHead sort={sort} column="batch_code" label="Batch code" style={{ width: '12%' }} />
                   <SortHead sort={sort} column="product_name" label="Product" />
-                  <SortHead sort={sort} column="batch_date" label="Batch date" date style={{ width: '11%' }} />
-                  <SortHead sort={sort} column="expiry_date" label="Expiry" date style={{ width: '11%' }} />
-                  <th className="hr-th-num" style={{ width: '9%' }}>Output</th>
-                  <SortHead sort={sort} column="units" label="Units" num style={{ width: '8%' }} />
-                  <SortHead sort={sort} column="total_cost" label="Total cost (PKR)" num style={{ width: '14%' }} />
-                  <th style={{ width: '15%' }}>Status</th>
+                  <SortHead sort={sort} column="batch_date" label="Batch date" date style={{ width: '10%' }} />
+                  <SortHead sort={sort} column="expiry_date" label="Expiry" date style={{ width: '10%' }} />
+                  <th className="hr-th-num" style={{ width: '7%' }}>Output</th>
+                  <SortHead sort={sort} column="units" label="Units" num style={{ width: '7%' }} />
+                  <SortHead sort={sort} column="total_cost" label="Total cost (PKR)" num style={{ width: '13%' }} />
+                  <th style={{ width: '14%' }}>Status</th>
                   <th style={{ width: 56 }}><span className="hr-sr-only">Actions</span></th>
                 </tr>
               </thead>
@@ -176,7 +176,7 @@ export default function Batches() {
                   <tr key={b.id} className="hr-row-click" tabIndex={0}
                     onClick={() => navigate(`/manufacturing/batches/${b.id}`)}
                     onKeyDown={e => { if (e.key === 'Enter') navigate(`/manufacturing/batches/${b.id}`); }}>
-                    <td className="mfg-code">{b.batch_code || <span className="mfg-sub">Draft</span>}</td>
+                    <td className="mfg-code">{b.batch_code || EMPTY}</td>
                     <td className="hr-cell-strong">{b.product_name}</td>
                     <td style={tabular}>{b.batch_date ? fmtDate(b.batch_date) : EMPTY}</td>
                     <td style={tabular}>{b.expiry_date ? fmtDate(b.expiry_date) : EMPTY}</td>

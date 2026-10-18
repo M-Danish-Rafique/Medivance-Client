@@ -1,263 +1,324 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Layout from '../../components/layout/Layout';
+import Modal from '../../components/common/Modal';
+import DateInput from '../../components/common/DateInput';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
-import { formatCurrency } from '../../utils/formatters';
-import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
-import DateInput from '../../components/common/DateInput';
-import { HrStyles, useSort, sortRows, num } from '../hr/HrKit';
-import { MfgStyles, SortHead } from './mfgKit';
+import { todayPKT } from '../../utils/dateUtils';
+import {
+  HrStyles, Tabs, Segmented, BusyButton, TableSkeleton, useSort, sortRows, fmtAmount, fmtMoney, fmtDate, num,
+} from '../hr/HrKit';
+import { MfgStyles, SortHead, NameWithTag, EMPTY, plural, mfgError } from './mfgKit';
 
-// Both tables sort on every column (HrKit sorting, manufacturing rules):
-// transactions newest first, the summary by product A to Z. Totals stay last.
+// ─── FBR tax ledger ────────────────────────────────────────────────────────
+// One entry per taxable manufactured product sold (written by the sale; see
+// decisions: products.sale_tax_pct). Filters apply as they change: a date
+// range (all dates when empty) and the status. The figures above the table
+// cover the whole period; the two tabs show the entries and their summary by
+// product and rate, both under the status filter. Pending entries are
+// selected and marked as submitted to FBR after a confirmation that states
+// the submission date (the To date, else today). Marking cannot be undone.
+// The API sends dates as timestamps, so they are always shown through the PKT
+// formatter, and products carry no pack size, so it is looked up from the
+// manufactured products (two "Mustard Oil" sizes must not read the same).
+// Status is one column: the submission date, or "Pending" in amber.
+
 const LEDGER_SORT = {
-  date: { value: r => String(r.sale_date || '').slice(0, 10) },
+  date: { value: r => new Date(r.sale_date).getTime() },
   invoice: { value: r => r.invoice_no, text: true },
   customer: { value: r => r.customer_name, text: true },
-  product: { value: r => r.product_name, text: true },
+  product: { value: r => r.product_label, text: true },
   rate: { value: r => num(r.tax_rate) },
   taxable: { value: r => num(r.taxable_amount) },
   tax: { value: r => num(r.tax_amount) },
-  status: { value: r => (r.submitted_to_fbr ? 'Submitted' : 'Pending'), text: true },
-  fbr_date: { value: r => (r.fbr_submission_date ? String(r.fbr_submission_date).slice(0, 10) : null) },
+  // Pending first when newest-first, then by submission date.
+  submitted: { value: r => (r.fbr_submission_date ? new Date(r.fbr_submission_date).getTime() : Number.MAX_SAFE_INTEGER) },
 };
-const ledgerOrder = (a, b) => String(b.sale_date || '').localeCompare(String(a.sale_date || '')) || b.id - a.id;
+const ledgerOrder = (a, b) => new Date(b.sale_date).getTime() - new Date(a.sale_date).getTime() || b.id - a.id;
 const SUMMARY_SORT = {
-  product: { value: p => p.product_name, text: true },
+  product: { value: p => p.product_label, text: true },
   rate: { value: p => num(p.tax_rate) },
-  taxable: { value: p => num(p.taxable) },
-  tax: { value: p => num(p.tax) },
-  count: { value: p => p.rows?.length || 0 },
+  taxable: { value: p => p.taxable },
+  tax: { value: p => p.tax },
+  count: { value: p => p.count },
 };
-const summaryOrder = (a, b) => String(a.product_name || '').localeCompare(String(b.product_name || ''), undefined, { sensitivity: 'base' })
+const summaryOrder = (a, b) => String(a.product_label || '').localeCompare(String(b.product_label || ''), undefined, { sensitivity: 'base', numeric: true })
   || num(a.tax_rate) - num(b.tax_rate);
-const right = { textAlign: 'right' };
+const tabular = { fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
+const pct = (v) => `${num(v)}%`;
+const isPending = (r) => !Number(r.submitted_to_fbr);
+const STATUS_WORD = { pending: 'pending', submitted: 'submitted' };
+
+function EmptyState({ icon, title }) {
+  return (
+    <div className="hr-empty">
+      <div className="hr-empty-icon"><span className="material-symbols-outlined" aria-hidden="true">{icon}</span></div>
+      <div className="hr-empty-title">{title}</div>
+    </div>
+  );
+}
 
 export default function TaxLedger() {
-  const [data, setData] = useState({ rows: [], summary: {}, by_product: [] });
-  const [loading, setLoading] = useState(true);
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
-  const [submittedFilter, setSubmittedFilter] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [status, setStatus] = useState('all');
+  const [tab, setTab] = useState('entries');
+  const [rows, setRows] = useState(null);
+  const [rangeError, setRangeError] = useState(null);
+  const [reload, setReload] = useState(0);
   const [selected, setSelected] = useState([]);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [activeTab, setActiveTab] = useState('ledger');
-  const [reportData, setReportData] = useState(null);
+  const [packSizes, setPackSizes] = useState(new Map());
   const ledgerSort = useSort('date', 'desc');
   const summarySort = useSort('product');
 
-  const load = async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (fromDate) params.append('from_date', fromDate);
-      if (toDate) params.append('to_date', toDate);
-      if (submittedFilter !== '') params.append('submitted', submittedFilter);
-      const r = await api.get(`/tax-ledger?${params}`);
-      setData(r.data);
-    } catch { toast.error('Error loading tax ledger'); }
-    setLoading(false);
-  };
+  useEffect(() => {
+    Promise.all([api.get('/manufacturing/products'), api.get('/manufacturing/by-products')])
+      .then(([p, b]) => setPackSizes(new Map([...p.data, ...b.data].map(x => [String(x.id), x.pack_size]))))
+      .catch(() => {});
+  }, []);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (from && to && from > to) { setRangeError('The start date must be on or before the end date.'); return undefined; }
+    setRangeError(null);
+    let live = true;
+    setRows(null);
+    api.get('/tax-ledger', { params: { from_date: from || undefined, to_date: to || undefined } })
+      .then(r => { if (live) { setRows(r.data.rows || []); setSelected([]); } })
+      .catch(err => {
+        if (!live) return;
+        setRows([]);
+        toast.error(mfgError(err, 'The tax ledger could not be loaded. Try again.'));
+      });
+    return () => { live = false; };
+  }, [from, to, reload]);
 
-  const loadReport = async () => {
-    try {
-      const params = new URLSearchParams();
-      if (fromDate) params.append('from_date', fromDate);
-      if (toDate) params.append('to_date', toDate);
-      const r = await api.get(`/tax-ledger/report?${params}`);
-      setReportData(r.data);
-    } catch { toast.error('Error loading report'); }
-  };
+  const all = useMemo(() => (rows || []).map(r => ({
+    ...r, pack_size: packSizes.get(String(r.product_id)) || null,
+    product_label: `${r.product_name} ${packSizes.get(String(r.product_id)) || ''}`.trim(),
+  })), [rows, packSizes]);
+  const counts = useMemo(() => ({
+    all: all.length,
+    pending: all.filter(isPending).length,
+    submitted: all.filter(r => !isPending(r)).length,
+  }), [all]);
+  const figures = useMemo(() => ({
+    taxable: all.reduce((s, r) => s + num(r.taxable_amount), 0),
+    tax: all.reduce((s, r) => s + num(r.tax_amount), 0),
+    pending: all.filter(isPending).reduce((s, r) => s + num(r.tax_amount), 0),
+  }), [all]);
+  const shown = useMemo(() => all.filter(r => (status === 'all' ? true : status === 'pending' ? isPending(r) : !isPending(r))), [all, status]);
+  const ledgerRows = useMemo(() => sortRows(shown, ledgerSort.sortConfig, LEDGER_SORT, ledgerOrder), [shown, ledgerSort.sortConfig]);
+  const shownTotals = useMemo(() => ({
+    taxable: shown.reduce((s, r) => s + num(r.taxable_amount), 0),
+    tax: shown.reduce((s, r) => s + num(r.tax_amount), 0),
+  }), [shown]);
 
-  const toggleSelect = (id) => {
-    setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  };
+  // One summary line per product and tax rate.
+  const summary = useMemo(() => {
+    const groups = new Map();
+    shown.forEach(r => {
+      const key = `${r.product_id}|${num(r.tax_rate)}`;
+      if (!groups.has(key)) groups.set(key, { key, product_name: r.product_name, pack_size: r.pack_size, product_label: r.product_label, tax_rate: r.tax_rate, taxable: 0, tax: 0, count: 0 });
+      const g = groups.get(key);
+      g.taxable += num(r.taxable_amount);
+      g.tax += num(r.tax_amount);
+      g.count += 1;
+    });
+    return sortRows([...groups.values()], summarySort.sortConfig, SUMMARY_SORT, summaryOrder);
+  }, [shown, summarySort.sortConfig]);
 
-  const selectAllPending = () => {
-    const pending = data.rows.filter(r => !r.submitted_to_fbr).map(r => r.id);
-    setSelected(prev => prev.length === pending.length ? [] : pending);
-  };
+  const pendingShown = shown.filter(isPending).map(r => r.id);
+  const selectedShown = selected.filter(id => pendingShown.includes(id));
+  const allPendingSelected = pendingShown.length > 0 && selectedShown.length === pendingShown.length;
+  const toggle = (id) => setSelected(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  const toggleAll = () => setSelected(allPendingSelected ? [] : pendingShown);
+  const submissionDate = to || todayPKT();
 
-  const handleSubmitFBR = async () => {
-    if (!selected.length) return toast.error('Select at least one record');
+  const markSubmitted = async () => {
     setSubmitting(true);
     try {
-      const submissionDate = toDate || todayPKT();
-      await api.post('/tax-ledger/submit-fbr', { ids: selected, submission_date: submissionDate });
-      toast.success(`${selected.length} records marked as submitted to FBR`);
-      setSelected([]);
-      load();
-    } catch { toast.error('Error submitting'); } finally { setSubmitting(false); }
+      await api.post('/tax-ledger/submit-fbr', { ids: selectedShown, submission_date: submissionDate });
+      toast.success(`${plural(selectedShown.length, 'tax entry', 'tax entries')} marked as submitted to FBR.`);
+      setConfirmOpen(false);
+      setReload(n => n + 1);
+    } catch (err) {
+      toast.error(mfgError(err, 'The entries could not be marked as submitted. Try again.'));
+    } finally { setSubmitting(false); }
   };
 
-  const fmtPKR = formatCurrency;
-  const ledgerRows = sortRows(data.rows || [], ledgerSort.sortConfig, LEDGER_SORT, ledgerOrder);
-  const summaryRows = sortRows(reportData?.by_product || [], summarySort.sortConfig, SUMMARY_SORT, summaryOrder);
+  const period = from || to;
+  const emptyTitle = all.length === 0
+    ? (period ? 'No tax entries in this period.' : 'No tax entries yet. They are recorded when taxable products are sold.')
+    : `No ${STATUS_WORD[status]} entries${period ? ' in this period' : ''}.`;
 
   return (
     <Layout title="FBR Tax Ledger">
       <HrStyles />
       <MfgStyles />
-      {/* Summary cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
-        <div className="stat-card">
-          <div className="stat-icon" style={{ background: '#dbeafe' }}><span className="material-symbols-outlined" style={{ fontSize: 20 }}>bar_chart</span></div>
-          <div><div className="stat-label">Total Taxable Amount</div><div className="stat-value" style={{ fontSize: 18 }}>{fmtPKR(data.summary.totalTaxable)}</div></div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon" style={{ background: '#fef3c7' }}><span className="material-symbols-outlined" style={{ fontSize: 20 }}>receipt_long</span></div>
-          <div><div className="stat-label">Total Tax Collected</div><div className="stat-value" style={{ fontSize: 18 }}>{fmtPKR(data.summary.totalTax)}</div></div>
-        </div>
-        <div className="stat-card" style={{ borderColor: parseFloat(data.summary.pendingTax) > 0 ? '#fecaca' : undefined }}>
-          <div className="stat-icon" style={{ background: '#fee2e2' }}><span className="material-symbols-outlined" style={{ fontSize: 20 }}>warning</span></div>
-          <div>
-            <div className="stat-label">Pending Submission (FBR)</div>
-            <div className="stat-value" style={{ fontSize: 18, color: parseFloat(data.summary.pendingTax) > 0 ? 'var(--red)' : 'var(--green)' }}>{fmtPKR(data.summary.pendingTax)}</div>
-          </div>
-        </div>
-      </div>
-
       <div className="card">
-        <div className="card-header">
-          <div className="card-title">FBR Tax Records</div>
-          <div className="flex items-center gap-3" style={{ flexWrap: 'wrap' }}>
-            <DateInput className="form-control" style={{ width: 160 }} value={fromDate} onChange={e => setFromDate(e.target.value)} placeholder="From date" />
-            <DateInput className="form-control" style={{ width: 160 }} value={toDate} onChange={e => setToDate(e.target.value)} placeholder="To date" />
-            <select className="form-control" style={{ width: 160 }} value={submittedFilter} onChange={e => setSubmittedFilter(e.target.value)}>
-              <option value="">All Records</option>
-              <option value="0">Pending</option>
-              <option value="1">Submitted</option>
-            </select>
-            <button className="btn btn-outline" onClick={load}><span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: 'middle', marginRight: 6 }}>search</span>Filter</button>
-            <button className="btn btn-outline" onClick={() => { loadReport(); setActiveTab('report'); }}><span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: 'middle', marginRight: 6 }}>description</span>FBR Report</button>
-            {selected.length > 0 && (
-              <button className="btn btn-primary" onClick={handleSubmitFBR} disabled={submitting}>
-                {submitting ? 'Submitting...' : `Mark ${selected.length} as Submitted`}
+        <div className="mfg-card-head">
+          <Tabs
+            ariaLabel="Tax ledger views"
+            value={tab}
+            onChange={setTab}
+            tabs={[
+              { value: 'entries', label: `Tax entries (${shown.length})` },
+              { value: 'summary', label: 'Summary by product' },
+            ]}
+          />
+          <div className="mfg-head-actions">
+            {tab === 'entries' && (
+              <button type="button" className="btn btn-primary" disabled={selectedShown.length === 0}
+                title={selectedShown.length === 0 ? 'Select pending entries first' : undefined}
+                onClick={() => setConfirmOpen(true)}>
+                <span className="material-symbols-outlined" aria-hidden="true">task_alt</span>
+                {selectedShown.length > 0 ? `Mark ${selectedShown.length} as submitted` : 'Mark as submitted'}
               </button>
             )}
           </div>
         </div>
-
-        <div style={{ padding: '0 22px' }}>
-          <div className="tabs">
-            <button className={`tab-btn ${activeTab === 'ledger' ? 'active' : ''}`} onClick={() => setActiveTab('ledger')}>Tax Ledger ({data.rows?.length || 0})</button>
-            <button className={`tab-btn ${activeTab === 'report' ? 'active' : ''}`} onClick={() => { setActiveTab('report'); loadReport(); }}>FBR Summary Report</button>
+        <div className="mfg-filterbar">
+          <div className="mfg-filters">
+            <div className="mfg-filter-range">
+              <DateInput aria-label="From date" value={from} max={to || undefined} onChange={e => setFrom(e.target.value)} style={{ width: 136 }} />
+              <span aria-hidden="true">to</span>
+              <DateInput aria-label="To date" value={to} min={from || undefined} onChange={e => setTo(e.target.value)} style={{ width: 136 }} />
+            </div>
+            <Segmented
+              ariaLabel="Submission status"
+              value={status}
+              onChange={setStatus}
+              options={[
+                { val: 'all', label: 'All', count: counts.all },
+                { val: 'pending', label: 'Pending', count: counts.pending },
+                { val: 'submitted', label: 'Submitted', count: counts.submitted },
+              ]}
+            />
           </div>
         </div>
-
-        {activeTab === 'ledger' && (
-          <div className="table-wrap">
-            {loading ? <div className="loading-center"><div className="spinner" /></div>
-            : data.rows?.length === 0
-              ? <div className="empty-state"><div className="empty-state-icon"><span className="material-symbols-outlined" style={{ fontSize: 28 }}>receipt_long</span></div><div className="empty-state-title">No tax records found</div><div className="empty-state-desc">Tax is recorded automatically on taxable product sales</div></div>
-              : (
-                <table className="mfg-list">
-                  <thead>
-                    <tr>
-                      <th>
-                        <input type="checkbox"
-                          checked={selected.length === data.rows.filter(r => !r.submitted_to_fbr).length && data.rows.some(r => !r.submitted_to_fbr)}
-                          onChange={selectAllPending} title="Select all pending" />
-                      </th>
-                      <SortHead sort={ledgerSort} column="date" label="Date" date />
-                      <SortHead sort={ledgerSort} column="invoice" label="Invoice" />
-                      <SortHead sort={ledgerSort} column="customer" label="Customer" />
-                      <SortHead sort={ledgerSort} column="product" label="Product" />
-                      <SortHead sort={ledgerSort} column="rate" label="Tax Rate" num />
-                      <SortHead sort={ledgerSort} column="taxable" label="Taxable Amt" num />
-                      <SortHead sort={ledgerSort} column="tax" label="Tax Amount" num />
-                      <SortHead sort={ledgerSort} column="status" label="Status" />
-                      <SortHead sort={ledgerSort} column="fbr_date" label="FBR Date" date />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {ledgerRows.map(r => (
-                      <tr key={r.id} style={{ background: r.submitted_to_fbr ? '#f0fdf4' : undefined }}>
-                        <td>
-                          {!r.submitted_to_fbr && (
-                            <input type="checkbox" checked={selected.includes(r.id)} onChange={() => toggleSelect(r.id)} />
-                          )}
-                        </td>
-                        <td>{formatDatePKT(r.sale_date)}</td>
-                        <td><span className="mono badge badge-gray" style={{ fontSize: 10 }}>{r.invoice_no || '—'}</span></td>
-                        <td>{r.customer_name || '—'}</td>
-                        <td style={{ fontWeight: 600 }}>{r.product_name}</td>
-                        <td style={right}><span className="badge badge-amber">{r.tax_rate}%</span></td>
-                        <td className="mono" style={right}>{fmtPKR(r.taxable_amount)}</td>
-                        <td style={{ ...right, fontWeight: 700, color: 'var(--amber)' }}>{fmtPKR(r.tax_amount)}</td>
-                        <td>
-                          {r.submitted_to_fbr
-                            ? <span className="badge badge-green">Submitted</span>
-                            : <span className="badge badge-red">Pending</span>}
-                        </td>
-                        <td style={{ fontSize: 12, color: 'var(--gray-500)' }}>
-                          {formatDatePKT(r.fbr_submission_date)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr style={{ background: 'var(--navy)', color: 'white' }}>
-                      <td colSpan={6} style={{ padding: '10px 14px', fontWeight: 700 }}>TOTALS</td>
-                      <td style={{ padding: '10px 14px', fontWeight: 700, textAlign: 'right' }}>{fmtPKR(data.summary.totalTaxable)}</td>
-                      <td style={{ padding: '10px 14px', fontWeight: 700, color: '#fcd34d', textAlign: 'right' }}>{fmtPKR(data.summary.totalTax)}</td>
-                      <td colSpan={2}></td>
-                    </tr>
-                  </tfoot>
-                </table>
-              )}
+        {!rangeError && rows !== null && all.length > 0 && (
+          <div className="mfg-figures" role="group" aria-label="Period totals">
+            <div><span>Taxable amount</span><strong>{fmtMoney(figures.taxable)}</strong></div>
+            <div><span>Sale tax</span><strong>{fmtMoney(figures.tax)}</strong></div>
+            <div>
+              <span>Pending submission to FBR</span>
+              <strong className={figures.pending > 0 ? 'mfg-amber' : undefined}>{fmtMoney(figures.pending)}</strong>
+            </div>
           </div>
         )}
 
-        {activeTab === 'report' && reportData && (
-          <div style={{ padding: 22 }}>
-            <div style={{ marginBottom: 16, padding: '12px 16px', background: 'var(--blue-ultra)', border: '1px solid var(--blue-pale)', borderRadius: 10 }}>
-              <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--navy)', marginBottom: 4 }}>FBR Sales Tax Summary Report</div>
-              <div style={{ fontSize: 13, color: 'var(--gray-500)' }}>
-                Period: {reportData.from_date || 'All time'} — {reportData.to_date || 'Present'}
-              </div>
-              <div style={{ display: 'flex', gap: 20, marginTop: 10 }}>
-                <div><span style={{ color: 'var(--gray-500)', fontSize: 13 }}>Total Taxable: </span><strong style={{ fontSize: 15 }}>{fmtPKR(reportData.totals?.taxable)}</strong></div>
-                <div><span style={{ color: 'var(--gray-500)', fontSize: 13 }}>Total Tax to Submit: </span><strong style={{ fontSize: 15, color: 'var(--amber)' }}>{fmtPKR(reportData.totals?.tax)}</strong></div>
-              </div>
-            </div>
-
-            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>Breakdown by Product</div>
-            <table className="mfg-list">
+        {rangeError ? (
+          <div className="hr-empty hr-empty-sm" role="alert">
+            <div className="hr-empty-icon"><span className="material-symbols-outlined" aria-hidden="true">date_range</span></div>
+            <div className="hr-empty-title">{rangeError}</div>
+          </div>
+        ) : rows === null ? (
+          <div style={{ padding: '8px 22px' }}><TableSkeleton columns={8} rows={5} /></div>
+        ) : shown.length === 0 ? (
+          <EmptyState icon="receipt_long" title={emptyTitle} />
+        ) : tab === 'entries' ? (
+          <div className="hr-page-scroll">
+            <table className="hr-table hr-page-table mfg-compact">
               <thead>
                 <tr>
-                  <SortHead sort={summarySort} column="product" label="Product" />
-                  <SortHead sort={summarySort} column="rate" label="Tax Rate" num />
-                  <SortHead sort={summarySort} column="taxable" label="Total Taxable" num />
-                  <SortHead sort={summarySort} column="tax" label="Tax to Submit" num />
-                  <SortHead sort={summarySort} column="count" label="Transactions" num />
+                  <th style={{ width: 44 }}>
+                    <input type="checkbox" className="mfg-row-check" aria-label="Select all pending entries"
+                      checked={allPendingSelected} disabled={pendingShown.length === 0} onChange={toggleAll} />
+                  </th>
+                  <SortHead sort={ledgerSort} column="date" label="Date" date style={{ width: '10%' }} />
+                  <SortHead sort={ledgerSort} column="invoice" label="Invoice no." style={{ width: '11%' }} />
+                  <SortHead sort={ledgerSort} column="customer" label="Customer" />
+                  <SortHead sort={ledgerSort} column="product" label="Product" />
+                  <SortHead sort={ledgerSort} column="rate" label="Rate" title="Sale tax rate" num style={{ width: '7%' }} />
+                  <SortHead sort={ledgerSort} column="taxable" label="Taxable (PKR)" title="Taxable amount (PKR)" num style={{ width: '12%' }} />
+                  <SortHead sort={ledgerSort} column="tax" label="Sale tax (PKR)" num style={{ width: '11%' }} />
+                  <SortHead sort={ledgerSort} column="submitted" label="Submitted" title="Date submitted to FBR" date style={{ width: '11%' }} />
                 </tr>
               </thead>
               <tbody>
-                {summaryRows.map(p => (
-                  <tr key={p.rows?.[0]?.product_id ?? p.product_name}>
-                    <td style={{ fontWeight: 600 }}>{p.product_name}</td>
-                    <td style={right}><span className="badge badge-amber">{p.tax_rate}%</span></td>
-                    <td className="mono" style={right}>{fmtPKR(p.taxable)}</td>
-                    <td style={{ ...right, fontWeight: 700, color: 'var(--amber)' }}>{fmtPKR(p.tax)}</td>
-                    <td style={right}><span className="badge badge-gray">{p.rows?.length || 0}</span></td>
+                {ledgerRows.map(r => (
+                  <tr key={r.id}>
+                    <td>
+                      {isPending(r) && (
+                        <input type="checkbox" className="mfg-row-check" checked={selected.includes(r.id)} onChange={() => toggle(r.id)}
+                          aria-label={`Select ${r.invoice_no ? `invoice ${r.invoice_no}` : 'entry'}, ${r.product_name}`} />
+                      )}
+                    </td>
+                    <td style={tabular}>{fmtDate(r.sale_date)}</td>
+                    <td style={tabular}>{r.invoice_no || EMPTY}</td>
+                    <td className="mfg-ellipsis" title={r.customer_name || undefined}>{r.customer_name || EMPTY}</td>
+                    <td><NameWithTag name={r.product_name} tag={r.pack_size} /></td>
+                    <td className="hr-num">{pct(r.tax_rate)}</td>
+                    <td className="hr-num">{fmtAmount(r.taxable_amount)}</td>
+                    <td className="hr-num">{fmtAmount(r.tax_amount)}</td>
+                    <td style={tabular}>{isPending(r) ? <span className="mfg-amber">Pending</span> : fmtDate(r.fbr_submission_date)}</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
-                <tr style={{ background: 'var(--navy)', color: 'white' }}>
-                  <td colSpan={2} style={{ padding: '10px 14px', fontWeight: 700 }}>GRAND TOTAL</td>
-                  <td style={{ padding: '10px 14px', fontWeight: 700, textAlign: 'right' }}>{fmtPKR(reportData.totals?.taxable)}</td>
-                  <td style={{ padding: '10px 14px', fontWeight: 700, color: '#fcd34d', textAlign: 'right' }}>{fmtPKR(reportData.totals?.tax)}</td>
-                  <td></td>
+                <tr className="mfg-total-row">
+                  <td colSpan={6}>{`Total · ${plural(shown.length, 'entry', 'entries')}`}</td>
+                  <td className="hr-num">{fmtAmount(shownTotals.taxable)}</td>
+                  <td className="hr-num">{fmtAmount(shownTotals.tax)}</td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        ) : (
+          <div className="hr-page-scroll">
+            <table className="hr-table hr-page-table mfg-compact">
+              <thead>
+                <tr>
+                  <SortHead sort={summarySort} column="product" label="Product" />
+                  <SortHead sort={summarySort} column="rate" label="Rate" title="Sale tax rate" num style={{ width: '10%' }} />
+                  <SortHead sort={summarySort} column="taxable" label="Taxable (PKR)" title="Taxable amount (PKR)" num style={{ width: '16%' }} />
+                  <SortHead sort={summarySort} column="tax" label="Sale tax (PKR)" num style={{ width: '16%' }} />
+                  <SortHead sort={summarySort} column="count" label="Entries" num style={{ width: '10%' }} />
+                </tr>
+              </thead>
+              <tbody>
+                {summary.map(p => (
+                  <tr key={p.key}>
+                    <td><NameWithTag name={p.product_name} tag={p.pack_size} /></td>
+                    <td className="hr-num">{pct(p.tax_rate)}</td>
+                    <td className="hr-num">{fmtAmount(p.taxable)}</td>
+                    <td className="hr-num">{fmtAmount(p.tax)}</td>
+                    <td className="hr-num">{p.count}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="mfg-total-row">
+                  <td colSpan={2}>Total</td>
+                  <td className="hr-num">{fmtAmount(shownTotals.taxable)}</td>
+                  <td className="hr-num">{fmtAmount(shownTotals.tax)}</td>
+                  <td className="hr-num">{shown.length}</td>
                 </tr>
               </tfoot>
             </table>
           </div>
         )}
       </div>
+
+      <Modal
+        isOpen={confirmOpen}
+        onClose={() => { if (!submitting) setConfirmOpen(false); }}
+        title={`Mark ${plural(selectedShown.length, 'entry', 'entries')} as submitted to FBR?`}
+        size="sm"
+        footer={(
+          <>
+            <button type="button" className="btn btn-outline" onClick={() => setConfirmOpen(false)} disabled={submitting}>Cancel</button>
+            <BusyButton busy={submitting} busyLabel="Marking…" onClick={markSubmitted}>Mark as submitted</BusyButton>
+          </>
+        )}
+      >
+        <p className="mfg-confirm-text">
+          {`Sale tax of ${fmtMoney(ledgerRows.filter(r => selectedShown.includes(r.id)).reduce((s, r) => s + num(r.tax_amount), 0))} will be recorded as submitted on ${fmtDate(submissionDate)}${to ? ', the end of the selected period' : ''}. This cannot be undone.`}
+        </p>
+      </Modal>
     </Layout>
   );
 }

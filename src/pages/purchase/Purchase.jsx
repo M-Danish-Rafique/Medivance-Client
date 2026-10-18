@@ -11,6 +11,8 @@ import { formatDatePKT, todayPKT } from '../../utils/dateUtils';
 import { formatCurrency } from '../../utils/formatters';
 
 import DateInput from '../../components/common/DateInput';
+import { HrStyles, SearchSelect } from '../hr/HrKit';
+
 const emptyItem = {
   row_id: null,
   product_id: '', product_search: '', pack_size: '', purchase_rate: '', sale_rate: '',
@@ -45,7 +47,38 @@ const computeEffPurchaseRate = (item) => {
 };
 
 const today = () => todayPKT();
+// Purchase line columns. Exp Date is fixed at the width "dd/mm/yyyy" needs
+// beside the calendar button, so the date never runs under the icon.
+const LINE_GRID = '2fr 0.7fr 0.9fr 120px 0.7fr 0.9fr 0.9fr 80px 70px 70px 72px 36px';
+// DATE columns arrive as UTC timestamps (PKT midnight = 19:00 the day before),
+// so slicing at "T" gives the previous day. Read them as PKT dates.
+const pktDay = (value) => (value ? todayPKT(value) : '');
 const fmtPKR = (n) => `PKR ${Math.round(parseFloat(n || 0)).toLocaleString()}`;
+
+// Product field of a purchase line: HrKit SearchSelect (search by any words,
+// prefix matches first, keyboard, opens over the dialog), sized to the row's
+// compact inputs, with a caret so it reads as a dropdown. Each row shows the
+// pack size, which tells apart products that share a name.
+const PRODUCT_PICKER_CSS = `
+  .pur-product { position: relative; width: 100%; min-width: 0; }
+  .pur-product .customer-autocomplete-wrap input.form-control {
+    font-size: 12px; padding: 6px 28px 6px 7px; text-overflow: ellipsis;
+  }
+  .pur-product-caret {
+    position: absolute; top: 50%; right: 7px; margin-top: -8px;
+    color: var(--gray-400); font-size: 16px; line-height: 1; pointer-events: none;
+    transition: transform 0.18s ease;
+  }
+  .pur-product:has(input[aria-expanded="true"]) .pur-product-caret { transform: rotate(180deg); }
+  .pur-product-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+`;
+const productLabel = (o) => o.label;
+const renderProductOption = (o) => (
+  <>
+    <span className="pur-product-label">{o.label}</span>
+    {o.hint && <span className="hr-select-option-hint">{o.hint}</span>}
+  </>
+);
 
 const getProductSuggestions = (products, query) => {
   const normalized = (query || '').trim().toLowerCase();
@@ -311,7 +344,7 @@ export default function Purchase() {
       const r = await api.get(`/inventory/check-batch?product_id=${product_id}&batch_no=${batch_no}`);
       if (r.data) {
         const existing = r.data;
-        const expConflict = exp_date && existing.exp_date && exp_date !== existing.exp_date.split('T')[0];
+        const expConflict = exp_date && existing.exp_date && exp_date !== pktDay(existing.exp_date);
         const priceConflict = retail_price && existing.retail_price && parseFloat(retail_price) !== parseFloat(existing.retail_price);
         setItems(prev => prev.map((it, i) => i === idx ? { ...it, _existingBatch: existing, _expConflict: expConflict, _priceConflict: priceConflict } : it));
       } else {
@@ -320,11 +353,32 @@ export default function Purchase() {
     } catch { }
   }, []);
 
+  // Every product, A–Z then by pack size, as SearchSelect options.
+  const productOptions = useMemo(() => products
+    .map(p => ({ id: p.id, label: p.name, hint: p.pack_size || '' }))
+    .sort((a, b) => a.label.localeCompare(b.label) || a.hint.localeCompare(b.hint, undefined, { numeric: true })),
+  [products]);
+  // A line being edited may name a product that is no longer in the list;
+  // keep it selectable so the field never shows blank.
+  const optionsFor = (item) => (!item.product_id || productOptions.some(o => String(o.id) === String(item.product_id))
+    ? productOptions
+    : [...productOptions, { id: item.product_id, label: item.product_search || `Product ${item.product_id}`, hint: item.pack_size || '' }]);
+
+  const pickProduct = (idx, id) => {
+    if (String(id) === String(items[idx]?.product_id)) return;
+    const product = products.find(p => String(p.id) === String(id));
+    if (product) selectProduct(idx, product);
+    else updateItem(idx, 'product_search', '');
+  };
+
   const selectProduct = (idx, product) => {
     setItems(prev => prev.map((it, i) => {
       if (i !== idx) return it;
       return {
         ...it,
+        // A different product: the batch details typed for the old one no
+        // longer apply.
+        batch_no: '', _existingBatch: null, _expConflict: false, _priceConflict: false,
         product_id: product.id,
         product_search: product.name,
         pack_size: product.pack_size || '',
@@ -406,12 +460,12 @@ export default function Purchase() {
     try {
       const r = await api.get(`/purchases/${purchase.id}`);
       setSelected(r.data);
-      setHeader({ supplier_id: r.data.supplier_id, invoice_no: r.data.invoice_no || '', date: r.data.date.split('T')[0] });
+      setHeader({ supplier_id: r.data.supplier_id, invoice_no: r.data.invoice_no || '', date: pktDay(r.data.date) });
       const mapped = (r.data.items || []).map(it => ({
         ...createPurchaseItem(),
         product_id: it.product_id, product_search: it.product_name || '', pack_size: it.pack_size || '',
         purchase_rate: Math.round(it.purchase_rate), sale_rate: Math.round(it.sale_rate || 0),
-        qty: it.qty, batch_no: it.batch_no || '', exp_date: it.exp_date ? it.exp_date.split('T')[0] : '',
+        qty: it.qty, batch_no: it.batch_no || '', exp_date: pktDay(it.exp_date),
         retail_price: Math.round(it.retail_price), bonus: it.bonus || 0,
         discount_pct: it.discount_pct || 0, tax_pct: it.tax_pct || 0, total: it.total,
       }));
@@ -503,6 +557,8 @@ export default function Purchase() {
 
   return (
     <Layout title="Purchase">
+      <HrStyles />
+      <style>{PRODUCT_PICKER_CSS}</style>
       <div className="card">
         <div className="card-header">
           <div>
@@ -721,11 +777,11 @@ export default function Purchase() {
         {/* Column headers */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: '2fr 0.7fr 0.9fr 0.9fr 0.7fr 0.9fr 0.9fr 80px 70px 70px 72px 36px',
+          gridTemplateColumns: LINE_GRID,
           gap: 5, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6, marginBottom: 5,
           fontSize: 10, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase'
         }}>
-          <span>Product *</span><span>Pack</span><span>Batch No *</span><span style={{ width: 80 }}>Exp Date *</span>
+          <span>Product *</span><span>Pack</span><span>Batch No *</span><span>Exp Date *</span>
           <span>Qty *</span>{canViewPurchaseRates ? <span>Purch.Rate *</span> : <span style={{ color: 'var(--gray-400)' }}>Purch.Rate</span>}<span>Retail Price *</span>
           <span>Bonus</span><span>Disc %</span><span>Tax %</span>
           <span style={{ textAlign: 'right' }}>Total</span><span></span>
@@ -735,51 +791,33 @@ export default function Purchase() {
           <div key={item.row_id || idx} style={{ marginBottom: 6 }}>
             {(item._expConflict || item._priceConflict) && (
               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '4px 10px', marginBottom: 3, fontSize: 11, color: '#92400e' }}>
-                ⚠ {item._expConflict && `Expiry conflict (existing: ${item._existingBatch?.exp_date?.split('T')[0]})`}
+                ⚠ {item._expConflict && `Expiry conflict (existing: ${formatDatePKT(item._existingBatch?.exp_date)})`}
                 {item._expConflict && item._priceConflict && ' · '}
                 {item._priceConflict && `Retail price conflict (existing: PKR ${Math.round(item._existingBatch?.retail_price)})`}
               </div>
             )}
             <div style={{
               display: 'grid',
-              gridTemplateColumns: '2fr 0.7fr 0.9fr 0.9fr 0.7fr 0.9fr 0.9fr 80px 70px 70px 72px 36px',
+              gridTemplateColumns: LINE_GRID,
               gap: 5, alignItems: 'center', padding: '7px 8px',
               background: item._expConflict || item._priceConflict ? '#fffbeb' : 'white',
               border: `1.5px solid ${item._expConflict || item._priceConflict ? '#fde68a' : 'var(--gray-200)'}`,
               borderRadius: 8
             }}>
-              <div style={{ position: 'relative' }}>
-                <input className="form-control" style={inputSm} value={item.product_search}
-                  placeholder="Search product" autoComplete="off"
-                  onChange={e => updateItem(idx, 'product_search', e.target.value)}
-                  onBlur={() => setTimeout(() => {
-                    setItems(prev => {
-                      const updated = [...prev];
-                      const it = updated[idx];
-                      if (it && !it.product_id) {
-                        updated[idx] = { ...it, product_search: '' };
-                      }
-                      return updated;
-                    });
-                  }, 150)}
+              <div className="pur-product">
+                <label className="hr-sr-only" htmlFor={`pur-product-${idx}`}>{`Product, line ${idx + 1}`}</label>
+                <SearchSelect
+                  id={`pur-product-${idx}`}
+                  options={optionsFor(item)}
+                  value={item.product_id}
+                  onChange={id => pickProduct(idx, id)}
+                  placeholder="Select product"
+                  getLabel={productLabel}
+                  renderOption={renderProductOption}
+                  emptyText="No products match."
+                  portal
                 />
-                {item.product_search && !item.product_id && (
-                  <div style={{
-                    position: 'absolute', top: 38, left: 0, right: 0, zIndex: 20,
-                    background: 'white', border: '1px solid var(--gray-200)', borderRadius: 8,
-                    boxShadow: '0 10px 20px rgba(0,0,0,0.08)', maxHeight: 220, overflowY: 'auto'
-                  }}>
-                    {getProductSuggestions(products, item.product_search).map(prod => (
-                      <button key={prod.id} type="button" onMouseDown={() => selectProduct(idx, prod)}
-                        style={{
-                          width: '100%', textAlign: 'left', padding: '9px 12px', border: 'none',
-                          background: 'white', cursor: 'pointer', fontSize: 13, color: 'var(--gray-900)'
-                        }}>
-                        {prod.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <span className="pur-product-caret material-symbols-outlined" aria-hidden="true">expand_more</span>
               </div>
 
               <input className="form-control" style={inputSm} placeholder="Pack"
@@ -790,7 +828,7 @@ export default function Purchase() {
                 onChange={e => updateItem(idx, 'batch_no', e.target.value)} />
 
               <DateInput className="form-control"
-                style={{ ...inputSm, width: '100%', borderColor: !item.exp_date && item.product_id ? 'var(--red)' : undefined }}
+                style={{ ...inputSm, padding: '6px 34px 6px 7px', borderColor: !item.exp_date && item.product_id ? 'var(--red)' : undefined }}
                 value={item.exp_date} onChange={e => updateItem(idx, 'exp_date', e.target.value)} />
 
               <input className="form-control" type="number" step="1" min="0" style={{ ...inputSm, borderColor: !item.qty && item.product_id ? 'var(--red)' : undefined }}

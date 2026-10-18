@@ -1,17 +1,19 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import Modal from '../../components/common/Modal';
 import ConfirmModal from '../../components/common/ConfirmModal';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import {
-  HrStyles, Tabs, Segmented, KebabMenu, FormField, BusyButton, useSort, sortRows, fmtAmount, fmtMoney, num,
+  HrStyles, Tabs, Segmented, KebabMenu, FormField, BusyButton, SuggestInput, useSort, sortRows, fmtAmount, fmtMoney, num,
 } from '../hr/HrKit';
 import {
   MfgStyles, Picker, NumberField, MfgField, WarnText, NameWithTag, EMPTY, PackSizeField, Rate, Margin, SortHead,
-  ColumnMenu, useColumnPrefs, parseNum, normKey, cleanText, packLabel, plural, marginPct,
+  ColumnMenu, useColumnPrefs, parseNum, normKey, cleanText, packLabel, plural, marginPct, mfgError,
+  FormulaStatus, FORMULA_STATUS,
 } from './mfgKit';
-import { ByRateInfo, byRateInfo } from './batchKit';
+import { ByRateInfo, byRateInfo, formulaPath, productGroups } from './batchKit';
 
 // ─── Manufactured products and by-products ─────────────────────────────────
 // Two tabs over one kind of record: both are rows in `products`, so Sale,
@@ -30,7 +32,14 @@ import { ByRateInfo, byRateInfo } from './batchKit';
 // from the product form with "+ New". Both can be renamed while in use; one
 // in use cannot be deleted.
 // The products table has optional columns (ColumnMenu); Pack type is off by
-// default.
+// default. The row menu opens the product's formula page ("Edit formula" /
+// "Add formula"), where the default raw materials and each pack size's
+// packaging are set. The Formula column (off by default) shows how far that
+// is (Complete / Incomplete / Not set), last, beside the row menu that opens
+// the formula. Pack type and Formula take their width from Category and
+// Company, so Product keeps its share.
+// The open tab is in the URL (?tab=products|by-products), so coming back from
+// a formula keeps it.
 // Rules mirror server/routes/manufacturing.js (authoritative).
 
 const KINDS = {
@@ -52,7 +61,7 @@ const LISTS = {
     path: '/manufacturing/categories', noun: 'category', Noun: 'Category', maxLength: 60, placeholder: 'New category name',
     // A category can be renamed while in use; only delete is refused.
     lockedRename: () => null,
-    lockedDelete: (c) => `Used by ${plural(c.product_count, 'product', 'products')}.`,
+    lockedDelete: (c) => `${c.name} is used by ${plural(c.product_count, 'product', 'products')}. Choose another category on those products first.`,
   },
   packTypes: {
     path: '/manufacturing/pack-types', noun: 'pack type', Noun: 'Pack type', maxLength: 40, placeholder: 'New pack type name',
@@ -74,9 +83,20 @@ const PRODUCT_COLUMNS = [
   { key: 'tax', label: 'Sale tax' },
   { key: 'cost', label: 'Latest cost', costOnly: true },
   { key: 'margin', label: 'Margin', costOnly: true },
+  { key: 'formula', label: 'Formula' },
 ];
 const PRODUCT_COLUMN_DEFAULTS = {
   pack_type: false, category: true, company: true, sale: true, retail: true, tax: true, cost: true, margin: true,
+  formula: false,
+};
+// Formula column: what is set, in words, and the order it sorts in (most to
+// do first when ascending).
+const FORMULA_ORDER = { none: 0, partial: 1, complete: 2 };
+const formulaTitle = (p) => {
+  if (p.formula_state === 'complete') return `Raw materials and packaging for ${p.pack_size} are set.`;
+  if (p.formula_missing === 'packaging') return `Raw materials are set. Packaging for ${p.pack_size} is not set yet.`;
+  if (p.formula_missing === 'raw_materials') return `Packaging for ${p.pack_size} is set. Raw materials are not set yet.`;
+  return 'No raw materials or packaging set yet.';
 };
 const sortByName = (rows) => [...rows].sort((a, b) => a.name.localeCompare(b.name));
 const dupMessage = (list, name) => `A ${list.noun} named "${name}" already exists.`;
@@ -113,12 +133,12 @@ function validate(form, kind, existing, editingId, uoms) {
       const dup = existing.find(p => p.id !== editingId && normKey(p.name) === normKey(name)
         && p.vol_uom_base_type === unit.base_type
         && Math.abs(parseNum(p.volume) * parseNum(p.vol_uom_factor) - base) < 1e-6);
-      if (dup) e.name = `${dup.name} — ${dup.pack_size} already exists.`;
+      if (dup) e.name = `${dup.name} ${dup.pack_size} already exists.`;
     }
   } else {
     if (!form.uom_id) e.uom_id = 'Choose the unit.';
     const dup = name && existing.find(p => p.id !== editingId && normKey(p.name) === normKey(name));
-    if (dup) e.name = `A by-product named ${dup.name} already exists.`;
+    if (dup) e.name = `A by-product named "${dup.name}" already exists.`;
     const rate = parseNum(form.purchase_rate);
     if (!(rate >= 0)) e.purchase_rate = 'Enter a purchase rate of 0 or more.';
   }
@@ -173,6 +193,9 @@ const packBase = (p) => num(p.volume) * (num(p.vol_uom_factor) || 1);
 const productOrder = (a, b) => byName(a, b) || packBase(a) - packBase(b)
   || String(a.pack_type || '').localeCompare(String(b.pack_type || '')) || a.id - b.id;
 const byProductOrder = (a, b) => byName(a, b) || a.id - b.id;
+// "a, b and c" (or "a, b or c").
+const joinAnd = (items, word = 'and') => (items.length < 2 ? items.join('')
+  : `${items.slice(0, -1).join(', ')} ${word} ${items[items.length - 1]}`);
 const COMMON_SORT = {
   company: { value: p => p.company_name, text: true },
   sale: { value: p => num(p.sale_rate) },
@@ -186,6 +209,7 @@ const PRODUCT_SORT = {
   category: { value: p => p.category_name, text: true },
   cost: { value: p => (num(p.purchase_rate) > 0 ? num(p.purchase_rate) : null) },
   margin: { value: p => marginPct(p.sale_rate, p.purchase_rate) },
+  formula: { value: p => FORMULA_ORDER[p.formula_state] ?? null },
 };
 const BY_PRODUCT_SORT = {
   ...COMMON_SORT,
@@ -197,7 +221,10 @@ const BY_PRODUCT_SORT = {
 const LIST_RATE_CTX = { unit: 'unit', name: 'the by-product', master: true };
 
 export default function ManufacturedProducts() {
-  const [tab, setTab] = useState('product');
+  const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const tab = params.get('tab') === 'by-products' ? 'by_product' : 'product';
+  const setTab = (next) => setParams({ tab: next === 'by_product' ? 'by-products' : 'products' }, { replace: true });
   const [products, setProducts] = useState([]);
   const [byProducts, setByProducts] = useState([]);
   const [companies, setCompanies] = useState([]);
@@ -208,7 +235,7 @@ export default function ManufacturedProducts() {
   const [search, setSearch] = useState('');
   const productSort = useSort('product');
   const bySort = useSort('name');
-  const cols = useColumnPrefs('mfg.products.columns.v1', PRODUCT_COLUMN_DEFAULTS);
+  const cols = useColumnPrefs('mfg.products.columns.v2', PRODUCT_COLUMN_DEFAULTS);
 
   const [dialog, setDialog] = useState(null);     // { kind, record }
   const [form, setForm] = useState(emptyForm);
@@ -229,7 +256,7 @@ export default function ManufacturedProducts() {
   ]).then(([p, b, c, cat, pt, u]) => {
     setProducts(p.data); setByProducts(b.data); setCompanies(c.data);
     setCategories(cat.data); setPackTypes(pt.data); setUoms(u.data);
-  }).catch(err => toast.error(err?.response?.data?.message || 'The products could not be loaded. Refresh the page.'))
+  }).catch(err => toast.error(mfgError(err, 'The products could not be loaded. Refresh the page.')))
     .finally(() => setLoading(false));
   useEffect(() => { load(); }, []);
 
@@ -256,6 +283,57 @@ export default function ManufacturedProducts() {
   const retailBelowSale = parseNum(form.retail_price) > 0 && parseNum(form.sale_rate) > 0
     && parseNum(form.retail_price) < parseNum(form.sale_rate);
 
+  // ── Name suggestions (adding only) ──
+  // A product is its name + category (productGroups). The list shows one row
+  // per name with every pack size it has. Picking copies the exact name; the
+  // category too when the name has only one, and the company when none is
+  // chosen and the name has only one, so the new pack size joins that product
+  // and its formula. By-product names are unique, so their matches only
+  // inform.
+  const groups = useMemo(() => productGroups(products), [products]);
+  const productSuggestions = useMemo(() => {
+    const byName = new Map();
+    groups.forEach(g => {
+      const key = normKey(g.name);
+      if (!byName.has(key)) byName.set(key, { id: key, label: g.name, groups: [] });
+      byName.get(key).groups.push(g);
+    });
+    return [...byName.values()].map(row => {
+      const packs = row.groups.flatMap(g => g.packs).sort((a, b) => packBase(a) - packBase(b));
+      return { ...row, packs, sub: [...new Set(packs.map(p => p.pack_size))].join(', ') };
+    });
+  }, [groups]);
+  const byProductSuggestions = useMemo(
+    () => byProducts.map(b => ({ id: b.id, label: b.name, hint: b.pack_size })),
+    [byProducts]
+  );
+  const pickName = (row) => {
+    const companyIds = new Set(row.packs.map(p => String(p.company_id ?? '')));
+    const only = row.groups.length === 1 ? row.groups[0] : null;
+    setForm(f => ({
+      ...f,
+      name: row.label,
+      category_id: only ? only.category_id ?? '' : f.category_id,
+      company_id: f.company_id || (companyIds.size === 1 ? row.packs[0].company_id ?? '' : ''),
+    }));
+    setServerErrors(p => ({ ...p, name: undefined, category_id: undefined, company_id: undefined }));
+    touch('name');
+  };
+  // Under the name: the pack sizes this product already has; with no
+  // category chosen, the categories the name exists under; with another
+  // category, that it makes a separate product.
+  const nameMatches = dialog && kind === 'product' && !editing && cleanText(form.name)
+    ? groups.filter(g => normKey(g.name) === normKey(form.name)) : [];
+  const sameGroup = nameMatches.find(g => String(g.category_id ?? '') === String(form.category_id ?? ''));
+  const where = joinAnd(nameMatches.map(g => (g.category_name ? `under ${g.category_name}` : 'without a category')));
+  const nameHelp = sameGroup
+    ? `Existing pack sizes: ${sameGroup.packs.map(p => p.pack_size).join(', ')}.`
+    : nameMatches.length === 0
+      ? undefined
+      : !form.category_id
+        ? `Choose its category: ${joinAnd(nameMatches.map(g => g.category_name), 'or')}.`
+        : <WarnText>{`Exists ${where}. This category makes a separate product with its own formula.`}</WarnText>;
+
   const save = async () => {
     setTouched(Object.fromEntries(FIELD_ORDER.map(k => [k, true])));
     if (blockedReason) return;
@@ -274,7 +352,7 @@ export default function ManufacturedProducts() {
         sale_tax_pct: form.tax_applicable ? form.sale_tax_pct : 0,
       };
     const unit = uoms.find(u => String(u.id) === String(form.volume_uom_id));
-    const label = kind === 'product' ? `${payload.name} — ${packLabel(form.volume, unit?.symbol)}` : payload.name;
+    const label = kind === 'product' ? `${payload.name} ${packLabel(form.volume, unit?.symbol)}` : payload.name;
     try {
       if (editing) await api.put(`${KINDS[kind].path}/${editing.id}`, payload);
       else await api.post(KINDS[kind].path, payload);
@@ -293,11 +371,11 @@ export default function ManufacturedProducts() {
     setDeleting(true);
     try {
       await api.delete(`${KINDS[k].path}/${record.id}`);
-      toast.success(`${k === 'product' ? `${record.name} — ${record.pack_size}` : record.name} deleted.`);
+      toast.success(`${k === 'product' ? `${record.name} ${record.pack_size}` : record.name} deleted.`);
       setDeleteTarget(null); load();
     } catch (err) {
       setDeleteTarget(null);
-      toast.error(err?.response?.data?.message || 'The record could not be deleted. Try again.');
+      toast.error(mfgError(err, 'The record could not be deleted. Try again.'));
       load();
     } finally { setDeleting(false); }
   };
@@ -307,10 +385,10 @@ export default function ManufacturedProducts() {
   const showCost = products.some(p => p.purchase_rate !== null);
   const productColumns = PRODUCT_COLUMNS.filter(c => showCost || !c.costOnly);
   const show = (key) => cols.isShown(key) && productColumns.some(c => c.key === key);
-  // Pack type, category and company are searched only while their column is
-  // shown, so a match is always visible in the row. Sorting on a hidden
-  // column falls back to the default order.
-  const findIn = ['pack_type', 'category', 'company'].filter(show).join();
+  // Pack type, category, company and formula status are searched only while
+  // their column is shown, so a match is always visible in the row. Sorting on
+  // a hidden column falls back to the default order.
+  const findIn = ['pack_type', 'category', 'company', 'formula'].filter(show).join();
   const sortedHidden = productSort.sortConfig.column !== 'product' && !show(productSort.sortConfig.column);
   const productSortConfig = useMemo(() => (sortedHidden ? { column: 'product', direction: 'asc' } : productSort.sortConfig),
     [sortedHidden, productSort.sortConfig]);
@@ -319,7 +397,8 @@ export default function ManufacturedProducts() {
     || p.name.toLowerCase().includes(q) || (p.pack_size || '').toLowerCase().includes(q)
     || (findIn.includes('pack_type') && (p.pack_type || '').toLowerCase().includes(q))
     || (findIn.includes('category') && (p.category_name || '').toLowerCase().includes(q))
-    || (findIn.includes('company') && (p.company_name || '').toLowerCase().includes(q))),
+    || (findIn.includes('company') && (p.company_name || '').toLowerCase().includes(q))
+    || (findIn.includes('formula') && (FORMULA_STATUS[p.formula_state]?.label || '').toLowerCase().includes(q))),
   productSortConfig, PRODUCT_SORT, productOrder), [products, q, findIn, productSortConfig]);
   const shownBy = useMemo(() => sortRows(byProducts.filter(p => !q
     || p.name.toLowerCase().includes(q) || (p.pack_size || '').toLowerCase().includes(q)
@@ -337,6 +416,10 @@ export default function ManufacturedProducts() {
 
   const actions = (k, record) => [
     { label: 'Edit', icon: 'edit', onClick: () => openDialog(k, record) },
+    ...(k === 'product' ? [{
+      label: record.formula_state === 'none' ? 'Add formula' : 'Edit formula', icon: 'list_alt',
+      onClick: () => navigate(formulaPath(record.id)),
+    }] : []),
     { divider: true },
     {
       label: 'Delete', icon: 'delete', danger: true,
@@ -346,7 +429,7 @@ export default function ManufacturedProducts() {
   ];
 
   const emptyState = (k) => {
-    if (q) return { icon: 'search_off', title: `Nothing matches "${search.trim()}".` };
+    if (q) return { icon: 'search_off', title: `No ${k === 'product' ? 'product' : 'by-product'} matches "${search.trim()}".` };
     return k === 'product'
       ? { icon: 'category', title: 'No manufactured products yet. Add each pack size as a product.' }
       : { icon: 'recycling', title: 'No by-products yet.' };
@@ -371,7 +454,7 @@ export default function ManufacturedProducts() {
             <div className="search-bar">
               <span className="material-symbols-outlined" aria-hidden="true">search</span>
               <input
-                placeholder={tab === 'product' ? 'Search products' : 'Search by-products'}
+                placeholder={tab === 'product' ? 'Search products…' : 'Search by-products…'}
                 aria-label={tab === 'product' ? 'Search manufactured products' : 'Search by-products'}
                 value={search}
                 onChange={e => setSearch(e.target.value)}
@@ -397,16 +480,22 @@ export default function ManufacturedProducts() {
               <table className="hr-table hr-page-table">
                 <thead>
                   <tr>
-                    <SortHead sort={productSortView} column="product" label="Product" />
-                    {/* Pack type takes its width from the two other text columns, so Product keeps its share. */}
-                    {show('pack_type') && <SortHead sort={productSortView} column="pack_type" label="Pack type" style={{ width: '10%' }} />}
-                    {show('category') && <SortHead sort={productSortView} column="category" label="Category" style={{ width: show('pack_type') ? '10%' : '12%' }} />}
-                    {show('company') && <SortHead sort={productSortView} column="company" label="Company" style={{ width: show('pack_type') ? '12%' : '15%' }} />}
+                    {/* With Formula on, Product claims a share of its own; otherwise the
+                        auto layout hands the space Formula frees to Company first. */}
+                    <SortHead sort={productSortView} column="product" label="Product" style={show('formula') ? { width: '22%' } : undefined} />
+                    {/* Pack type and Formula take their width from the two other text columns, so Product keeps its share. */}
+                    {show('pack_type') && <SortHead sort={productSortView} column="pack_type" label="Pack type" style={{ width: show('formula') ? '9%' : '10%' }} />}
+                    {show('category') && <SortHead sort={productSortView} column="category" label="Category" style={{ width: `${12 - (show('pack_type') ? 2 : 0) - (show('formula') ? 2 : 0)}%` }} />}
+                    {show('company') && <SortHead sort={productSortView} column="company" label="Company" style={{ width: `${15 - (show('pack_type') ? 3 : 0) - (show('formula') ? 3.5 : 0)}%` }} />}
                     {show('sale') && <SortHead sort={productSortView} column="sale" label="Sale rate" num style={{ width: '9%' }} />}
-                    {show('retail') && <SortHead sort={productSortView} column="retail" label="Retail" title="Retail price" num style={{ width: '10%' }} />}
+                    {show('retail') && <SortHead sort={productSortView} column="retail" label="Retail" title="Retail price" num style={{ width: show('formula') ? '8%' : '10%' }} />}
                     {show('tax') && <SortHead sort={productSortView} column="tax" label="Sale tax" num style={{ width: '8%' }} />}
-                    {show('cost') && <SortHead sort={productSortView} column="cost" label="Latest cost" num style={{ width: '10%' }} />}
-                    {show('margin') && <SortHead sort={productSortView} column="margin" label="Margin" num style={{ width: '8%' }} />}
+                    {show('cost') && <SortHead sort={productSortView} column="cost" label="Latest cost" num style={{ width: '10%' }}
+                      title="The cost per unit of the latest batch of this pack size sent to inventory." />}
+                    {show('margin') && <SortHead sort={productSortView} column="margin" label="Margin" num style={{ width: '8%' }}
+                      title="The share of the sale rate left after the latest cost." />}
+                    {show('formula') && <SortHead sort={productSortView} column="formula" label="Formula" style={{ width: '9%' }}
+                      title="Formula status: whether the raw materials and this pack size's packaging are set. Complete: both. Incomplete: one of them. Not set: neither." />}
                     <th style={{ width: 56, textAlign: 'right' }}>
                       <ColumnMenu columns={productColumns} prefs={cols} fixed={['Product']} />
                     </th>
@@ -415,22 +504,29 @@ export default function ManufacturedProducts() {
                 <tbody>
                   {shownProducts.map(p => (
                     <tr key={p.id}>
-                      {/* With the extra Pack type column a narrow screen wraps the size under the name. */}
-                      <td><NameWithTag name={p.name} tag={p.pack_size} wrap={show('pack_type')} /></td>
+                      {/* With an extra column (Pack type, Formula) a narrow screen wraps the size under the name. */}
+                      <td><NameWithTag name={p.name} tag={p.pack_size} wrap={show('pack_type') || show('formula')} /></td>
                       {show('pack_type') && <td className="mfg-ellipsis" title={p.pack_type || undefined}>{p.pack_type || EMPTY}</td>}
-                      {show('category') && <td>{p.category_name || EMPTY}</td>}
+                      {show('category') && <td className="mfg-ellipsis" title={p.category_name || undefined}>{p.category_name || EMPTY}</td>}
                       {show('company') && <td className="mfg-ellipsis" title={p.company_name || undefined}>{p.company_name || EMPTY}</td>}
                       {show('sale') && <td className="hr-num">{fmtAmount(p.sale_rate)}</td>}
                       {show('retail') && <td className="hr-num">{fmtAmount(p.retail_price)}</td>}
                       {show('tax') && <td className="hr-num">{taxCell(p)}</td>}
                       {show('cost') && (
-                        <td className="hr-num" title={num(p.purchase_rate) > 0 ? 'Cost per unit of the latest batch sent to inventory' : 'Not produced yet'}>
+                        <td className="hr-num">
                           {num(p.purchase_rate) > 0 ? <Rate value={p.purchase_rate} /> : EMPTY}
                         </td>
                       )}
                       {show('margin') && (
-                        <td className="hr-num" title="(Sale rate − latest cost) ÷ sale rate">
+                        <td className="hr-num">
                           <Margin sale={p.sale_rate} cost={p.purchase_rate} />
+                        </td>
+                      )}
+                      {show('formula') && (
+                        <td>
+                          {/* Opens this pack size's formula; the row menu has the same action. */}
+                          <FormulaStatus state={p.formula_state} to={formulaPath(p.id)} title={formulaTitle(p)}
+                            ariaLabel={`Formula of ${p.name} ${p.pack_size}: ${FORMULA_STATUS[p.formula_state]?.label}. Open the formula`} />
                         </td>
                       )}
                       <td style={{ textAlign: 'right' }}>
@@ -501,14 +597,18 @@ export default function ManufacturedProducts() {
         {!!dialog && (
           <div className="hr-form-grid is-modal">
             <div className="mfg-form-row is-name-pack">
-              <MfgField label={kind === 'product' ? 'Product name' : 'By-product name'} htmlFor="mp-name" required error={errorFor('name')}>
-                <input
+              <MfgField label={kind === 'product' ? 'Product name' : 'By-product name'} htmlFor="mp-name" required error={errorFor('name')}
+                help={nameHelp}>
+                <SuggestInput
                   id="mp-name"
-                  className={`form-control${errorFor('name') ? ' hr-invalid' : ''}`}
+                  invalid={!!errorFor('name')}
                   placeholder={kind === 'product' ? 'Enter the product name' : 'Enter the by-product name'}
                   value={form.name}
                   maxLength={200}
-                  onChange={e => setField('name', e.target.value)}
+                  options={editing ? [] : kind === 'product' ? productSuggestions : byProductSuggestions}
+                  listLabel={kind === 'product' ? 'Existing products' : 'Existing by-products'}
+                  onPick={kind === 'product' ? pickName : undefined}
+                  onChange={v => setField('name', v)}
                   onBlur={() => touch('name')}
                   autoFocus
                 />
@@ -529,7 +629,7 @@ export default function ManufacturedProducts() {
                 </MfgField>
               ) : (
                 <MfgField label="Unit" htmlFor="mp-unit" required error={errorFor('uom_id')}
-                  help={editing?.in_use ? 'Fixed once in use.' : undefined}>
+                  help={editing?.in_use ? 'The unit cannot be changed once the by-product is in use.' : undefined}>
                   <Picker id="mp-unit" ariaLabel="Unit" value={form.uom_id} options={allUnits} placeholder="Select unit"
                     searchPlaceholder="Search units" disabled={!!editing?.in_use} invalid={!!errorFor('uom_id')}
                     onChange={v => { setField('uom_id', v); touch('uom_id'); }} onBlur={() => touch('uom_id')} />
@@ -583,13 +683,15 @@ export default function ManufacturedProducts() {
             <FormField
               label="Retail price (PKR)" htmlFor="mp-retail" required col={kind === 'product' ? 6 : 4}
               error={errorFor('retail_price')}
-              help={retailBelowSale ? <WarnText>Below the sale rate.</WarnText> : undefined}
+              help={retailBelowSale ? <WarnText>The retail price is below the sale rate.</WarnText> : undefined}
             >
               <NumberField id="mp-retail" value={form.retail_price}
                 invalid={!!errorFor('retail_price')} onChange={v => setField('retail_price', v)} onBlur={() => touch('retail_price')} />
             </FormField>
 
-            <div className="hr-col-6" style={{ display: 'flex', alignItems: 'flex-start', paddingTop: 24 }}>
+            {/* Unticked, the box sits right under the rates; ticked, it lines up
+                with the Sale tax % field beside it. */}
+            <div className="hr-col-6" style={{ display: 'flex', alignItems: 'flex-start', paddingTop: form.tax_applicable ? 23 : 2 }}>
               <label className="mfg-check" htmlFor="mp-taxable">
                 <input
                   id="mp-taxable" type="checkbox" checked={form.tax_applicable}
@@ -619,7 +721,7 @@ export default function ManufacturedProducts() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={confirmDelete}
         loading={deleting}
-        title={deleteTarget ? `Delete ${deleteTarget.kind === 'product' ? `${deleteTarget.record.name} — ${deleteTarget.record.pack_size}` : deleteTarget.record.name}?` : ''}
+        title={deleteTarget ? `Delete ${deleteTarget.kind === 'product' ? `${deleteTarget.record.name} ${deleteTarget.record.pack_size}` : deleteTarget.record.name}?` : ''}
         message={`The ${deleteTarget ? KINDS[deleteTarget.kind].noun : 'product'} will be removed permanently.`}
       />
 
@@ -673,7 +775,7 @@ function InlineNew({ list, items, pickerId, onCreated }) {
       onCreated(r.data);
       close(true);
     } catch (err) {
-      setError(err?.response?.data?.message || `The ${list.noun} could not be added. Try again.`);
+      setError(mfgError(err, `The ${list.noun} could not be added. Try again.`));
     } finally { setBusy(false); }
   };
 
@@ -781,7 +883,7 @@ function ListEditor({ list, rows, onChanged }) {
       setNewName('');
       toast.success(`${list.Noun} ${r.data.name} added.`);
     } catch (err) {
-      setAddError(err?.response?.data?.message || `The ${list.noun} could not be added. Try again.`);
+      setAddError(mfgError(err, `The ${list.noun} could not be added. Try again.`));
     } finally { setAdding(false); }
   };
 
@@ -806,7 +908,7 @@ function ListEditor({ list, rows, onChanged }) {
       setEditId(null);
       toast.success(`${list.Noun} renamed to ${r.data.name}.`);
     } catch (err) {
-      setEditError(err?.response?.data?.message || `The ${list.noun} could not be renamed. Try again.`);
+      setEditError(mfgError(err, `The ${list.noun} could not be renamed. Try again.`));
     } finally { setSavingEdit(false); }
   };
 
@@ -819,7 +921,7 @@ function ListEditor({ list, rows, onChanged }) {
       toast.success(`${list.Noun} ${c.name} deleted.`);
     } catch (err) {
       setConfirmId(null);
-      setRowNotice({ id: c.id, message: err?.response?.data?.message || `The ${list.noun} could not be deleted. Try again.` });
+      setRowNotice({ id: c.id, message: mfgError(err, `The ${list.noun} could not be deleted. Try again.`) });
     } finally { setDeletingId(null); }
   };
 
@@ -857,7 +959,7 @@ function ListEditor({ list, rows, onChanged }) {
       </div>
 
       {rows.length === 0 ? (
-        <div className="hr-lines-empty">{`No ${pluralNoun} added`}</div>
+        <div className="hr-lines-empty">{`No ${pluralNoun} added yet.`}</div>
       ) : (
         <ul className="mfg-cat-list" aria-label={list.noun === 'category' ? 'Product categories' : 'Pack types'}>
           {rows.map(c => {
@@ -887,8 +989,8 @@ function ListEditor({ list, rows, onChanged }) {
                         </div>
                       )}
                     </div>
-                    <BusyButton className="btn btn-primary btn-sm" busy={savingEdit} busyLabel="Saving…" onClick={saveEdit}>Save</BusyButton>
                     <button type="button" className="btn btn-outline btn-sm" onClick={cancelEdit} disabled={savingEdit}>Cancel</button>
+                    <BusyButton className="btn btn-primary btn-sm" busy={savingEdit} busyLabel="Saving…" onClick={saveEdit}>Save</BusyButton>
                   </div>
                 ) : confirmId === c.id ? (
                   <div className="mfg-cat-edit">

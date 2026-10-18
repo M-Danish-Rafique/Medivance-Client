@@ -32,6 +32,7 @@ import BatchRecord from './pages/manufacturing/BatchRecord';
 import BatchSheet from './pages/manufacturing/BatchSheet';
 import Yields from './pages/manufacturing/Yields';
 import ManufacturedProducts from './pages/manufacturing/ManufacturedProducts';
+import FormulaEditor from './pages/manufacturing/FormulaEditor';
 import TaxLedger from './pages/manufacturing/TaxLedger';
 import Profile from './pages/admin/Profile';
 import HrEmployees from './pages/hr/HrEmployees';
@@ -102,6 +103,7 @@ export default function App() {
                 <Route path="/manufacturing/batches/:id/edit" element={<BatchEditor />} />
                 <Route path="/manufacturing/yields" element={<Yields />} />
                 <Route path="/manufacturing/products" element={<ManufacturedProducts />} />
+                <Route path="/manufacturing/products/:productId/formula" element={<FormulaEditor />} />
                 <Route path="/manufacturing/tax-ledger" element={<TaxLedger />} />
                 {/* Workforce Management */}
                 <Route path="/hr/employees" element={<HrEmployees />} />

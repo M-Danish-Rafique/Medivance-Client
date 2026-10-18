@@ -1129,6 +1129,37 @@ export function BusyButton({
 // with `disabled: true` stay listed but cannot be picked, and the arrow keys
 // skip them. While the list is open and nothing is typed, the placeholder
 // shows the current choice so the field never looks emptied.
+//
+// Search: every typed word must appear in the label, in any order ("oil
+// khalis" finds "KHALIS Hair Oil"); labels that start with the typed text come
+// first, the rest keep the caller's order. At most SEARCH_LIMIT rows render;
+// a footer says how many matched, so a long list never looks complete when
+// it is not.
+const SEARCH_LIMIT = 50;
+function searchOptions(options, query, getLabel, limit) {
+  const q = query.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!q) return { filtered: options.slice(0, limit), matchCount: options.length };
+  const words = q.split(' ');
+  const starts = [];
+  const rest = [];
+  options.forEach(o => {
+    const label = getLabel(o).toLowerCase().replace(/\s+/g, ' ');
+    if (!words.every(w => label.includes(w))) return;
+    (label.startsWith(q) ? starts : rest).push(o);
+  });
+  const all = starts.concat(rest);
+  return { filtered: all.slice(0, limit), matchCount: all.length };
+}
+
+function SearchMore({ shown, total }) {
+  if (total <= shown) return null;
+  return (
+    <div className="hr-search-more" role="note">
+      Showing {shown} of {total.toLocaleString('en-US')}. Type to narrow the list.
+    </div>
+  );
+}
+
 export function SearchSelect({
   id, options, value, onChange, onBlur, placeholder = 'Search…', emptyText = 'No matches',
   renderOption, getLabel, invalid, disabled, portal,
@@ -1148,11 +1179,10 @@ export function SearchSelect({
     [options, value]
   );
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return options.slice(0, 50);
-    return options.filter(o => getLabel(o).toLowerCase().includes(q)).slice(0, 50);
-  }, [options, query, getLabel]);
+  const { filtered, matchCount } = useMemo(
+    () => searchOptions(options, query, getLabel, SEARCH_LIMIT),
+    [options, query, getLabel]
+  );
 
   const isEnabled = useCallback((i) => !!filtered[i] && !filtered[i].disabled, [filtered]);
   const step = (from, dir) => {
@@ -1234,6 +1264,7 @@ export function SearchSelect({
             {renderOption ? renderOption(option) : getLabel(option)}
           </button>
         ))}
+      <SearchMore shown={filtered.length} total={matchCount} />
     </div>
   );
 
@@ -1252,13 +1283,160 @@ export function SearchSelect({
         placeholder={open && selected ? getLabel(selected) : placeholder}
         value={open ? query : (selected ? getLabel(selected) : '')}
         onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
-        onFocus={openList}
+        // Opens on click, typing or ArrowDown, never on focus alone: tabbing
+        // through a form, or a jump to a field's error, must not cover the
+        // fields (and the error) under it.
         onClick={() => { if (!open) openList(); }}
         onBlur={onBlur}
         onKeyDown={onKeyDown}
       />
 
       {open && (portal ? createPortal(list, document.body) : list)}
+    </div>
+  );
+}
+
+// ── Text field with suggestions ────────────────────────────────────────────
+// A free-text field (the value is what is typed) that lists matching existing
+// records while the user types, e.g. product names. Same search as
+// SearchSelect. The list has no visible caption; `listLabel` names it for
+// screen readers ("Existing products"). With `onPick` the rows can be picked (click, or the arrows
+// then Enter) and the caller fills the form from the row; without it the list
+// only informs (nothing to pick), e.g. names that must stay unique.
+// The list opens on typing or ArrowDown, never on focus alone, so an
+// autofocused field stays quiet; Enter picks only a row reached with the
+// arrows, so it never replaces what was typed. Escape closes the list, not
+// the dialog. It opens in a portal over dialogs, like SearchSelect.
+// options: [{ id, label, hint?, sub? }]  (hint: right of the label; sub: a
+// muted second line)
+const SUGGEST_LIMIT = 8;
+const suggestLabel = (o) => o.label;
+
+export function SuggestInput({
+  id, value, onChange, onPick, onBlur, options, listLabel, placeholder, maxLength, autoFocus, invalid, disabled,
+}) {
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(-1);
+  const wrapRef  = useRef(null);
+  const inputRef = useRef(null);
+  const menuRef  = useRef(null);
+  const itemRefs = useRef([]);
+  const autoId = useId();
+  const listId = `${id || autoId}-suggest`;
+  const pickable = !!onPick;
+  const query = String(value || '').trim();
+
+  const { filtered, matchCount } = useMemo(
+    () => (query ? searchOptions(options, query, suggestLabel, SUGGEST_LIMIT) : { filtered: [], matchCount: 0 }),
+    [options, query]
+  );
+  const shown = open && filtered.length > 0;
+  const portalStyle = useAnchoredDropdown(shown, inputRef, menuRef, 340);
+  const close = () => { setOpen(false); setHighlight(-1); };
+  useExclusivePopup(shown, close);
+
+  // The highlighted row, only while it still exists in the current list.
+  const active = shown && highlight >= 0 && highlight < filtered.length ? highlight : -1;
+  useEffect(() => {
+    if (active >= 0) itemRefs.current[active]?.scrollIntoView({ block: 'nearest' });
+  }, [active]);
+  useEffect(() => {
+    if (!shown) return undefined;
+    const onPointerDown = (e) => {
+      if (wrapRef.current?.contains(e.target) || menuRef.current?.contains(e.target)) return;
+      close();
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [shown]);
+
+  const pick = (option) => {
+    onPick(option);
+    close();
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === 'ArrowDown') {
+      if (!shown) { if (query) { e.preventDefault(); setOpen(true); setHighlight(-1); } return; }
+      if (pickable) { e.preventDefault(); setHighlight(Math.min(active + 1, filtered.length - 1)); }
+    } else if (e.key === 'ArrowUp' && shown && pickable) {
+      e.preventDefault(); setHighlight(Math.max(active - 1, -1));
+    } else if (e.key === 'Enter' && pickable && active >= 0) {
+      e.preventDefault(); pick(filtered[active]);
+    } else if (e.key === 'Escape' && shown) {
+      e.stopPropagation(); close();
+    } else if (e.key === 'Tab') {
+      close();
+    }
+  };
+
+  const row = (o) => (
+    <>
+      <span className="hr-suggest-line">
+        <span className="hr-suggest-label">{o.label}</span>
+        {o.hint && <span className="hr-suggest-hint">{o.hint}</span>}
+      </span>
+      {o.sub && <span className="hr-suggest-sub">{o.sub}</span>}
+    </>
+  );
+
+  const menu = (
+    <div
+      ref={menuRef}
+      id={listId}
+      role={pickable ? 'listbox' : undefined}
+      aria-label={pickable ? listLabel : undefined}
+      className="hr-search-menu is-portal hr-suggest-menu"
+      style={portalStyle ? { ...portalStyle, width: portalStyle.minWidth } : { visibility: 'hidden' }}
+    >
+      {!pickable && listLabel && <span className="hr-sr-only">{listLabel}: </span>}
+      {filtered.map((o, i) => (pickable ? (
+        <button
+          key={o.id}
+          id={`${listId}-${i}`}
+          ref={el => { itemRefs.current[i] = el; }}
+          type="button"
+          role="option"
+          tabIndex={-1}
+          aria-selected={i === active}
+          className={`hr-suggest-item${i === active ? ' is-active' : ''}`}
+          onMouseDown={(e) => e.preventDefault()}
+          onMouseEnter={() => setHighlight(i)}
+          onClick={() => pick(o)}
+        >
+          {row(o)}
+        </button>
+      ) : (
+        <div key={o.id} className="hr-suggest-item is-static">{row(o)}</div>
+      )))}
+      <SearchMore shown={filtered.length} total={matchCount} />
+    </div>
+  );
+
+  return (
+    <div className="customer-autocomplete-wrap" ref={wrapRef}>
+      <input
+        id={id}
+        ref={inputRef}
+        className={`form-control${invalid ? ' hr-invalid' : ''}`}
+        role={pickable ? 'combobox' : undefined}
+        aria-expanded={pickable ? shown : undefined}
+        aria-controls={pickable && shown ? listId : undefined}
+        aria-autocomplete={pickable ? 'list' : undefined}
+        aria-activedescendant={pickable && active >= 0 ? `${listId}-${active}` : undefined}
+        aria-describedby={!pickable && shown ? listId : undefined}
+        aria-invalid={invalid ? 'true' : undefined}
+        autoComplete="off"
+        value={value}
+        placeholder={placeholder}
+        maxLength={maxLength}
+        autoFocus={autoFocus}
+        disabled={disabled}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); setHighlight(-1); }}
+        onBlur={(e) => { close(); onBlur?.(e); }}
+        onKeyDown={onKeyDown}
+      />
+      {shown && createPortal(menu, document.body)}
     </div>
   );
 }

@@ -4,40 +4,55 @@ import Layout from '../../components/layout/Layout';
 import ConfirmModal from '../../components/common/ConfirmModal';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
-import { HrStyles, Notice, FieldGridSkeleton, TableSkeleton, fmtDate } from '../hr/HrKit';
-import { MfgStyles, MfgPageHead, BatchStatus } from './mfgKit';
+import { HrStyles, Notice, KebabMenu, FieldGridSkeleton, TableSkeleton } from '../hr/HrKit';
+import { MfgStyles, MfgPageHead, BatchStatus, fmtStamp, mfgError, isTransient, retryOnce } from './mfgKit';
 import {
-  BatchSections, CostSummary, SendToInventoryDialog, buildBatchModel, openBatchSheet,
+  BatchSections, CostSummary, SendToInventoryDialog, buildBatchModel, openBatchSheet, formulaPath,
 } from './batchKit';
 
 // ─── Batch record (read-only) ──────────────────────────────────────────────
 // The same sections as the editor, read-only, with the actions the status
 // allows (brief 2.3):
 //   Draft         Edit · Delete
-//   Ready         Send to inventory (primary) · Print batch sheet · Delete
-//   In inventory  Print batch sheet
+//   Ready         More (Use as formula, Delete) · Print batch sheet · Send to inventory (primary)
+//   In inventory  Print batch sheet · More (Use as formula)
+// Use as formula opens the product's formula page filled from this batch
+// (?from_batch); nothing is saved there until Save formula.
 // A draft has no stored costing yet, so its figures are worked out from the
 // saved form with the same client costing the editor uses.
 
-// "12/10/2026 at 6:47 PM", the app's printed-time style (stamps are PKT strings).
-const fmtStamp = (stamp) => {
-  if (!stamp) return null;
-  const [h, m] = stamp.slice(11, 16).split(':').map(Number);
-  return `${fmtDate(stamp.slice(0, 10))} at ${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
-};
+const LOAD_FAILED = 'Couldn’t load the batch. Check your connection and try again.';
+
+function LoadError({ error, onRetry }) {
+  return (
+    <div className="card">
+      <div className="hr-empty" role="alert">
+        <div className="hr-empty-icon"><span className="material-symbols-outlined" aria-hidden="true">{error.retry ? 'cloud_off' : 'block'}</span></div>
+        <div className="hr-empty-title">{error.message}</div>
+        {error.retry
+          ? <button type="button" className="btn btn-outline" onClick={onRetry}>Try again</button>
+          : <Link className="mfg-link" to="/manufacturing/batches">Back to batches</Link>}
+      </div>
+    </div>
+  );
+}
 
 function DraftBody({ batch }) {
   const [refs, setRefs] = useState(null);
+  const [failed, setFailed] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => {
     let live = true;
-    Promise.all([
+    setFailed(false);
+    retryOnce(() => Promise.all([
       api.get('/manufacturing/products'), api.get('/manufacturing/by-products'),
       api.get('/raw-materials'), api.get('/raw-materials/uom'),
-    ]).then(([p, b, m, u]) => { if (live) setRefs({ products: p.data, byProducts: b.data, materials: m.data, uoms: u.data }); })
-      .catch(() => { if (live) setRefs({ products: [], byProducts: [], materials: [], uoms: [] }); });
+    ]), () => live).then(([p, b, m, u]) => { if (live) setRefs({ products: p.data, byProducts: b.data, materials: m.data, uoms: u.data }); })
+      .catch(() => { if (live) setFailed(true); });
     return () => { live = false; };
-  }, []);
+  }, [reloadKey]);
   const model = useMemo(() => (refs && batch.draft?.form ? buildBatchModel(batch.draft.form, refs, null) : null), [refs, batch]);
+  if (failed) return <LoadError error={{ message: LOAD_FAILED, retry: true }} onRetry={() => setReloadKey(k => k + 1)} />;
   if (!refs) return <RecordSkeleton />;
   const view = model ? model.view : {
     ...batch, materials: [], packs: [], byproducts: [], raw_material_cost: 0, packaging_cost: 0, byproduct_value: 0, total_cost: 0,
@@ -45,8 +60,8 @@ function DraftBody({ batch }) {
   return (
     <div className="mfg-record">
       <div className="mfg-record-main">
-        <Notice tone="neutral" style={{ marginBottom: 16 }}>Draft: holds no stock until the batch is created.</Notice>
-        <BatchSections batch={view} codeLabel="Draft" />
+        <Notice tone="neutral" style={{ marginBottom: 16 }}>This draft holds no stock. Materials are taken from stock when the batch is created.</Notice>
+        <BatchSections batch={view} />
       </div>
       <div className="mfg-record-side">
         <CostSummary view={view} warnings={model?.warnings || []} shortfalls={model?.shortfalls || []} title="Cost summary (estimate)" />
@@ -95,11 +110,14 @@ export default function BatchRecord() {
   const [sendError, setSendError] = useState(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
-  const load = useCallback(() => api.get(`/manufacturing/batches/${id}`)
-    .then(r => setBatch(r.data))
-    .catch(err => setError(err?.response?.data?.message || 'The batch could not be loaded.')), [id]);
-  useEffect(() => { load(); }, [load]);
+  const load = useCallback(() => retryOnce(() => api.get(`/manufacturing/batches/${id}`))
+    .then(r => { setError(null); setBatch(r.data); })
+    .catch(err => setError(err?.response?.status === 404
+      ? { message: 'This batch no longer exists.' }
+      : isTransient(err) ? { message: LOAD_FAILED, retry: true } : { message: mfgError(err, 'This batch cannot be opened.') })), [id]);
+  useEffect(() => { load(); }, [load, reloadKey]);
 
   const send = async () => {
     setSending(true); setSendError(null);
@@ -109,7 +127,7 @@ export default function BatchRecord() {
       setSendOpen(false);
       load();
     } catch (err) {
-      setSendError(err?.response?.data?.message || 'The batch could not be sent to inventory. Try again.');
+      setSendError(mfgError(err, 'The batch could not be sent to inventory. Try again.'));
     } finally { setSending(false); }
   };
 
@@ -121,18 +139,30 @@ export default function BatchRecord() {
       navigate('/manufacturing/batches');
     } catch (err) {
       setDeleteOpen(false);
-      toast.error(err?.response?.data?.message || 'The batch could not be deleted. Try again.');
+      toast.error(mfgError(err, 'The batch could not be deleted. Try again.'));
       load();
     } finally { setDeleting(false); }
   };
 
   const title = batch ? (batch.status === 'draft' ? 'Draft batch' : batch.batch_code) : 'Batch';
+  const useAsFormula = batch?.packs?.length
+    ? () => navigate(`${formulaPath(batch.packs[0].product_id)}?from_batch=${batch.id}`) : null;
+  // The occasional actions share one "More" menu, a header button of the same
+  // height as its neighbours. Its name reads "More actions".
+  const moreMenu = (items) => (
+    <KebabMenu
+      label="More actions"
+      trigger={{ icon: 'more_vert', label: <>More<span className="hr-sr-only"> actions</span></>, className: 'btn btn-outline' }}
+      items={items}
+    />
+  );
+  const formulaItem = useAsFormula ? [{ label: 'Use as formula', icon: 'content_copy', onClick: useAsFormula }] : [];
   const crumbs = [{ label: 'Batches', to: '/manufacturing/batches' }, { label: title }];
   const actions = !batch ? null : (
     <>
       {batch.status === 'draft' && (
         <>
-          <button type="button" className="btn btn-outline-danger" onClick={() => setDeleteOpen(true)}>Delete</button>
+          {moreMenu([{ label: 'Delete', icon: 'delete', danger: true, onClick: () => setDeleteOpen(true) }])}
           <button type="button" className="btn btn-primary" onClick={() => navigate(`/manufacturing/batches/${batch.id}/edit`)}>
             <span className="material-symbols-outlined" aria-hidden="true">edit</span>Edit
           </button>
@@ -140,7 +170,10 @@ export default function BatchRecord() {
       )}
       {batch.status === 'ready' && (
         <>
-          <button type="button" className="btn btn-outline-danger" onClick={() => setDeleteOpen(true)}>Delete</button>
+          {moreMenu([
+            ...(formulaItem.length ? [...formulaItem, { divider: true }] : []),
+            { label: 'Delete', icon: 'delete', danger: true, onClick: () => setDeleteOpen(true) },
+          ])}
           <button type="button" className="btn btn-outline" onClick={() => openBatchSheet(batch.id)}>
             <span className="material-symbols-outlined" aria-hidden="true">print</span>Print batch sheet
           </button>
@@ -150,9 +183,12 @@ export default function BatchRecord() {
         </>
       )}
       {batch.status === 'in_inventory' && (
-        <button type="button" className="btn btn-outline" onClick={() => openBatchSheet(batch.id)}>
-          <span className="material-symbols-outlined" aria-hidden="true">print</span>Print batch sheet
-        </button>
+        <>
+          {formulaItem.length > 0 && moreMenu(formulaItem)}
+          <button type="button" className="btn btn-outline" onClick={() => openBatchSheet(batch.id)}>
+            <span className="material-symbols-outlined" aria-hidden="true">print</span>Print batch sheet
+          </button>
+        </>
       )}
     </>
   );
@@ -174,19 +210,11 @@ export default function BatchRecord() {
           ) : null}
           actions={actions}
         />
-        {error ? (
-          <div className="card">
-            <div className="hr-empty" role="alert">
-              <div className="hr-empty-icon"><span className="material-symbols-outlined" aria-hidden="true">block</span></div>
-              <div className="hr-empty-title">{error}</div>
-              <Link className="mfg-link" to="/manufacturing/batches">Back to batches</Link>
-            </div>
-          </div>
-        ) : !batch ? <RecordSkeleton /> : batch.status === 'draft' ? <DraftBody batch={batch} /> : (
+        {error ? <LoadError error={error} onRetry={() => { setError(null); setBatch(null); setReloadKey(k => k + 1); }} /> : !batch ? <RecordSkeleton /> : batch.status === 'draft' ? <DraftBody batch={batch} /> : (
           <div className="mfg-record">
             <div className="mfg-record-main">
               {batch.status === 'in_inventory' && (
-                <Notice tone="neutral" icon="lock" style={{ marginBottom: 16 }}>{`Read-only: sent to inventory on ${fmtStamp(batch.sent_at)}`}</Notice>
+                <Notice tone="neutral" icon="lock" style={{ marginBottom: 16 }}>{`Sent to inventory on ${fmtStamp(batch.sent_at)}. This batch is read-only.`}</Notice>
               )}
               <BatchSections batch={batch} />
             </div>
