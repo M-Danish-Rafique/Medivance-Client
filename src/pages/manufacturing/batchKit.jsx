@@ -73,19 +73,26 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 export const newMaterialRow = () => ({ key: uid(), raw_material_id: '', qty: '' });
 export const newPkgRow = () => ({ key: uid(), raw_material_id: '', qty: '', qtyTouched: false });
 export const newPackRow = () => ({ key: uid(), product_id: '', units: '', packaging: [newPkgRow()] });
-export const newByRow = () => ({ key: uid(), product_id: '', qty: '', batch_no: '', followsCode: true, exp_date: '', purchase_rate: '', sale_rate: '' });
+export const newByRow = () => ({ key: uid(), product_id: '', qty: '', batch_no: '', followsCode: true, exp_date: '', rate: '' });
 /** A by-product's batch number when left to the system: the batch code plus
  *  "-BP" (server rule), so it never equals the batch code of the packs. */
 export const byProductBatchNo = (batchCode) => (batchCode ? `${batchCode}-BP` : '');
-/** A row's rates: what was typed, or the by-product's own rate when the row
- *  predates the rate fields (older drafts) or the purchase rate is hidden from
- *  this user (the server then applies the stored rate). */
+/** A row's one rate (purchase rate = sale rate, see byRateInfo): what was
+ *  typed, or the by-product's own rate. A row from an older draft has no
+ *  `rate`: its purchase rate when one was typed, else the by-product's. */
 const unset = (v) => v === undefined || v === null;
-export const byRates = (row, prod) => ({
-  purchase: unset(row.purchase_rate) || (row.purchase_rate === '' && unset(prod?.purchase_rate))
-    ? num(prod?.purchase_rate) : parseNum(row.purchase_rate),
-  sale: unset(row.sale_rate) ? num(prod?.sale_rate) : parseNum(row.sale_rate),
-});
+const legacyRate = (row) => (unset(row.purchase_rate) || row.purchase_rate === '' ? null : row.purchase_rate);
+export const byRowRate = (row, prod) => {
+  if (!unset(row.rate)) return parseNum(row.rate);
+  const legacy = legacyRate(row);
+  return legacy === null ? num(prod?.sale_rate) : parseNum(legacy);
+};
+/** The rate field's text: the row's own, or what byRowRate falls back to. */
+export const byRowRateText = (row, prod) => {
+  if (!unset(row.rate)) return row.rate;
+  const legacy = legacyRate(row);
+  return legacy !== null ? String(legacy) : prod ? String(num(prod.sale_rate)) : '';
+};
 export const emptyForm = () => ({
   groupKey: '', output_qty: '', output_uom_id: '', batch_date: todayPKT(), expiry_date: '',
   materials: [newMaterialRow()], packs: [newPackRow()], byproducts: [], misc_expense: '', misc_note: '',
@@ -332,10 +339,12 @@ export function buildBatchModel(form, refs, batchCode) {
     }
     if (!row.exp_date) { issue('byproducts', `bp-${row.key}-exp`, `Enter the expiry date for ${prod.name}.`); return; }
     if (form.batch_date && row.exp_date <= form.batch_date) { issue('byproducts', `bp-${row.key}-exp`, `The expiry date of ${prod.name} must be after the batch date.`); return; }
-    const rates = byRates(row, prod);
-    if (!(rates.purchase >= 0)) { issue('byproducts', `bp-${row.key}-prate`, `Enter the purchase rate of ${prod.name}.`); return; }
-    if (!(rates.sale > 0)) { issue('byproducts', `bp-${row.key}-srate`, `Enter a sale rate greater than 0 for ${prod.name}.`); return; }
-    byproducts.push({ row, prod, qty, rates });
+    const rate = byRowRate(row, prod);
+    if (!(rate > 0)) { issue('byproducts', `bp-${row.key}-rate`, `Enter a rate greater than 0 for ${prod.name}.`); return; }
+    if (Math.abs(rate * 100 - Math.round(rate * 100)) > 1e-6) {
+      issue('byproducts', `bp-${row.key}-rate`, `Enter the rate of ${prod.name} with at most 2 decimals.`); return;
+    }
+    byproducts.push({ row, prod, qty, rate });
   });
 
   // Other costs
@@ -346,11 +355,11 @@ export function buildBatchModel(form, refs, batchCode) {
     materials: materials.map(x => ({ qty: x.qty, rate: num(x.m.purchase_rate) })),
     miscExpense: misc >= 0 ? misc : 0,
     packs: packs.map(p => ({ units: p.units, packedBase: p.packedBase, packaging: p.packaging.map(x => ({ qty: x.qty, rate: num(x.m.purchase_rate) })) })),
-    byProducts: byproducts.map(b => ({ qty: b.qty, rate: b.rates.purchase })),
+    byProducts: byproducts.map(b => ({ qty: b.qty, rate: b.rate })),
   });
   if (costing.sharedCost < 0) {
     issue('byproducts', byproducts[0] ? `bp-${byproducts[0].row.key}-qty` : 'bf-misc',
-      'The by-products are valued above the raw materials and expense. Lower a quantity or its purchase rate.');
+      'The by-products are valued above the raw materials and expense. Lower a quantity or its rate.');
   }
 
   const view = {
@@ -387,7 +396,7 @@ export function buildBatchModel(form, refs, batchCode) {
     byproducts: byproducts.map((b, i) => ({
       product_id: b.prod.id, product_name: b.prod.name, pack_size: b.prod.pack_size,
       volume: num(b.prod.volume) || 1, uom_symbol: b.prod.vol_uom_symbol, qty: b.qty,
-      unit_cost: costing.byProducts[i].costPerUnit, total_cost: costing.byProducts[i].total, sale_rate: b.rates.sale,
+      unit_cost: costing.byProducts[i].costPerUnit, total_cost: costing.byProducts[i].total, sale_rate: b.rate,
       batch_no: b.row.followsCode ? byProductBatchNo(batchCode) : b.row.batch_no.trim(), exp_date: b.row.exp_date,
     })),
   };
@@ -396,9 +405,6 @@ export function buildBatchModel(form, refs, batchCode) {
     if (p.sale_rate > 0 && p.cost_per_unit > p.sale_rate) {
       warnings.push(`${p.pack_size} costs more per unit than its sale rate.`);
     }
-  });
-  view.byproducts.forEach(b => {
-    if (b.sale_rate > 0 && b.unit_cost > b.sale_rate) warnings.push(`${b.product_name} sells below its purchase rate.`);
   });
 
   return { groups, group, outUom, matById, byById, packById, view, issues, warnings, shortfalls, packedBase, outputBase, outFactor };
@@ -436,8 +442,7 @@ export function createPayload(form, model, draftId) {
     // A rate left unset goes as null: the server uses the by-product's own rate.
     by_products: form.byproducts.filter(b => b.product_id).map(b => ({
       product_id: b.product_id, qty: b.qty, batch_no: b.followsCode ? null : b.batch_no.trim(), exp_date: b.exp_date,
-      purchase_rate: unset(b.purchase_rate) || b.purchase_rate === '' ? null : b.purchase_rate,
-      sale_rate: unset(b.sale_rate) || b.sale_rate === '' ? null : b.sale_rate,
+      rate: unset(b.rate) ? legacyRate(b) : b.rate === '' ? null : b.rate,
     })),
     misc_expense: form.misc_expense === '' ? 0 : form.misc_expense,
     misc_note: form.misc_note || null,
@@ -561,27 +566,22 @@ export function byQtyLabel(b) {
 }
 
 /**
- * What a by-product's two rates mean (the (i) beside each). `unit` is the
- * by-product's unit when every row uses the same one, else "unit"; `name` its
- * name when there is one row, else "the by-product". `master` = the
- * By-products list and form, where the rate is the starting point of each
- * batch.
+ * What a by-product's rate means (the (i) beside it). A by-product has one
+ * rate: its value in the batch (purchase rate) and its sale rate are the
+ * same, so all of its value lowers the batch cost and its sale makes no
+ * profit. It has no retail price to enter (the server stores one so Warranty
+ * invoices print this rate). `unit` is the by-product's unit when every row
+ * uses the same one, else "unit"; `name` its name when there is one row, else
+ * "the by-product". `master` = the By-products list and form, where the rate
+ * is the starting point of each batch.
  */
-export const byRateInfo = {
-  purchase: ({ unit, name, master }) => [
-    `The value of 1 ${unit} of ${name} produced in ${master ? 'a' : 'this'} batch.`,
-    'The by-product value (quantity × purchase rate) is subtracted from the batch cost, so the manufactured packs carry a lower cost.',
-    "This value also becomes the by-product's cost in inventory, used to work out its profit when it is sold.",
-    'Example: a batch costs PKR 50,000.00 and gives 100 kg at PKR 40.00. The by-product value is PKR 4,000.00, so the packs carry PKR 46,000.00.',
-    master ? 'Each batch starts from this rate and can change it for its own stock.' : 'Leave it at 0 to keep the full batch cost on the packs.',
-  ],
-  sale: ({ unit, name, master }) => [
-    `The price of 1 ${unit} of ${name} when it is sold to a customer.`,
-    'It fills in the rate on the sale invoice, where it can still be changed.',
-    'It does not affect the batch cost.',
-    master ? 'Each batch starts from this rate and can change it for its own stock.' : "It starts from the by-product's sale rate. A change here applies only to this batch.",
-  ],
-};
+export const byRateInfo = ({ unit, name, master }) => [
+  `The value of 1 ${unit} of ${name}: its purchase rate and its sale rate.`,
+  'The by-product value (quantity × rate) is subtracted from the batch cost, so the manufactured packs carry a lower cost.',
+  'Example: a batch costs PKR 50,000.00 and gives 100 kg at PKR 40.00. The by-product value is PKR 4,000.00, so the packs carry PKR 46,000.00.',
+  'It sells at the same rate, so all of its value goes to the batch and its sale shows no profit.',
+  master ? 'Each batch starts from this rate and can change it for its own stock.' : "It starts from the by-product's rate. A change here applies only to this batch.",
+];
 /** { unit, name } for the texts from by-product rows ({ name, unit }). */
 export function byInfoContext(rows) {
   const units = [...new Set(rows.map(r => r.unit).filter(Boolean))];
@@ -590,12 +590,12 @@ export function byInfoContext(rows) {
     name: rows.length === 1 && rows[0].name ? rows[0].name : 'the by-product',
   };
 }
-/** The two column headers: "Purchase rate (i)" and "Sale rate (i)". */
-export function ByRateInfo({ which, ctx }) {
-  return <Info title={which === 'purchase' ? 'Purchase rate' : 'Sale rate'}>{byRateInfo[which](ctx)}</Info>;
+/** The column header "Rate (i)". */
+export function ByRateInfo({ ctx }) {
+  return <Info title="Rate">{byRateInfo(ctx)}</Info>;
 }
-export function ByRateHead({ which, ctx }) {
-  return <>{which === 'purchase' ? 'Purchase rate' : 'Sale rate'}<ByRateInfo which={which} ctx={ctx} /></>;
+export function ByRateHead({ ctx }) {
+  return <>Rate<ByRateInfo ctx={ctx} /></>;
 }
 
 export function ByproductsTable({ byproducts }) {
@@ -609,8 +609,8 @@ export function ByproductsTable({ byproducts }) {
           <th className="hr-th-num">Qty</th>
           <th>Batch no.</th>
           <th>Expiry</th>
-          <th className="hr-th-num"><ByRateHead which="purchase" ctx={ctx} /></th>
-          <th className="hr-th-num"><ByRateHead which="sale" ctx={ctx} /></th>
+          <th className="hr-th-num"><ByRateHead ctx={ctx} /></th>
+          <th className="hr-th-num">Value</th>
         </tr></thead>
         <tbody>
           {byproducts.map(b => (
@@ -620,7 +620,7 @@ export function ByproductsTable({ byproducts }) {
               <td style={tabular}>{b.batch_no || EMPTY}</td>
               <td style={tabular}>{b.exp_date ? fmtDate(b.exp_date) : EMPTY}</td>
               <td className="hr-num"><Rate value={b.unit_cost} /></td>
-              <td className="hr-num">{num(b.sale_rate) > 0 ? fmtAmount(b.sale_rate) : EMPTY}</td>
+              <td className="hr-num">{fmtAmount(b.total_cost)}</td>
             </tr>
           ))}
         </tbody>

@@ -12,7 +12,7 @@ import {
 } from './mfgKit';
 import {
   buildBatchModel, draftPayload, createPayload, emptyForm, groupKeyOf, CostSummary, useUnsavedGuard, SECTIONS,
-  newMaterialRow, newPkgRow, newPackRow, newByRow, byProductBatchNo, ByRateHead, byInfoContext,
+  newMaterialRow, newPkgRow, newPackRow, newByRow, byProductBatchNo, byRowRateText, ByRateHead, byInfoContext,
   blankMaterial, blankPkg, formulaPath, formulaSnapshot, formulaMaterialRows, formulaPackagingRows, replaceableLines,
   materialsDifferFromFormula, packagingDiffersFromFormula, followFormula, followPackUnits, perUnitsLabel, unitWord,
 } from './batchKit';
@@ -862,8 +862,7 @@ export default function BatchEditor() {
                   <div className="hr-lines mfg-lines mfg-by-lines">
                     <div className="hr-lines-head">
                       <span>By-product</span><span className="mfg-lines-head-num">Qty</span><span>Batch no.</span><span>Expiry</span>
-                      <span className="mfg-lines-head-num"><ByRateHead which="purchase" ctx={byCtx} /></span>
-                      <span className="mfg-lines-head-num"><ByRateHead which="sale" ctx={byCtx} /></span>
+                      <span className="mfg-lines-head-num"><ByRateHead ctx={byCtx} /></span>
                       <span />
                     </div>
                     {form.byproducts.map((b, i) => {
@@ -875,11 +874,10 @@ export default function BatchEditor() {
                               searchPlaceholder="Search by-products" options={byOptions(b.product_id)} invalid={!!show(`bp-${b.key}-prod`)}
                               onChange={v => {
                                 const p = byById.get(String(v));
-                                // A newly chosen by-product brings its own rates; both stay editable.
+                                // A newly chosen by-product brings its own rate, which stays editable.
                                 setRow('byproducts', b.key, {
                                   product_id: v,
-                                  purchase_rate: p?.purchase_rate == null ? '' : String(num(p.purchase_rate)),
-                                  sale_rate: p?.sale_rate == null ? '' : String(num(p.sale_rate)),
+                                  rate: p?.sale_rate == null ? '' : String(num(p.sale_rate)),
                                 });
                                 touch(`bp-${b.key}-prod`);
                               }} />
@@ -909,16 +907,10 @@ export default function BatchEditor() {
                               onChange={e => { setRow('byproducts', b.key, { exp_date: e.target.value }); touch(`bp-${b.key}-exp`); }} />
                           </div>
                           <div className="hr-line-cell">
-                            <NumberField id={`bp-${b.key}-prate`} ariaLabel={`Purchase rate, line ${i + 1}`}
-                              value={b.purchase_rate ?? (prod ? String(num(prod.purchase_rate)) : '')}
-                              invalid={!!show(`bp-${b.key}-prate`)} onBlur={() => touch(`bp-${b.key}-prate`)}
-                              onChange={v => setRow('byproducts', b.key, { purchase_rate: v })} />
-                          </div>
-                          <div className="hr-line-cell">
-                            <NumberField id={`bp-${b.key}-srate`} ariaLabel={`Sale rate, line ${i + 1}`}
-                              value={b.sale_rate ?? (prod ? String(num(prod.sale_rate)) : '')}
-                              invalid={!!show(`bp-${b.key}-srate`)} onBlur={() => touch(`bp-${b.key}-srate`)}
-                              onChange={v => setRow('byproducts', b.key, { sale_rate: v })} />
+                            <NumberField id={`bp-${b.key}-rate`} ariaLabel={`Rate, line ${i + 1}`}
+                              value={byRowRateText(b, prod)}
+                              invalid={!!show(`bp-${b.key}-rate`)} onBlur={() => touch(`bp-${b.key}-rate`)}
+                              onChange={v => setRow('byproducts', b.key, { rate: v })} />
                           </div>
                           <RemoveLine label={`Remove by-product, line ${i + 1}`} onClick={() => removeRow('byproducts', b.key)} />
                           <RowError message={rowError(`bp-${b.key}`)} />

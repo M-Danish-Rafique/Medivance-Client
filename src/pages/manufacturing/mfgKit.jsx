@@ -1245,15 +1245,15 @@ export const MFG_STYLES = `
   .modal:has(.mfg-pkg-dialog) { max-width: 760px; }
   .mfg-pkg-dialog .hr-lines-foot { justify-content: space-between; align-items: center; }
 
-  /* By-products table: one row each, compact cells. Qty 64 · Batch no. 124
-     ("B-261013-01-BP") · Expiry 124 · Purchase rate 124 (its header and (i))
-     · Sale rate 120 · × 36 px; the by-product takes the rest (at least 140 px,
-     about 150 at 1366). Headers never wrap. */
+  /* By-products table: one row each, compact cells. Qty 72 · Batch no. 132
+     ("B-261013-01-BP") · Expiry 128 · Rate 124 (its header and (i)) · × 36
+     px; the by-product takes the rest (at least 160 px, about 260 at 1366).
+     Headers never wrap. */
   .mfg-by-lines .hr-lines-head, .mfg-by-lines .hr-line {
-    grid-template-columns: minmax(140px, 1fr) 64px 124px 124px 124px 120px 36px;
+    grid-template-columns: minmax(160px, 1fr) 72px 132px 128px 124px 36px;
   }
   .mfg-by-lines .hr-lines-head > span { white-space: nowrap; overflow: visible; text-overflow: clip; }
-  .mfg-by-lines .hr-lines-head > span:nth-child(5), .mfg-by-lines .hr-lines-head > span:nth-child(6) { padding: 0 6px 0 3px; }
+  .mfg-by-lines .hr-lines-head > span:nth-child(5) { padding: 0 6px 0 3px; }
   .mfg-by-lines .hr-line-remove { width: 36px; }
   .mfg-by-lines .hr-line .form-control { padding-left: 9px; padding-right: 9px; }
   .mfg-by-lines .hr-line .mfg-num input.form-control { padding-right: 26px; }

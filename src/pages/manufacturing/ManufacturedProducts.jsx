@@ -28,7 +28,10 @@ import { ByRateInfo, byRateInfo, formulaPath, productGroups } from './batchKit';
 //     latest batch.
 //   By-product: its pack size IS its unit ("kg", "pcs"): no number, no pack
 //     type. Unique by name, case and extra spaces ignored. The unit is fixed
-//     once in use. Its purchase rate is entered here and values it in a batch.
+//     once in use. It has one rate, entered here: its purchase rate and its
+//     sale rate, so all of its value lowers the batch cost (byRateInfo in
+//     batchKit). There is no retail price to enter; the server stores one so
+//     Warranty invoices print the rate.
 // Categories and pack types are managed in one dialog (two tabs), or added
 // from the product form with "+ New". Both can be renamed while in use; one
 // in use cannot be deleted.
@@ -50,11 +53,11 @@ const KINDS = {
 
 const emptyForm = {
   name: '', pack_type_id: '', category_id: '', company_id: '', volume: '', volume_uom_id: '', uom_id: '',
-  purchase_rate: '0', sale_rate: '', retail_price: '', tax_applicable: false, sale_tax_pct: '',
+  rate: '', sale_rate: '', retail_price: '', tax_applicable: false, sale_tax_pct: '',
 };
 
 const FIELD_ORDER = ['name', 'volume', 'volume_uom_id', 'uom_id', 'pack_type_id', 'category_id', 'company_id',
-  'purchase_rate', 'sale_rate', 'retail_price', 'sale_tax_pct'];
+  'rate', 'sale_rate', 'retail_price', 'sale_tax_pct'];
 
 // The two managed lists (components/common/ManagedLists): same rows, rules
 // and messages.
@@ -113,7 +116,9 @@ const toForm = (r, kind) => ({
   volume: kind === 'product' && r.volume != null ? String(num(r.volume)) : '',
   volume_uom_id: kind === 'product' ? r.volume_uom_id ?? '' : '',
   uom_id: kind === 'by_product' ? r.volume_uom_id ?? '' : '',
-  purchase_rate: kind === 'by_product' && r.purchase_rate != null ? String(num(r.purchase_rate)) : '0',
+  // A by-product's one rate is read from its sale rate (the server saves the
+  // same figure as purchase and sale rate).
+  rate: kind === 'by_product' && r.sale_rate != null ? String(num(r.sale_rate)) : '',
   sale_rate: r.sale_rate != null ? String(num(r.sale_rate)) : '',
   retail_price: r.retail_price != null ? String(num(r.retail_price)) : '',
   tax_applicable: !!Number(r.tax_applicable),
@@ -143,12 +148,16 @@ function validate(form, kind, existing, editingId, uoms) {
     if (!form.uom_id) e.uom_id = 'Choose the unit.';
     const dup = name && existing.find(p => p.id !== editingId && normKey(p.name) === normKey(name));
     if (dup) e.name = `A by-product named "${dup.name}" already exists.`;
-    const rate = parseNum(form.purchase_rate);
-    if (!(rate >= 0)) e.purchase_rate = 'Enter a purchase rate of 0 or more.';
   }
   if (!form.company_id) e.company_id = 'Choose the company.';
-  if (!(parseNum(form.sale_rate) > 0)) e.sale_rate = 'Enter a sale rate greater than 0.';
-  if (!(parseNum(form.retail_price) > 0)) e.retail_price = 'Enter a retail price greater than 0.';
+  if (kind === 'product') {
+    if (!(parseNum(form.sale_rate) > 0)) e.sale_rate = 'Enter a sale rate greater than 0.';
+    if (!(parseNum(form.retail_price) > 0)) e.retail_price = 'Enter a retail price greater than 0.';
+  } else {
+    const rate = parseNum(form.rate);
+    if (!(rate > 0)) e.rate = 'Enter a rate greater than 0.';
+    else if (Math.abs(rate * 100 - Math.round(rate * 100)) > 1e-6) e.rate = 'Enter the rate with at most 2 decimals.';
+  }
   if (form.tax_applicable) {
     const pct = parseNum(form.sale_tax_pct);
     if (form.sale_tax_pct === '') e.sale_tax_pct = 'Enter the sale tax %.';
@@ -168,7 +177,7 @@ function changed(form, record, kind) {
     || !numEq(form.volume, base.volume)
     || String(form.volume_uom_id) !== String(base.volume_uom_id)
     || String(form.uom_id) !== String(base.uom_id)
-    || !numEq(form.purchase_rate, base.purchase_rate)
+    || !numEq(form.rate, base.rate)
     || !numEq(form.sale_rate, base.sale_rate)
     || !numEq(form.retail_price, base.retail_price)
     || form.tax_applicable !== base.tax_applicable
@@ -218,7 +227,7 @@ const PRODUCT_SORT = {
 const BY_PRODUCT_SORT = {
   ...COMMON_SORT,
   name: { value: p => p.name, text: true },
-  purchase: { value: p => (p.purchase_rate === null ? null : num(p.purchase_rate)) },
+  rate: { value: p => num(p.sale_rate) },
 };
 
 // The (i) texts of the list: no particular by-product.
@@ -284,7 +293,7 @@ export default function ManufacturedProducts() {
   const isChanged = editing ? changed(form, editing, kind) : true;
   const blockedReason = editing && !isChanged ? 'No changes yet' : firstError || null;
   const errorFor = (key) => serverErrors[key] || (touched[key] ? errors[key] : null);
-  const retailBelowSale = parseNum(form.retail_price) > 0 && parseNum(form.sale_rate) > 0
+  const retailBelowSale = kind === 'product' && parseNum(form.retail_price) > 0 && parseNum(form.sale_rate) > 0
     && parseNum(form.retail_price) < parseNum(form.sale_rate);
 
   // ── Name suggestions (adding only) ──
@@ -351,8 +360,7 @@ export default function ManufacturedProducts() {
       }
       : {
         name: cleanText(form.name), uom_id: form.uom_id, company_id: form.company_id || null,
-        purchase_rate: form.purchase_rate === '' ? 0 : form.purchase_rate, sale_rate: form.sale_rate,
-        retail_price: form.retail_price, tax_applicable: form.tax_applicable,
+        rate: form.rate, tax_applicable: form.tax_applicable,
         sale_tax_pct: form.tax_applicable ? form.sale_tax_pct : 0,
       };
     const unit = uoms.find(u => String(u.id) === String(form.volume_uom_id));
@@ -549,13 +557,10 @@ export default function ManufacturedProducts() {
                 <thead>
                   <tr>
                     <SortHead sort={bySort} column="name" label="By-product" />
-                    <SortHead sort={bySort} column="company" label="Company" style={{ width: '18%' }} />
-                    <SortHead sort={bySort} column="purchase" label="Purchase rate" num style={{ width: '14%' }}
-                      info={<ByRateInfo which="purchase" ctx={LIST_RATE_CTX} />} />
-                    <SortHead sort={bySort} column="sale" label="Sale rate" num style={{ width: '12%' }}
-                      info={<ByRateInfo which="sale" ctx={LIST_RATE_CTX} />} />
-                    <SortHead sort={bySort} column="retail" label="Retail" title="Retail price" num style={{ width: '11%' }} />
-                    <SortHead sort={bySort} column="tax" label="Sale tax" num style={{ width: '9%' }} />
+                    <SortHead sort={bySort} column="company" label="Company" style={{ width: '24%' }} />
+                    <SortHead sort={bySort} column="rate" label="Rate" num style={{ width: '14%' }}
+                      info={<ByRateInfo ctx={LIST_RATE_CTX} />} />
+                    <SortHead sort={bySort} column="tax" label="Sale tax" num style={{ width: '10%' }} />
                     <th style={{ width: 56 }}><span className="hr-sr-only">Actions</span></th>
                   </tr>
                 </thead>
@@ -564,9 +569,7 @@ export default function ManufacturedProducts() {
                     <tr key={p.id}>
                       <td><NameWithTag name={p.name} tag={p.pack_size} /></td>
                       <td className="mfg-ellipsis" title={p.company_name || undefined}>{p.company_name || EMPTY}</td>
-                      <td className="hr-num">{p.purchase_rate === null ? EMPTY : <Rate value={p.purchase_rate} />}</td>
                       <td className="hr-num">{fmtAmount(p.sale_rate)}</td>
-                      <td className="hr-num">{fmtAmount(p.retail_price)}</td>
                       <td className="hr-num">{taxCell(p)}</td>
                       <td style={{ textAlign: 'right' }}>
                         <KebabMenu label={`Actions for ${p.name}`} items={actions('by_product', p)} />
@@ -672,26 +675,31 @@ export default function ManufacturedProducts() {
                 onChange={v => { setField('company_id', v); touch('company_id'); }} onBlur={() => touch('company_id')} />
             </FormField>
 
-            {kind === 'by_product' && (
-              <MfgField label="Purchase rate (PKR)" htmlFor="mp-prate" className="hr-col-4" error={errorFor('purchase_rate')}
-                info={byRateInfo.purchase(byCtx)}>
-                <NumberField id="mp-prate" value={form.purchase_rate}
-                  invalid={!!errorFor('purchase_rate')} onChange={v => setField('purchase_rate', v)} onBlur={() => touch('purchase_rate')} />
-              </MfgField>
+            {kind === 'product' ? (
+              <>
+                <MfgField label="Sale rate (PKR)" htmlFor="mp-sale" required className="hr-col-6" error={errorFor('sale_rate')}>
+                  <NumberField id="mp-sale" value={form.sale_rate}
+                    invalid={!!errorFor('sale_rate')} onChange={v => setField('sale_rate', v)} onBlur={() => touch('sale_rate')} />
+                </MfgField>
+                <FormField
+                  label="Retail price (PKR)" htmlFor="mp-retail" required col={6}
+                  error={errorFor('retail_price')}
+                  help={retailBelowSale ? <WarnText>The retail price is below the sale rate.</WarnText> : undefined}
+                >
+                  <NumberField id="mp-retail" value={form.retail_price}
+                    invalid={!!errorFor('retail_price')} onChange={v => setField('retail_price', v)} onBlur={() => touch('retail_price')} />
+                </FormField>
+              </>
+            ) : (
+              <>
+                <MfgField label="Rate (PKR)" htmlFor="mp-rate" required className="hr-col-6" error={errorFor('rate')}
+                  info={byRateInfo(byCtx)}>
+                  <NumberField id="mp-rate" value={form.rate}
+                    invalid={!!errorFor('rate')} onChange={v => setField('rate', v)} onBlur={() => touch('rate')} />
+                </MfgField>
+                <div className="hr-col-6" />
+              </>
             )}
-            <MfgField label="Sale rate (PKR)" htmlFor="mp-sale" required className={`hr-col-${kind === 'product' ? 6 : 4}`} error={errorFor('sale_rate')}
-              info={kind === 'by_product' ? byRateInfo.sale(byCtx) : undefined}>
-              <NumberField id="mp-sale" value={form.sale_rate}
-                invalid={!!errorFor('sale_rate')} onChange={v => setField('sale_rate', v)} onBlur={() => touch('sale_rate')} />
-            </MfgField>
-            <FormField
-              label="Retail price (PKR)" htmlFor="mp-retail" required col={kind === 'product' ? 6 : 4}
-              error={errorFor('retail_price')}
-              help={retailBelowSale ? <WarnText>The retail price is below the sale rate.</WarnText> : undefined}
-            >
-              <NumberField id="mp-retail" value={form.retail_price}
-                invalid={!!errorFor('retail_price')} onChange={v => setField('retail_price', v)} onBlur={() => touch('retail_price')} />
-            </FormField>
 
             {/* Unticked, the box sits right under the rates; ticked, it lines up
                 with the Sale tax % field beside it. */}
