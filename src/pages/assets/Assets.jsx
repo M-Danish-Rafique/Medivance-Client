@@ -1151,7 +1151,7 @@ export default function Assets() {
   } else if (assets.length === 0) {
     body = (
       <EmptyState icon="business_center" title="No assets yet"
-        desc="Record what the organization has, such as furniture, computers, vehicles and machinery, with who owns it and what it is worth today."
+        desc="Record the organization assets, with owner and value declarations."
         action={(
           <button type="button" className="btn btn-primary" onClick={() => startAction('add', null)}>
             <span className="material-symbols-outlined" aria-hidden="true">add</span>Add asset
