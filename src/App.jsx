@@ -21,6 +21,7 @@ import BatchPrint from './pages/sale/BatchPrint';
 import InvoicePrint from './pages/sale/InvoicePrint';
 import Inventory from './pages/inventory/Inventory';
 import Finance from './pages/finance/Finance';
+import Assets from './pages/assets/Assets';
 import Reports from './pages/reports/Reports';
 import Recovery from './pages/recovery/Recovery';
 import QuickRecovery from './pages/recovery/QuickRecovery';
@@ -92,6 +93,7 @@ export default function App() {
                 <Route path="/sale" element={<Sale />} />
                 <Route path="/inventory" element={<Inventory />} />
                 <Route path="/finance" element={<Finance />} />
+                <Route path="/assets" element={<Assets />} />
                 <Route path="/reports" element={<Reports />} />
                 <Route path="/recovery" element={<Recovery />} />
                 <Route path="/recovery/quick" element={<QuickRecovery />} />

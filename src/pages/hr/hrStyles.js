@@ -556,6 +556,8 @@ export const HR_STYLES = `
     border-radius: 8px;
   }
   .hr-tab .material-symbols-outlined { font-size: 18px; color: var(--gray-400); }
+  /* Tabs count: a muted figure after the label, no brackets. */
+  .hr-tab-count { margin-left: -2px; font-weight: 500; color: var(--gray-500); font-variant-numeric: tabular-nums; }
   /* Never colour alone: the button also carries a visually-hidden
      "needs attention" for anyone who cannot see the dot. */
   .hr-tab-alert {

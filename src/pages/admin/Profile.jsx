@@ -33,6 +33,8 @@ const ALL_PERMS = [
   { key: 'perm_hr_attendance',     label: 'Attendance',           section: 'Workforce' },
   { key: 'perm_hr_payroll',        label: 'Payroll',              section: 'Workforce' },
   { key: 'perm_finance',           label: 'Finance',              section: 'Finance & Reports' },
+  // Enforced server-side as well (routes/assets.js).
+  { key: 'perm_assets',            label: 'Assets',               section: 'Finance & Reports' },
   { key: 'perm_reports',           label: 'Reports',       section: 'Finance & Reports' },
   { key: 'perm_tax_ledger',        label: 'FBR Tax Ledger',       section: 'Finance & Reports' },
 ];

@@ -515,6 +515,9 @@ export function EmptyState({ icon = 'inbox', title, desc, action, small }) {
 // `alert` marks a tab holding a field that failed validation, so a blocked
 // save on a tab the user cannot see is still visible. It is never colour
 // alone — the dot carries a visually-hidden label.
+//
+// `count` (optional, a number) is shown as a muted figure after the label
+// ("In use  24"), with no brackets.
 export function Tabs({ tabs, value, onChange, ariaLabel }) {
   const refs = useRef({});
 
@@ -556,6 +559,9 @@ export function Tabs({ tabs, value, onChange, ariaLabel }) {
           >
             {tab.icon && <span className="material-symbols-outlined" aria-hidden="true">{tab.icon}</span>}
             {tab.label}
+            {tab.count !== undefined && tab.count !== null && (
+              <span className="hr-tab-count">{Number(tab.count).toLocaleString('en-US')}</span>
+            )}
             {tab.alert && (
               <>
                 <span className="hr-tab-alert" aria-hidden="true" />

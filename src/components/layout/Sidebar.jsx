@@ -31,6 +31,7 @@ const navItems = [
   { path: '/hr/salary-slips',  icon: 'receipt_long',     label: 'Payroll',           perm: 'perm_hr_payroll' },
   { section: 'Finance & Reports' },
   { path: '/finance',                 icon: 'account_balance', label: 'Finance',          perm: 'perm_finance' },
+  { path: '/assets',                  icon: 'chair',           label: 'Assets',           perm: 'perm_assets' },
   { path: '/reports',                 icon: 'bar_chart',       label: 'Reports',          perm: 'perm_reports' },
   { path: '/manufacturing/tax-ledger',icon: 'receipt_long',   label: 'FBR Tax Ledger',   perm: 'perm_tax_ledger' },
 ];

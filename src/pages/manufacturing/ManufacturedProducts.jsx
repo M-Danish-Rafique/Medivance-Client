@@ -1,12 +1,13 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import Modal from '../../components/common/Modal';
 import ConfirmModal from '../../components/common/ConfirmModal';
+import { InlineNew, ListsDialog, sortByName } from '../../components/common/ManagedLists';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import {
-  HrStyles, Tabs, Segmented, KebabMenu, FormField, BusyButton, SuggestInput, useSort, sortRows, fmtAmount, fmtMoney, num,
+  HrStyles, Tabs, KebabMenu, FormField, BusyButton, SuggestInput, useSort, sortRows, fmtAmount, fmtMoney, num,
 } from '../hr/HrKit';
 import {
   MfgStyles, Picker, NumberField, MfgField, WarnText, NameWithTag, EMPTY, PackSizeField, Rate, Margin, SortHead,
@@ -55,16 +56,21 @@ const emptyForm = {
 const FIELD_ORDER = ['name', 'volume', 'volume_uom_id', 'uom_id', 'pack_type_id', 'category_id', 'company_id',
   'purchase_rate', 'sale_rate', 'retail_price', 'sale_tax_pct'];
 
-// The two managed lists: same rows, rules and messages.
+// The two managed lists (components/common/ManagedLists): same rows, rules
+// and messages.
 const LISTS = {
   categories: {
-    path: '/manufacturing/categories', noun: 'category', Noun: 'Category', maxLength: 60, placeholder: 'New category name',
+    path: '/manufacturing/categories', noun: 'category', Noun: 'Category', nounPlural: 'categories',
+    listLabel: 'Product categories', maxLength: 60, placeholder: 'New category name',
+    countKey: 'product_count', countOne: 'product', countMany: 'products',
     // A category can be renamed while in use; only delete is refused.
     lockedRename: () => null,
     lockedDelete: (c) => `${c.name} is used by ${plural(c.product_count, 'product', 'products')}. Choose another category on those products first.`,
   },
   packTypes: {
-    path: '/manufacturing/pack-types', noun: 'pack type', Noun: 'Pack type', maxLength: 40, placeholder: 'New pack type name',
+    path: '/manufacturing/pack-types', noun: 'pack type', Noun: 'Pack type', nounPlural: 'pack types',
+    listLabel: 'Pack types', maxLength: 40, placeholder: 'New pack type name',
+    countKey: 'product_count', countOne: 'product', countMany: 'products',
     // Not part of any pack size or name, so a rename changes no document.
     lockedRename: () => null,
     lockedDelete: (t) => `${t.name} is used by ${plural(t.product_count, 'product', 'products')}. Choose another pack type on those products first.`,
@@ -98,8 +104,6 @@ const formulaTitle = (p) => {
   if (p.formula_missing === 'raw_materials') return `Packaging for ${p.pack_size} is set. Raw materials are not set yet.`;
   return 'No raw materials or packaging set yet.';
 };
-const sortByName = (rows) => [...rows].sort((a, b) => a.name.localeCompare(b.name));
-const dupMessage = (list, name) => `A ${list.noun} named "${name}" already exists.`;
 
 const toForm = (r, kind) => ({
   name: r.name || '',
@@ -728,313 +732,13 @@ export default function ManufacturedProducts() {
       <ListsDialog
         isOpen={listsOpen}
         onClose={() => setListsOpen(false)}
-        lists={{ categories, packTypes }}
+        title="Categories & pack types"
+        tabs={[
+          { key: 'categories', label: 'Categories', list: LISTS.categories, rows: categories },
+          { key: 'packTypes', label: 'Pack types', list: LISTS.packTypes, rows: packTypes },
+        ]}
         onChanged={(key, next) => { if (key === 'categories') setCategories(next); else setPackTypes(next); load(); }}
       />
     </Layout>
-  );
-}
-
-// ── "+ New" beside a picker's label ────────────────────────────────────────
-// A small popover under the label with one name field and Cancel / Add, so a
-// missing category or pack type is added without leaving the product form
-// (never a dialog over the dialog). Enter = Add, Esc = Cancel (the product
-// dialog stays open). On Add the item is created, selected in the picker, the
-// popover closes and focus returns to the picker.
-function InlineNew({ list, items, pickerId, onCreated }) {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [error, setError] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const boxRef = useRef(null);
-  const buttonRef = useRef(null);
-  const inputId = `${pickerId}-new`;
-
-  const close = (focusPicker) => {
-    setOpen(false); setName(''); setError(null);
-    setTimeout(() => (focusPicker ? document.getElementById(pickerId) : buttonRef.current)?.focus(), 0);
-  };
-  useEffect(() => {
-    if (!open) return undefined;
-    const onDown = (e) => {
-      if (boxRef.current?.contains(e.target) || buttonRef.current?.contains(e.target)) return;
-      setOpen(false); setName(''); setError(null);
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [open]);
-
-  const add = async () => {
-    const clean = cleanText(name);
-    if (!clean) { setError(`Enter a ${list.noun} name.`); return; }
-    const dup = items.find(x => normKey(x.name) === normKey(clean));
-    if (dup) { setError(dupMessage(list, dup.name)); return; }
-    setBusy(true); setError(null);
-    try {
-      const r = await api.post(list.path, { name: clean });
-      onCreated(r.data);
-      close(true);
-    } catch (err) {
-      setError(mfgError(err, `The ${list.noun} could not be added. Try again.`));
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <>
-      <button ref={buttonRef} type="button" className="mfg-text-btn" aria-expanded={open}
-        aria-label={`New ${list.noun}`} onClick={() => (open ? close(false) : setOpen(true))}>
-        <span className="material-symbols-outlined" aria-hidden="true">add</span>New
-      </button>
-      {open && (
-        <div ref={boxRef} className="mfg-new-pop" role="dialog" aria-label={`New ${list.noun}`}>
-          <label className="hr-sr-only" htmlFor={inputId}>{list.placeholder}</label>
-          <input
-            id={inputId}
-            className={`form-control${error ? ' hr-invalid' : ''}`}
-            placeholder={list.placeholder}
-            value={name}
-            maxLength={list.maxLength}
-            disabled={busy}
-            autoFocus
-            onChange={e => { setName(e.target.value); setError(null); }}
-            onKeyDown={e => {
-              if (e.key === 'Enter') { e.preventDefault(); add(); }
-              else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(false); }
-            }}
-          />
-          {error && (
-            <div className="hr-error" role="alert" style={{ marginTop: 6 }}>
-              <span className="material-symbols-outlined" aria-hidden="true">error</span><span>{error}</span>
-            </div>
-          )}
-          <div className="mfg-new-pop-actions">
-            <button type="button" className="btn btn-outline btn-sm" onClick={() => close(false)} disabled={busy}>Cancel</button>
-            <BusyButton className="btn btn-primary btn-sm" busy={busy} busyLabel="Adding…" onClick={add}>Add</BusyButton>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
-
-// ── Categories & pack types pop-up ─────────────────────────────────────────
-// Two tabs over the same rows: add, rename in place and delete-when-unused.
-// Add and Save show a busy state, then the new or renamed row is briefly
-// highlighted. Either kind can be renamed in use; one in use cannot be deleted.
-// Rules mirror the server (validateCategoryName / validatePackTypeName).
-function ListsDialog({ isOpen, onClose, lists, onChanged }) {
-  const [which, setWhich] = useState('categories');
-  useEffect(() => { if (!isOpen) setWhich('categories'); }, [isOpen]);
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Categories & pack types" size="sm">
-      <div style={{ marginBottom: 14 }}>
-        <Segmented
-          ariaLabel="List"
-          value={which}
-          onChange={setWhich}
-          options={[{ val: 'categories', label: 'Categories' }, { val: 'packTypes', label: 'Pack types' }]}
-        />
-      </div>
-      {isOpen && (
-        <ListEditor
-          key={which}
-          list={LISTS[which]}
-          rows={lists[which]}
-          onChanged={next => onChanged(which, next)}
-        />
-      )}
-    </Modal>
-  );
-}
-
-function ListEditor({ list, rows, onChanged }) {
-  const [newName, setNewName] = useState('');
-  const [addError, setAddError] = useState(null);
-  const [adding, setAdding] = useState(false);
-  const [editId, setEditId] = useState(null);
-  const [editName, setEditName] = useState('');
-  const [editError, setEditError] = useState(null);
-  const [savingEdit, setSavingEdit] = useState(false);
-  const [confirmId, setConfirmId] = useState(null);
-  const [deletingId, setDeletingId] = useState(null);
-  const [rowNotice, setRowNotice] = useState(null);     // { id, message }
-  const [flashId, setFlashId] = useState(null);
-  const rowRefs = useRef({});
-
-  useEffect(() => {
-    if (!flashId) return undefined;
-    rowRefs.current[flashId]?.scrollIntoView({ block: 'nearest' });
-    const t = setTimeout(() => setFlashId(null), 1900);
-    return () => clearTimeout(t);
-  }, [flashId, rows]);
-
-  const dupOf = (name, exceptId) => rows.find(c => c.id !== exceptId && normKey(c.name) === normKey(name));
-
-  const add = async () => {
-    const name = cleanText(newName);
-    if (!name) { setAddError(`Enter a ${list.noun} name.`); return; }
-    const dup = dupOf(name);
-    if (dup) { setAddError(dupMessage(list, dup.name)); return; }
-    setAdding(true); setAddError(null);
-    try {
-      const r = await api.post(list.path, { name });
-      onChanged(sortByName([...rows, r.data]));
-      setFlashId(r.data.id);
-      setNewName('');
-      toast.success(`${list.Noun} ${r.data.name} added.`);
-    } catch (err) {
-      setAddError(mfgError(err, `The ${list.noun} could not be added. Try again.`));
-    } finally { setAdding(false); }
-  };
-
-  const startEdit = (c) => {
-    const locked = list.lockedRename(c);
-    if (c.product_count > 0 && locked) { setRowNotice({ id: c.id, message: locked }); return; }
-    setEditId(c.id); setEditName(c.name); setEditError(null); setConfirmId(null); setRowNotice(null);
-  };
-  const cancelEdit = () => { setEditId(null); setEditError(null); };
-  const saveEdit = async () => {
-    const name = cleanText(editName);
-    const current = rows.find(c => c.id === editId);
-    if (!name) { setEditError(`Enter a ${list.noun} name.`); return; }
-    if (current && name === current.name) { cancelEdit(); return; }
-    const dup = dupOf(name, editId);
-    if (dup) { setEditError(dupMessage(list, dup.name)); return; }
-    setSavingEdit(true); setEditError(null);
-    try {
-      const r = await api.put(`${list.path}/${editId}`, { name });
-      onChanged(sortByName(rows.map(c => (c.id === editId ? { ...c, ...r.data } : c))));
-      setFlashId(editId);
-      setEditId(null);
-      toast.success(`${list.Noun} renamed to ${r.data.name}.`);
-    } catch (err) {
-      setEditError(mfgError(err, `The ${list.noun} could not be renamed. Try again.`));
-    } finally { setSavingEdit(false); }
-  };
-
-  const remove = async (c) => {
-    setDeletingId(c.id);
-    try {
-      await api.delete(`${list.path}/${c.id}`);
-      onChanged(rows.filter(x => x.id !== c.id));
-      setConfirmId(null);
-      toast.success(`${list.Noun} ${c.name} deleted.`);
-    } catch (err) {
-      setConfirmId(null);
-      setRowNotice({ id: c.id, message: mfgError(err, `The ${list.noun} could not be deleted. Try again.`) });
-    } finally { setDeletingId(null); }
-  };
-
-  // Escape inside an inline editor cancels the edit, not the dialog.
-  const editKeys = (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); saveEdit(); }
-    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelEdit(); }
-  };
-
-  const pluralNoun = list.noun === 'category' ? 'categories' : 'pack types';
-  return (
-    <>
-      <div className="mfg-cat-add">
-        <div style={{ flex: 1 }}>
-          <label className="hr-sr-only" htmlFor="list-new">{list.placeholder}</label>
-          <input
-            id="list-new"
-            className={`form-control${addError ? ' hr-invalid' : ''}`}
-            placeholder={list.placeholder}
-            value={newName}
-            maxLength={list.maxLength}
-            disabled={adding}
-            onChange={e => { setNewName(e.target.value); setAddError(null); }}
-            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
-          />
-        </div>
-        <BusyButton busy={adding} busyLabel="Adding…" icon="add" onClick={add}>Add</BusyButton>
-      </div>
-      <div className="hr-field-msg" style={{ marginBottom: 8 }}>
-        {addError && (
-          <div className="hr-error" role="alert">
-            <span className="material-symbols-outlined" aria-hidden="true">error</span><span>{addError}</span>
-          </div>
-        )}
-      </div>
-
-      {rows.length === 0 ? (
-        <div className="hr-lines-empty">{`No ${pluralNoun} added yet.`}</div>
-      ) : (
-        <ul className="mfg-cat-list" aria-label={list.noun === 'category' ? 'Product categories' : 'Pack types'}>
-          {rows.map(c => {
-            const isEditing = editId === c.id;
-            const used = c.product_count > 0;
-            const renameLock = used ? list.lockedRename(c) : null;
-            const deleteLock = used ? list.lockedDelete(c) : null;
-            return (
-              <li key={c.id} ref={el => { rowRefs.current[c.id] = el; }} className={`mfg-cat-row${flashId === c.id ? ' mfg-flash' : ''}`}>
-                {isEditing ? (
-                  <div className="mfg-cat-edit">
-                    <div style={{ flex: 1 }}>
-                      <label className="hr-sr-only" htmlFor={`list-edit-${c.id}`}>{`${list.Noun} name`}</label>
-                      <input
-                        id={`list-edit-${c.id}`}
-                        className={`form-control${editError ? ' hr-invalid' : ''}`}
-                        value={editName}
-                        maxLength={list.maxLength}
-                        disabled={savingEdit}
-                        autoFocus
-                        onChange={e => { setEditName(e.target.value); setEditError(null); }}
-                        onKeyDown={editKeys}
-                      />
-                      {editError && (
-                        <div className="hr-error" role="alert" style={{ marginTop: 4 }}>
-                          <span className="material-symbols-outlined" aria-hidden="true">error</span><span>{editError}</span>
-                        </div>
-                      )}
-                    </div>
-                    <button type="button" className="btn btn-outline btn-sm" onClick={cancelEdit} disabled={savingEdit}>Cancel</button>
-                    <BusyButton className="btn btn-primary btn-sm" busy={savingEdit} busyLabel="Saving…" onClick={saveEdit}>Save</BusyButton>
-                  </div>
-                ) : confirmId === c.id ? (
-                  <div className="mfg-cat-edit">
-                    <span className="mfg-cat-name">{`Delete ${c.name}?`}</span>
-                    <button type="button" className="btn btn-outline btn-sm" onClick={() => setConfirmId(null)} disabled={deletingId === c.id}>Cancel</button>
-                    <BusyButton className="btn btn-danger btn-sm" busy={deletingId === c.id} busyLabel="Deleting…" onClick={() => remove(c)}>Delete</BusyButton>
-                  </div>
-                ) : (
-                  <>
-                    <span className="mfg-cat-name">{c.name}</span>
-                    <span className="mfg-cat-count">{c.product_count ? plural(c.product_count, 'product', 'products') : 'Unused'}</span>
-                    <button
-                      type="button"
-                      className="mfg-icon-btn"
-                      aria-label={`Rename ${c.name}`}
-                      aria-disabled={renameLock ? 'true' : undefined}
-                      title={renameLock || 'Rename'}
-                      onClick={() => startEdit(c)}
-                    >
-                      <span className="material-symbols-outlined" aria-hidden="true">edit</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="mfg-icon-btn is-danger"
-                      aria-label={`Delete ${c.name}`}
-                      aria-disabled={deleteLock ? 'true' : undefined}
-                      title={deleteLock || 'Delete'}
-                      onClick={() => (deleteLock ? setRowNotice({ id: c.id, message: deleteLock }) : (setConfirmId(c.id), setRowNotice(null), setEditId(null)))}
-                    >
-                      <span className="material-symbols-outlined" aria-hidden="true">delete</span>
-                    </button>
-                  </>
-                )}
-                {rowNotice?.id === c.id && !isEditing && (
-                  <div className="mfg-cat-notice" role="status">
-                    <span className="material-symbols-outlined" aria-hidden="true">block</span>
-                    {rowNotice.message}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </>
   );
 }
