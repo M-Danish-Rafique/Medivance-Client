@@ -50,7 +50,6 @@ export default function BatchActivityReport({ lookups }) {
       .catch(() => { if (live) setBatches([]); })
       .finally(() => { if (live) setBatchesLoading(false); });
     return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productId]);
 
   const params = { product_id: productId, batch_no: batchNo, from_date: from, to_date: to };
