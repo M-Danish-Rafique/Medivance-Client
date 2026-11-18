@@ -229,6 +229,9 @@ export default function DateInput({
         aria-label={ariaLabel}
         aria-describedby={ariaDescribedBy}
         aria-invalid={showInvalid ? 'true' : undefined}
+        // A text field that opens a calendar popup is a combobox (ARIA 1.2);
+        // aria-expanded is not allowed on a plain textbox.
+        role="combobox"
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? popId : undefined}

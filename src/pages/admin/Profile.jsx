@@ -32,6 +32,10 @@ const ALL_PERMS = [
   { key: 'perm_hr_employees',      label: 'Employees, Departments & Designations', section: 'Workforce' },
   { key: 'perm_hr_attendance',     label: 'Attendance',           section: 'Workforce' },
   { key: 'perm_hr_payroll',        label: 'Payroll',              section: 'Workforce' },
+  // Records advance salary from its own screen without the HR profile, so
+  // salaries stay hidden (routes/advanceSalary.js).
+  { key: 'perm_hr_advances',       label: 'Advance Salary',       section: 'Workforce',
+    hint: 'Record advance salary for any employee. Salaries stay hidden unless Employees or Payroll is also ticked.' },
   { key: 'perm_finance',           label: 'Finance',              section: 'Finance & Reports' },
   // Enforced server-side as well (routes/assets.js).
   { key: 'perm_assets',            label: 'Assets',               section: 'Finance & Reports' },
@@ -222,7 +226,7 @@ export default function Profile() {
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {sectionPerms.map(p => (
-            <label key={p.key} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, padding: '5px 10px', border: '1.5px solid ' + (userForm.permissions[p.key] ? 'var(--primary)' : 'var(--gray-200)'), borderRadius: 6, cursor: 'pointer', background: userForm.permissions[p.key] ? 'var(--blue-ultra)' : 'white', userSelect: 'none' }}>
+            <label key={p.key} title={p.hint} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, padding: '5px 10px', border: '1.5px solid ' + (userForm.permissions[p.key] ? 'var(--primary)' : 'var(--gray-200)'), borderRadius: 6, cursor: 'pointer', background: userForm.permissions[p.key] ? 'var(--blue-ultra)' : 'white', userSelect: 'none' }}>
               <input type="checkbox" checked={!!userForm.permissions[p.key]}
                 onChange={e => setUserForm(prev => ({ ...prev, permissions: { ...prev.permissions, [p.key]: e.target.checked } }))}
                 style={{ accentColor: 'var(--primary)', width: 13, height: 13 }} />

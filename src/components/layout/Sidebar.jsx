@@ -29,6 +29,9 @@ const navItems = [
   { path: '/hr/employees',     icon: 'badge',            label: 'Employees (HR)',    perm: 'perm_hr_employees' },
   { path: '/hr/attendance',    icon: 'event_available',  label: 'Attendance',        perm: 'perm_hr_attendance' },
   { path: '/hr/salary-slips',  icon: 'receipt_long',     label: 'Payroll',           perm: 'perm_hr_payroll' },
+  // Either flag: HR records advances too, and perm_hr_advances alone gives
+  // this screen without the salary-bearing HR profile.
+  { path: '/hr/advances',      icon: 'payments',         label: 'Advance Salary',    perm: ['perm_hr_advances', 'perm_hr_employees'] },
   { section: 'Finance & Reports' },
   { path: '/finance',                 icon: 'account_balance', label: 'Finance',          perm: 'perm_finance' },
   { path: '/assets',                  icon: 'business_center', label: 'Assets',           perm: 'perm_assets' },
@@ -44,6 +47,9 @@ export default function Sidebar() {
 
   const handleLogout = () => { logout(); navigate('/login'); };
 
+  // `perm` is one flag, a list of flags (any one is enough), or null.
+  const allowed = (perm) => !perm || (Array.isArray(perm) ? perm.some(can) : can(perm));
+
   // Filter nav items based on permissions; sections are shown only if ≥1 visible item follows
   const visibleItems = navItems.reduce((acc, item, idx) => {
     if (item.section) {
@@ -51,12 +57,12 @@ export default function Sidebar() {
       let hasVisible = false;
       for (let j = idx + 1; j < navItems.length; j++) {
         if (navItems[j].section) break;
-        if (!navItems[j].perm || can(navItems[j].perm)) { hasVisible = true; break; }
+        if (allowed(navItems[j].perm)) { hasVisible = true; break; }
       }
       if (hasVisible) acc.push(item);
       return acc;
     }
-    if (!item.perm || can(item.perm)) acc.push(item);
+    if (allowed(item.perm)) acc.push(item);
     return acc;
   }, []);
 

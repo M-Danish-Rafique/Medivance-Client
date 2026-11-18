@@ -40,6 +40,7 @@ import HrEmployees from './pages/hr/HrEmployees';
 import HrEmployeeDetail from './pages/hr/HrEmployeeDetail';
 import Attendance from './pages/hr/Attendance';
 import SalarySlips from './pages/hr/SalarySlips';
+import AdvanceSalary from './pages/hr/AdvanceSalary';
 import SalarySlipBatchPrint from './pages/hr/SalarySlipBatchPrint';
 import JobSetup from './pages/hr/JobSetup';
 
@@ -112,6 +113,7 @@ export default function App() {
                 <Route path="/hr/employees/:id" element={<HrEmployeeDetail />} />
                 <Route path="/hr/attendance" element={<Attendance />} />
                 <Route path="/hr/salary-slips" element={<SalarySlips />} />
+                <Route path="/hr/advances" element={<AdvanceSalary />} />
                 {/* One page, two tabs. The old paths still resolve so links
                     and bookmarks keep working. */}
                 <Route path="/hr/job-setup" element={<JobSetup />} />
