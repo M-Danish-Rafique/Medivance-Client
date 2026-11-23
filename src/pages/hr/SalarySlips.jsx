@@ -69,6 +69,14 @@ const PENDING_COMPARATORS = {
 
 const currentMonthPKT = () => todayPKT().slice(0, 7);
 
+// "2026-10" -> "2026-10-31". Closing a Pay Run dates its Salary Expense in
+// Finance on the last day of the pay month (server routes/payrollRuns.js), so
+// the cost counts in the month it was earned, not the month it was closed.
+const monthEndDate = (m) => {
+  const [y, mm] = m.split('-').map(Number);
+  return `${m}-${String(new Date(Date.UTC(y, mm, 0)).getUTCDate()).padStart(2, '0')}`;
+};
+
 // The largest Cost to Company Finance can hold (finance.amount DECIMAL(12,2));
 // mirrors MAX_COST_TO_COMPANY in routes/payrollRuns.js.
 const MAX_COST_TO_COMPANY = 9999999999.99;
@@ -367,7 +375,7 @@ export default function SalarySlips() {
     try {
       const { data } = await api.put(`/hr/payroll-runs/${run.id}/complete`, { cost_to_company: num(closeCtc) });
       toast.success(data?.finance_id
-        ? `The ${fmtMonth(month)} Pay Run is closed. Salary Expense of ${fmtMoney(data.cost_to_company)} recorded in Finance.`
+        ? `The ${fmtMonth(month)} Pay Run is closed. Salary Expense of ${fmtMoney(data.cost_to_company)} recorded in Finance, dated ${fmtDate(data.finance_date || monthEndDate(month))}.`
         : `The ${fmtMonth(month)} Pay Run is closed. Its payslips are now read-only.`);
       setCompleteOpen(false);
       setTab('processed');
@@ -1555,7 +1563,7 @@ export default function SalarySlips() {
             {!closeCtcBlocked && (
               <div className="pr-alert-text">
                 {recordedCtc > 0
-                  ? `A Salary Expense of ${fmtMoney(recordedCtc)} is recorded in Finance, dated ${fmtDate(todayPKT())}.`
+                  ? `A Salary Expense of ${fmtMoney(recordedCtc)} is recorded in Finance, dated ${fmtDate(monthEndDate(month))}, the last day of ${fmtMonth(month)}.`
                   : 'The cost to company is zero. No Salary Expense is recorded in Finance.'}
               </div>
             )}
