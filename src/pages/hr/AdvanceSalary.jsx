@@ -6,7 +6,7 @@ import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { todayPKT } from '../../utils/dateUtils';
 import {
-  HrStyles, SortableHeader, useSort, sortRows, Segmented, Select, SearchSelect,
+  HrStyles, SortableHeader, useSort, sortRows, Select, SearchSelect,
   TableSkeleton, EmptyState, BusyButton, FormField, FieldGrid, Field, Notice,
   FieldGridSkeleton, num, money, fmtMoney, fmtAmount, fmtDate, fmtMonth, initials,
   blockWheelChange, apiError, apiFieldError,
@@ -37,136 +37,135 @@ const NOTE_MAX = 200;
 const ADV_STYLES = `
   /* The header is pinned under the app's top bar so the month, search and
      Record Advance stay in reach while the list scrolls; the column headings
-     pin directly under it (--adv-head-h is its live height). Without this a
+     pin directly under it (--sal-head-h is its live height). Without this a
      small scroll slid the whole header under the top bar. */
-  .adv-header {
+  .sal-header {
     flex-wrap: wrap;
     position: sticky; top: var(--header-h); z-index: 4;
     background: white;
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
-  .adv-card .hr-table.hr-page-table thead th { top: calc(var(--header-h) + var(--adv-head-h, 0px)); }
+  .sal-card .hr-table.hr-page-table thead th { top: calc(var(--header-h) + var(--sal-head-h, 0px)); }
   @media (max-width: 1100px) {
     /* The table scrolls sideways here, so its own box is the sticky container. */
-    .adv-card .hr-table.hr-page-table thead th { top: 0; }
+    .sal-card .hr-table.hr-page-table thead th { top: 0; }
   }
-  .adv-controls { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-left: auto; }
-  .adv-controls .search-bar { width: 210px; }
-  .adv-controls .search-bar input { width: 100%; }
-  .adv-controls .hr-segment-btn:focus { outline: none; }
-  .adv-controls .hr-segment-btn:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 1px; }
+  .sal-controls { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-left: auto; }
+  .sal-controls .search-bar { width: 210px; }
+  .sal-controls .search-bar input { width: 100%; }
+  .sal-controls .hr-segment-btn:focus { outline: none; }
+  .sal-controls .hr-segment-btn:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 1px; }
   /* The tab counts were 55% opacity grey (about 2:1); WCAG AA wants 4.5:1. */
-  .adv-controls .hr-segment-count { opacity: 1; color: var(--gray-500); }
-  .adv-controls .hr-segment-btn.is-active .hr-segment-count { color: var(--gray-600); }
+  .sal-controls .hr-segment-count { opacity: 1; color: var(--gray-500); }
+  .sal-controls .hr-segment-btn.is-active .hr-segment-count { color: var(--gray-600); }
   /* Unselected tab text and the month menu's Closed tag were #64748b on
      #f1f5f9 (4.34:1); one step darker passes AA. */
-  .adv-controls .hr-segment-btn:not(.is-active) { color: var(--gray-600); }
-  .adv-controls .hr-tag-closed { color: var(--gray-600); }
-  .adv-notices { display: grid; gap: 10px; padding: 16px 22px; border-bottom: 1px solid var(--gray-100); }
-  .adv-notice-action { margin-top: 8px; }
+  .sal-controls .hr-segment-btn:not(.is-active) { color: var(--gray-600); }
+  .sal-controls .hr-tag-closed { color: var(--gray-600); }
+  .sal-notices { display: grid; gap: 10px; padding: 16px 22px; border-bottom: 1px solid var(--gray-100); }
+  .sal-notice-action { margin-top: 8px; }
 
 
-  .adv-name { font-weight: 600; color: var(--gray-800); white-space: nowrap; }
-  .adv-desig { white-space: nowrap; }
-  .adv-code { margin-left: 8px; font-size: 12px; color: var(--gray-500); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .adv-dept { color: var(--gray-500); }
-  .adv-warn { margin-right: 6px; font-size: 16px; color: #b91c1c; vertical-align: -3px; cursor: help; }
-  .adv-rec {
+  .sal-name { font-weight: 600; color: var(--gray-800); white-space: nowrap; }
+  .sal-desig { white-space: nowrap; }
+  .sal-code { margin-left: 8px; font-size: 12px; color: var(--gray-500); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .sal-dept { color: var(--gray-500); }
+  .sal-warn { margin-right: 6px; font-size: 16px; color: #b91c1c; vertical-align: -3px; cursor: help; }
+  .sal-rec {
     display: inline-flex; align-items: center; gap: 4px;
     height: 30px; padding: 0 10px;
     border: 1px solid transparent; border-radius: 6px; background: none;
     color: var(--blue); font-family: inherit; font-size: 13px; font-weight: 600;
     cursor: pointer; white-space: nowrap;
   }
-  .adv-rec:hover { background: var(--blue-ultra); border-color: var(--blue-pale); }
-  .adv-rec:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 1px; }
-  .adv-rec .material-symbols-outlined { font-size: 17px; }
+  .sal-rec:hover { background: var(--blue-ultra); border-color: var(--blue-pale); }
+  .sal-rec:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 1px; }
+  .sal-rec .material-symbols-outlined { font-size: 17px; }
 
-  .adv-table td { vertical-align: middle; }
-  .adv-table tbody td { padding-top: 10px; padding-bottom: 10px; }
-  .adv-total { font-weight: 700; color: var(--gray-900); }
-  .adv-zero { color: var(--gray-500); }
-  .adv-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-  .adv-chevron {
+  .sal-table td { vertical-align: middle; }
+  /* The table ends the card: round the last row's outer cells so its hover
+     background (and an expanded line's grey) stays inside the card's curve
+     instead of squaring off its bottom corners. */
+  .sal-table tbody tr:last-child > td:first-child { border-bottom-left-radius: calc(var(--radius-lg) - 1px); }
+  .sal-table tbody tr:last-child > td:last-child { border-bottom-right-radius: calc(var(--radius-lg) - 1px); }
+  .sal-table tbody tr:last-child > td { border-bottom: none; }
+  .sal-table tbody td { padding-top: 10px; padding-bottom: 10px; }
+  .sal-total { font-weight: 700; color: var(--gray-900); }
+  .sal-zero { color: var(--gray-500); }
+  .sal-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+  .sal-chevron {
     display: inline-flex; align-items: center; justify-content: center;
     width: 28px; height: 28px; padding: 0;
     border: none; border-radius: 6px; background: none;
     color: var(--gray-500); cursor: pointer;
   }
-  .adv-chevron:hover { background: var(--gray-100); color: var(--gray-800); }
-  .adv-chevron:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 1px; }
-  .adv-chevron .material-symbols-outlined { font-size: 20px; transition: transform 0.15s ease; }
-  .adv-chevron[aria-expanded="true"] .material-symbols-outlined { transform: rotate(90deg); }
-  .adv-chevron-spacer { display: inline-block; width: 28px; }
-  .adv-blocked {
+  .sal-chevron:hover { background: var(--gray-100); color: var(--gray-800); }
+  .sal-chevron:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 1px; }
+  .sal-chevron .material-symbols-outlined { font-size: 20px; transition: transform 0.15s ease; }
+  .sal-chevron[aria-expanded="true"] .material-symbols-outlined { transform: rotate(90deg); }
+  .sal-chevron-spacer { display: inline-block; width: 28px; }
+  .sal-blocked {
     display: inline-flex; align-items: center; gap: 4px; padding-right: 10px;
     font-size: 12px; color: var(--gray-500); white-space: nowrap;
   }
-  .adv-blocked .material-symbols-outlined { font-size: 15px; }
+  .sal-blocked .material-symbols-outlined { font-size: 15px; }
 
   /* An employee's advances: plain lines under their row, each amount under
      the row's total. */
-  .adv-line > td { padding-top: 7px !important; padding-bottom: 7px !important; background: var(--gray-50); font-size: 12.5px; color: var(--gray-600); }
-  .adv-line-main { padding-left: 56px !important; white-space: nowrap; }
-  .adv-line-date { display: inline-block; min-width: 86px; font-weight: 600; color: var(--gray-700); font-variant-numeric: tabular-nums; }
-  .adv-line-note { margin-right: 14px; }
-  .adv-line-by { margin-right: 14px; color: var(--gray-500); }
-  .adv-line .hr-num { font-weight: 600; color: var(--gray-700); }
-  .adv-row-expanded > td { background: var(--gray-50); }
+  .sal-line > td { padding-top: 7px !important; padding-bottom: 7px !important; background: var(--gray-50); font-size: 12.5px; color: var(--gray-600); }
+  .sal-line-main { padding-left: 56px !important; white-space: nowrap; }
+  .sal-line-date { display: inline-block; min-width: 86px; font-weight: 600; color: var(--gray-700); font-variant-numeric: tabular-nums; }
+  .sal-line-note { margin-right: 14px; }
+  .sal-line-by { margin-right: 14px; color: var(--gray-500); }
+  .sal-line .hr-num { font-weight: 600; color: var(--gray-700); }
+  .sal-row-expanded > td { background: var(--gray-50); }
 
-  .adv-status { display: inline-flex; align-items: baseline; gap: 6px; font-size: 12.5px; color: var(--gray-600); white-space: nowrap; }
-  .adv-status-dot { align-self: center; width: 7px; height: 7px; border-radius: 50%; background: var(--gray-400); flex-shrink: 0; }
-  .adv-status.is-pending .adv-status-dot { background: #f59e0b; }
-  .adv-status.is-slip .adv-status-dot { background: #3b82f6; }
+  .sal-status { display: inline-flex; align-items: baseline; gap: 6px; font-size: 12.5px; color: var(--gray-600); white-space: nowrap; }
+  .sal-status-dot { align-self: center; width: 7px; height: 7px; border-radius: 50%; background: var(--gray-400); flex-shrink: 0; }
+  .sal-status.is-pending .sal-status-dot { background: #f59e0b; }
+  .sal-status.is-slip .sal-status-dot { background: #3b82f6; }
 
   /* Record links only on the row being pointed at; the bar's Record advance
      button is always there. Touch screens have no hover, so they keep them. */
   @media (hover: hover) {
-    .adv-table tbody .adv-rec { opacity: 0; }
-    .adv-table tbody tr:hover .adv-rec,
-    .adv-table tbody tr:focus-within .adv-rec { opacity: 1; }
+    .sal-table tbody .sal-rec { opacity: 0; }
+    .sal-table tbody tr:hover .sal-rec,
+    .sal-table tbody tr:focus-within .sal-rec { opacity: 1; }
   }
 
-  .adv-note-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .adv-foot td {
-    padding: 12px 14px;
-    border-top: 1px solid var(--gray-200);
-    background: var(--gray-50);
-    font-weight: 700; color: var(--gray-800);
-  }
 
-  @keyframes advFlash { 0% { background: rgba(5, 150, 105, 0.16); } 100% { background: transparent; } }
-  .adv-flash > td { animation: advFlash 2.4s ease-out 1; }
+  @keyframes salFlash { 0% { background: rgba(5, 150, 105, 0.16); } 100% { background: transparent; } }
+  .sal-flash > td { animation: salFlash 2.4s ease-out 1; }
 
-  .adv-option { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; }
-  .adv-option.is-blocked { opacity: 0.55; }
-  .adv-option-text { display: flex; flex-direction: column; min-width: 0; }
-  .adv-option-name { font-weight: 600; color: var(--gray-800); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .adv-option-sub { font-size: 12px; color: var(--gray-500); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .adv-option-amt { margin-left: auto; padding-left: 8px; font-size: 12px; font-weight: 600; color: var(--gray-600); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .sal-option { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; }
+  .sal-option.is-blocked { opacity: 0.55; }
+  .sal-option-text { display: flex; flex-direction: column; min-width: 0; }
+  .sal-option-name { font-weight: 600; color: var(--gray-800); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sal-option-sub { font-size: 12px; color: var(--gray-500); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sal-option-amt { margin-left: auto; padding-left: 8px; font-size: 12px; font-weight: 600; color: var(--gray-600); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
-  .adv-kv-sub { display: block; margin-top: 2px; font-size: 12px; font-weight: 500; color: var(--gray-500); }
-  .adv-note-count { margin-left: auto; font-size: 11.5px; color: var(--gray-500); font-variant-numeric: tabular-nums; }
-  .adv-note-count.is-near { color: var(--amber, #b45309); }
-  .adv-check { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; font-size: 13px; color: var(--gray-700); cursor: pointer; }
-  .adv-check input { margin-top: 2px; }
-  .adv-info-list { margin: 0; padding-left: 18px; }
-  .adv-info-list li + li { margin-top: 6px; }
+  .sal-kv-sub { display: block; margin-top: 2px; font-size: 12px; font-weight: 500; color: var(--gray-500); }
+  .sal-note-count { margin-left: auto; font-size: 11.5px; color: var(--gray-500); font-variant-numeric: tabular-nums; }
+  .sal-note-count.is-near { color: var(--amber, #b45309); }
+  .sal-check { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; font-size: 13px; color: var(--gray-700); cursor: pointer; }
+  .sal-check input { margin-top: 2px; }
+  .sal-info-list { margin: 0; padding-left: 18px; }
+  .sal-info-list li + li { margin-top: 6px; }
 
   @media (max-width: 1100px) {
-    .adv-line-by { display: none; }
+    .sal-line-by { display: none; }
   }
   @media (max-width: 1200px) {
-    .adv-dept, .adv-col-by { display: none; }
+    .sal-dept { display: none; }
   }
 
   @media (max-width: 640px) {
-    .adv-controls, .adv-controls .search-bar { width: 100%; }
+    .sal-controls, .sal-controls .search-bar { width: 100%; }
   }
   /* WCAG 2.3.3: no flash or rotation for people who ask for less motion. */
   @media (prefers-reduced-motion: reduce) {
-    .adv-flash > td { animation: none; }
-    .adv-chevron .material-symbols-outlined { transition: none; }
+    .sal-flash > td { animation: none; }
+    .sal-chevron .material-symbols-outlined { transition: none; }
   }
 `;
 
@@ -182,8 +181,8 @@ function AdvanceStatus({ entry }) {
       ? ['slip', 'On payslip', 'Included in a processed payslip. The Pay Run is still open.']
       : ['pending', 'To be deducted', 'Deducted when this month’s payslip is processed'];
   return (
-    <span className={`adv-status is-${tone}`} title={title}>
-      <span className="adv-status-dot" aria-hidden="true" />
+    <span className={`sal-status is-${tone}`} title={title}>
+      <span className="sal-status-dot" aria-hidden="true" />
       {label}
     </span>
   );
@@ -409,9 +408,9 @@ function RecordAdvanceModal({ open, initialEmployeeId, employees, onClose, onSav
         </p>
 
         <div className="hr-form-grid is-modal">
-          <FormField label="Employee" htmlFor="adv-employee" required error={errorFor('employee')} col={12}>
+          <FormField label="Employee" htmlFor="sal-employee" required error={errorFor('employee')} col={12}>
             <SearchSelect
-              id="adv-employee"
+              id="sal-employee"
               portal
               options={options}
               value={employeeId}
@@ -422,15 +421,15 @@ function RecordAdvanceModal({ open, initialEmployeeId, employees, onClose, onSav
               invalid={!!errorFor('employee')}
               getLabel={(e) => `${e.name} (${e.employee_code})`}
               renderOption={(e) => (
-                <span className={`adv-option${e.blocked ? ' is-blocked' : ''}`} title={e.blocked || undefined}>
+                <span className={`sal-option${e.blocked ? ' is-blocked' : ''}`} title={e.blocked || undefined}>
                   <span className="hr-avatar hr-avatar-sm" aria-hidden="true">{initials(e.name)}</span>
-                  <span className="adv-option-text">
-                    <span className="adv-option-name">{e.name}</span>
-                    <span className="adv-option-sub">
+                  <span className="sal-option-text">
+                    <span className="sal-option-name">{e.name}</span>
+                    <span className="sal-option-sub">
                       {e.employee_code} · {e.blocked ? (BLOCKED_LABELS[e.blocked_code] || 'Not available') : e.designation_name}
                     </span>
                   </span>
-                  {e.total > 0 && <span className="adv-option-amt">{fmtAmount(e.total)} taken</span>}
+                  {e.total > 0 && <span className="sal-option-amt">{fmtAmount(e.total)} taken</span>}
                 </span>
               )}
             />
@@ -459,7 +458,7 @@ function RecordAdvanceModal({ open, initialEmployeeId, employees, onClose, onSav
                   label="Already advanced"
                   value={<>
                     {fmtMoney(context.month_total)}
-                    {context.advances.length > 0 && <span className="adv-kv-sub">{entries(context.advances.length)}</span>}
+                    {context.advances.length > 0 && <span className="sal-kv-sub">{entries(context.advances.length)}</span>}
                   </>}
                 />
                 <Field label="Payslip" value={context.slip_processed ? 'Already processed' : 'Not processed yet'} />
@@ -473,8 +472,8 @@ function RecordAdvanceModal({ open, initialEmployeeId, employees, onClose, onSav
             </div>
 
             <div className="hr-form-grid is-modal">
-              <FormField label="Amount (PKR)" htmlFor="adv-amount" required error={errorFor('amount')} col={6}>
-                <input id="adv-amount" type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00"
+              <FormField label="Amount (PKR)" htmlFor="sal-amount" required error={errorFor('amount')} col={6}>
+                <input id="sal-amount" type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00"
                   className={`form-control no-spinner${errorFor('amount') ? ' hr-invalid' : ''}`}
                   style={{ textAlign: 'right' }}
                   value={form.amount} onWheel={blockWheelChange} autoFocus
@@ -482,8 +481,8 @@ function RecordAdvanceModal({ open, initialEmployeeId, employees, onClose, onSav
                   onBlur={() => setTouched(p => ({ ...p, amount: true }))} />
               </FormField>
 
-              <FormField label="Date given" htmlFor="adv-date" required error={errorFor('date_given')} col={6}>
-                <DateInput id="adv-date"
+              <FormField label="Date given" htmlFor="sal-date" required error={errorFor('date_given')} col={6}>
+                <DateInput id="sal-date"
                   className={`form-control${errorFor('date_given') ? ' hr-invalid' : ''}`}
                   value={form.date_given}
                   min={person?.date_of_joining > monthStart() ? person.date_of_joining : monthStart()}
@@ -495,13 +494,13 @@ function RecordAdvanceModal({ open, initialEmployeeId, employees, onClose, onSav
               <FormField
                 label={<span style={{ display: 'flex', alignItems: 'center' }}>
                   Note
-                  <span className={`adv-note-count${noteLeft <= 20 ? ' is-near' : ''}`} aria-live="polite">
+                  <span className={`sal-note-count${noteLeft <= 20 ? ' is-near' : ''}`} aria-live="polite">
                     {form.note.length}/{NOTE_MAX}
                   </span>
                 </span>}
-                htmlFor="adv-note" error={errors.note} col={12}
+                htmlFor="sal-note" error={errors.note} col={12}
               >
-                <input id="adv-note" className="form-control" maxLength={NOTE_MAX}
+                <input id="sal-note" className="form-control" maxLength={NOTE_MAX}
                   placeholder="Optional, e.g. reason or who received it"
                   value={form.note}
                   onChange={e => setField('note', e.target.value)} />
@@ -517,7 +516,7 @@ function RecordAdvanceModal({ open, initialEmployeeId, employees, onClose, onSav
               <Notice tone="warning" title="This looks like a duplicate" style={{ marginTop: 4 }}>
                 An advance of {fmtMoney(duplicate.amount)} given on {fmtDate(duplicate.date_given)} is
                 already recorded for {person.name} in {fmtMonth(context.month)}.
-                <label className="adv-check">
+                <label className="sal-check">
                   <input type="checkbox" checked={duplicateOk} onChange={e => setDuplicateOk(e.target.checked)} />
                   A second advance of this amount was given. Record it as well.
                 </label>
@@ -543,18 +542,12 @@ const EMPLOYEE_SORT = {
   name:       { value: e => e.name, text: true },
   total:      { value: e => num(e.total) },
 };
-const ENTRY_SORT = {
-  date_given:    { value: e => e.date_given, text: true },
-  employee_name: { value: e => e.employee_name, text: true },
-  amount:        { value: e => num(e.amount) },
-};
 
 export default function AdvanceSalary() {
   const [data, setData]           = useState(null);
   const [loading, setLoading]     = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [denied, setDenied]       = useState(false);
-  const [view, setView]           = useState('employees');
   const [search, setSearch]       = useState('');
   const [expanded, setExpanded]   = useState(() => new Set());
   const [flash, setFlash]         = useState(null); // { employeeId, entryId }
@@ -566,7 +559,6 @@ export default function AdvanceSalary() {
   const [removing, setRemoving]         = useState(false);
 
   const employeeSort = useSort('name');
-  const entrySort = useSort('date_given', 'desc');
 
   // The pinned header's height (it wraps on narrow screens) for the column
   // headings pinned under it.
@@ -576,7 +568,7 @@ export default function AdvanceSalary() {
     const head = headRef.current;
     const card = cardRef.current;
     if (!head || !card) return undefined;
-    const update = () => card.style.setProperty('--adv-head-h', `${head.offsetHeight}px`);
+    const update = () => card.style.setProperty('--sal-head-h', `${head.offsetHeight}px`);
     update();
     if (typeof ResizeObserver === 'undefined') return undefined;
     const observer = new ResizeObserver(update);
@@ -678,17 +670,6 @@ export default function AdvanceSalary() {
       (a, b) => String(a.name).localeCompare(String(b.name)));
   }, [data, query, employeeSort.sortConfig]);
 
-  const filteredEntries = useMemo(() => {
-    const rows = (data?.entries || []).filter(e =>
-      matches(query, e.employee_name, e.employee_code, e.designation_name, e.department_name, e.note, e.created_by_name));
-    return sortRows(rows, entrySort.sortConfig, ENTRY_SORT, (a, b) => b.id - a.id);
-  }, [data, query, entrySort.sortConfig]);
-
-  const filteredEntryTotal = useMemo(
-    () => money(filteredEntries.reduce((s, e) => s + num(e.amount), 0)),
-    [filteredEntries]
-  );
-
   const recordableEmployees = useMemo(
     () => (isOpenPeriod ? (data?.employees || []).filter(e => e.status === 'Active' || e.total > 0) : []),
     [data, isOpenPeriod]
@@ -701,11 +682,10 @@ export default function AdvanceSalary() {
   const monthOptions = useMemo(() => (data?.months || []).map(m => ({
     value: m.month,
     label: fmtMonth(m.month),
-    hint: m.entries ? entries(m.entries) : (openPeriod && m.month === openPeriod.month ? 'Open for new advances' : 'No advances'),
     badge: m.run_status ? (m.run_status === 'Open' ? 'Open' : 'Closed') : undefined,
     badgeTone: m.run_status === 'Open' ? 'open' : 'closed',
     badgeIcon: m.run_status === 'Completed' ? 'lock' : undefined,
-  })), [data, openPeriod]);
+  })), [data]);
 
   // ── Render ───────────────────────────────────────────────────────────────
   if (denied) {
@@ -742,7 +722,7 @@ export default function AdvanceSalary() {
     return (
       <>
         <div className="hr-page-scroll">
-          <table className="hr-table hr-page-table adv-table">
+          <table className="hr-table hr-page-table sal-table">
             <caption className="hr-sr-only">Advance salary by employee, {fmtMonth(month)}</caption>
             <thead>
               <tr>
@@ -763,42 +743,42 @@ export default function AdvanceSalary() {
                 return (
                   <React.Fragment key={employee.id}>
                     <tr
-                      className={`${list.length ? 'hr-row-click' : ''}${isExpanded ? ' adv-row-expanded' : ''}${flashing ? ' adv-flash' : ''}`}
+                      className={`${list.length ? 'hr-row-click' : ''}${isExpanded ? ' sal-row-expanded' : ''}${flashing ? ' sal-flash' : ''}`}
                       onClick={list.length ? () => toggleExpanded(employee.id) : undefined}
                     >
                       <td>
                         {list.length ? (
                           <button
                             type="button"
-                            className="adv-chevron"
+                            className="sal-chevron"
                             aria-expanded={isExpanded}
                             aria-label={`${isExpanded ? 'Hide' : 'Show'} ${employee.name}’s advances`}
                             onClick={e => { e.stopPropagation(); toggleExpanded(employee.id); }}
                           >
                             <span className="material-symbols-outlined" aria-hidden="true">chevron_right</span>
                           </button>
-                        ) : <span className="adv-chevron-spacer" aria-hidden="true" />}
+                        ) : <span className="sal-chevron-spacer" aria-hidden="true" />}
                       </td>
                       <td>
                         <div className="hr-identity-cell">
                           <span className="hr-avatar hr-avatar-sm" aria-hidden="true">{initials(employee.name)}</span>
                           <span>
-                            <span className="adv-name">{employee.name}</span>
-                            <span className="adv-code">{employee.employee_code}</span>
+                            <span className="sal-name">{employee.name}</span>
+                            <span className="sal-code">{employee.employee_code}</span>
                             {employee.status !== 'Active' && (
                               <span className="badge badge-gray" style={{ marginLeft: 8 }}>Inactive</span>
                             )}
                           </span>
                         </div>
                       </td>
-                      <td className="adv-desig">
+                      <td className="sal-desig">
                         {employee.designation_name}
-                        <span className="adv-dept"> · {employee.department_name}</span>
+                        <span className="sal-dept"> · {employee.department_name}</span>
                       </td>
                       <td className="hr-num">
                         {inactiveWithOpen && (
                           <>
-                            <span className="material-symbols-outlined adv-warn" aria-hidden="true"
+                            <span className="material-symbols-outlined sal-warn" aria-hidden="true"
                               title="Not on a Pay Run: inactive employees are not paid through payroll, so this advance will not be deducted automatically. Ask HR to settle it.">
                               warning
                             </span>
@@ -806,20 +786,20 @@ export default function AdvanceSalary() {
                           </>
                         )}
                         {employee.total > 0
-                          ? <span className="adv-total" title={entries(employee.entries)}>{fmtAmount(employee.total)}</span>
-                          : <><span className="adv-zero" aria-hidden="true">—</span><span className="hr-sr-only">None</span></>}
+                          ? <span className="sal-total" title={entries(employee.entries)}>{fmtAmount(employee.total)}</span>
+                          : <><span className="sal-zero" aria-hidden="true">—</span><span className="hr-sr-only">None</span></>}
                       </td>
                       <td onClick={e => e.stopPropagation()}>
-                          <div className="adv-actions">
+                          <div className="sal-actions">
                             {/* An inactive employee already carries the Inactive tag. */}
                             {!canRecord || employee.blocked_code === 'inactive' ? null : employee.blocked ? (
-                              <span className="adv-blocked" title={employee.blocked}>
+                              <span className="sal-blocked" title={employee.blocked}>
                                 <span className="material-symbols-outlined" aria-hidden="true">block</span>
                                 {BLOCKED_LABELS[employee.blocked_code] || 'Not available'}
                                 <span className="hr-sr-only">: {employee.blocked}</span>
                               </span>
                             ) : (
-                              <button type="button" className="adv-rec"
+                              <button type="button" className="sal-rec"
                                 onClick={() => openRecord(employee.id)}
                                 aria-label={`Record advance salary for ${employee.name}`}>
                                 <span className="material-symbols-outlined" aria-hidden="true">add</span>
@@ -831,12 +811,12 @@ export default function AdvanceSalary() {
                     </tr>
                     {isExpanded && list.map(entry => (
                       <tr key={`entry-${entry.id}`}
-                        className={`adv-line${flash && flash.entryId === entry.id ? ' adv-flash' : ''}`}>
+                        className={`sal-line${flash && flash.entryId === entry.id ? ' sal-flash' : ''}`}>
                         <td />
-                        <td colSpan={2} className="adv-line-main">
-                          <span className="adv-line-date">{fmtDate(entry.date_given)}</span>
-                          {entry.note && <span className="adv-line-note" title={entry.note}>{entry.note}</span>}
-                          {entry.created_by_name && <span className="adv-line-by">by {entry.created_by_name}</span>}
+                        <td colSpan={2} className="sal-line-main">
+                          <span className="sal-line-date">{fmtDate(entry.date_given)}</span>
+                          {entry.note && <span className="sal-line-note" title={entry.note}>{entry.note}</span>}
+                          {entry.created_by_name && <span className="sal-line-by">by {entry.created_by_name}</span>}
                           <AdvanceStatus entry={entry} />
                         </td>
                         <td className="hr-num">{fmtAmount(entry.amount)}</td>
@@ -853,85 +833,15 @@ export default function AdvanceSalary() {
     );
   };
 
-  const renderEntryTable = () => {
-    if (filteredEntries.length === 0) {
-      return (data?.entries || []).length === 0 ? (
-        <EmptyState
-          icon="payments"
-          title={`No advance salary recorded for ${fmtMonth(month)}`}
-          desc={canRecord ? 'Advances you record appear here, newest first.' : 'Nobody took an advance in this pay period.'}
-          action={canRecord ? <button className="btn btn-primary" onClick={() => openRecord()}>Record advance</button> : null}
-          small
-        />
-      ) : (
-        <EmptyState icon="search_off" title={`No advance matches "${query}"`}
-          desc="Search by employee, note or who recorded it."
-          action={<button className="btn btn-outline" onClick={() => setSearch('')}>Clear search</button>} small />
-      );
-    }
-    return (
-      <>
-        <div className="hr-page-scroll">
-          <table className="hr-table hr-page-table adv-table">
-            <caption className="hr-sr-only">Advances recorded for {fmtMonth(month)}</caption>
-            <thead>
-              <tr>
-                <SortableHeader column="date_given" label="Given on" {...entrySort} firstDirection="desc" style={{ width: '12%' }} />
-                <SortableHeader column="employee_name" label="Employee" {...entrySort} style={{ width: '28%' }} />
-                <th>Note</th>
-                <th className="adv-col-by" style={{ width: '15%' }}>Recorded by</th>
-                <th style={{ width: '13%' }}>Status</th>
-                <SortableHeader column="amount" label="Amount" {...entrySort} align="right" iconBefore firstDirection="desc" style={{ width: '13%' }} />
-                <th style={{ width: 52 }}><span className="hr-sr-only">Actions</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredEntries.map(entry => (
-                <tr key={entry.id} className={flash && flash.entryId === entry.id ? 'adv-flash' : undefined}>
-                  <td>{fmtDate(entry.date_given)}</td>
-                  <td>
-                    <span className="adv-name">{entry.employee_name}</span>
-                    <span className="adv-code">{entry.employee_code}</span>
-                    {entry.employee_status !== 'Active' && (
-                      <span className="badge badge-gray" style={{ marginLeft: 8 }}>Inactive</span>
-                    )}
-                  </td>
-                  <td className="hr-cell-muted"><div className="adv-note-cell" title={entry.note || undefined}>{entry.note || '—'}</div></td>
-                  <td className="hr-cell-muted adv-col-by">{entry.created_by_name || '—'}</td>
-                  <td><AdvanceStatus entry={entry} /></td>
-                  <td className="hr-num adv-total">{fmtAmount(entry.amount)}</td>
-                  <td style={{ textAlign: 'right' }}><RemoveButton entry={entry} onRemove={setRemoveTarget} viewOnly={!isOpenPeriod} /></td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="adv-foot">
-                <td colSpan={3}>
-                  {query ? `Total of ${plural(filteredEntries.length, 'matching entry', 'matching entries')}` : `Total for ${fmtMonth(month)}`}
-                </td>
-                {/* Kept as its own cell so hiding Recorded by on narrow screens
-                    keeps the total under Amount. */}
-                <td className="adv-col-by" />
-                <td />
-                <td className="hr-num">{fmtAmount(filteredEntryTotal)}</td>
-                <td />
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      </>
-    );
-  };
-
   return (
     <Layout title="Advance Salary">
       <HrStyles />
       <style dangerouslySetInnerHTML={{ __html: ADV_STYLES }} />
 
-      <div className="card adv-card" ref={cardRef}>
+      <div className="card sal-card" ref={cardRef}>
         {/* Same header as Sales Invoices: title and one line of totals on
             the left, the controls on the right. */}
-        <div className="card-header adv-header" ref={headRef}>
+        <div className="card-header sal-header" ref={headRef}>
           <div>
             <h1 className="card-title" style={{ margin: 0 }}>Advance Salary</h1>
             <div className="text-sm text-muted mt-1" aria-live="polite">
@@ -944,9 +854,9 @@ export default function AdvanceSalary() {
                     : plural(totals.employees, 'employee')}`}
             </div>
           </div>
-          <div className="adv-controls">
+          <div className="sal-controls">
             <Select
-              id="adv-month"
+              id="sal-month"
               ariaLabel="Month"
               value={month}
               onChange={switchMonth}
@@ -954,24 +864,15 @@ export default function AdvanceSalary() {
               minWidth={176}
               disabled={!data}
             />
-            <Segmented
-              ariaLabel="Show"
-              value={view}
-              onChange={setView}
-              options={[
-                { val: 'employees', label: 'Employees', count: data ? (data.employees || []).length : undefined },
-                { val: 'entries',   label: 'Advances',  count: data ? totals.entries : undefined },
-              ]}
-            />
             <div className="search-bar" role="search">
               <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden="true">search</span>
-              <label className="hr-sr-only" htmlFor="adv-search">
-                {view === 'employees' ? 'Search employees' : 'Search advances'}
+              <label className="hr-sr-only" htmlFor="sal-search">
+                Search employees
               </label>
               <input
-                id="adv-search"
+                id="sal-search"
                 type="search"
-                placeholder={view === 'employees' ? 'Search employees…' : 'Search advances…'}
+                placeholder="Search employees…"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
               />
@@ -983,7 +884,7 @@ export default function AdvanceSalary() {
         </div>
 
         {data && (data.open_period_error || (isOpenPeriod && openPeriod.rolled_forward) || !isOpenPeriod) && (
-          <div className="adv-notices">
+          <div className="sal-notices">
             {data.open_period_error && (
               <Notice tone="danger" title="Advance salary cannot be recorded right now">{data.open_period_error}</Notice>
             )}
@@ -1000,7 +901,7 @@ export default function AdvanceSalary() {
                   : ''}
                 {openPeriod ? `Advances can be recorded only for ${fmtMonth(openPeriod.month)}.` : ''}
                 {openPeriod && (
-                  <div className="adv-notice-action">
+                  <div className="sal-notice-action">
                     <button className="btn btn-outline btn-sm" onClick={() => switchMonth(openPeriod.month)}>
                       Go to {fmtMonth(openPeriod.month)}
                     </button>
@@ -1013,11 +914,7 @@ export default function AdvanceSalary() {
 
         {/* Announces how many rows a search left, for screen readers. */}
         <p className="hr-sr-only" aria-live="polite">
-          {data && query
-            ? (view === 'employees'
-              ? `${plural(filteredEmployees.length, 'employee')} shown`
-              : `${entries(filteredEntries.length)} shown`)
-            : ''}
+          {data && query ? `${plural(filteredEmployees.length, 'employee')} shown` : ''}
         </p>
 
         <div>
@@ -1032,7 +929,7 @@ export default function AdvanceSalary() {
             />
           ) : (
             <div style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.15s ease' }}>
-              {view === 'employees' ? renderEmployeeTable() : renderEntryTable()}
+              {renderEmployeeTable()}
             </div>
           )}
         </div>
